@@ -9,6 +9,8 @@
  * - Verify MT6701 encoder I2C communication
  * - Monitor encoder angle in real-time
  * - Calculate angular velocity from position changes
+ * - Monitor magnetic field strength
+ * - Test zero position calibration
  * - Detect and report communication errors
  *
  * Usage:
@@ -16,21 +18,20 @@
  * 2. Open Serial Monitor at 115200 baud
  * 3. Manually rotate the motor shaft
  * 4. Observe position and velocity readings
- * 5. Send 'h' for help, 's' to stop streaming
+ * 5. Send 'h' for help, 'p' to stop streaming
  *
  * Output Format:
- * [TIME] Pos: X.XXXX rad | Vel: X.XX rad/s | Raw: XXXXX | Rev: XX
+ * [TIME] Pos: X.XXXX rad | Vel: X.XX rad/s | Raw: XXXXX | Field: OK
  */
 
 #include <Arduino.h>
 #include <Wire.h>
-#include <SimpleFOC.h>
+#include <MT6701.h>  // Use our new MT6701 library
 
 // Encoder pins (from motor_firmware config.h)
 #define ENCODER_SDA      47   // MT6701 I2C SDA
 #define ENCODER_SCL      48   // MT6701 I2C SCL
 #define ENCODER_I2C_ADDR 0x06 // MT6701 I2C address
-#define ENCODER_BITS     14   // 14-bit resolution
 #define ENCODER_PPR      16384 // 2^14 = 16384 positions per revolution
 
 // Test configuration
@@ -38,8 +39,8 @@
 #define SAMPLE_RATE_HZ     100    // 100 Hz sampling rate
 #define SAMPLE_PERIOD_MS   (1000 / SAMPLE_RATE_HZ)
 
-// Create encoder object
-MagneticSensorI2C encoder = MagneticSensorI2C(ENCODER_I2C_ADDR, ENCODER_BITS, 0x03, 8);
+// Create encoder object with new MT6701 library
+MT6701 encoder(ENCODER_I2C_ADDR);
 
 // Test state
 unsigned long last_heartbeat = 0;
@@ -55,6 +56,11 @@ float min_angle = 0;
 float max_angle = 0;
 float max_velocity = 0;
 unsigned long error_count = 0;
+unsigned long field_warnings = 0;
+
+// Revolution tracking
+int revolutions = 0;
+float last_angle_for_rev = 0;
 
 void printHelp() {
     Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
@@ -67,6 +73,9 @@ void printHelp() {
     Serial.println("  r, reset   - Reset statistics");
     Serial.println("  i, info    - Show encoder information");
     Serial.println("  c, stats   - Show statistics");
+    Serial.println("  z, zero    - Set current position as zero");
+    Serial.println("  f, field   - Check magnetic field strength");
+    Serial.println("  d, dir     - Toggle rotation direction");
     Serial.println();
 }
 
@@ -93,6 +102,15 @@ void printInfo() {
     Serial.print("Sample Rate: ");
     Serial.print(SAMPLE_RATE_HZ);
     Serial.println(" Hz");
+
+    // Read configuration
+    Serial.println("\n--- Current Configuration ---");
+    Serial.print("Zero Position: ");
+    Serial.print(encoder.readZeroPosition(), 4);
+    Serial.println(" rad");
+    Serial.print("Direction: ");
+    Serial.println(encoder.isClockwise() ? "Clockwise" : "Counter-Clockwise");
+
     Serial.println();
 }
 
@@ -112,19 +130,72 @@ void printStats() {
     Serial.println(" rad/s");
     Serial.print("Communication Errors: ");
     Serial.println(error_count);
+    Serial.print("Field Warnings: ");
+    Serial.println(field_warnings);
+    Serial.print("Revolutions: ");
+    Serial.println(revolutions);
     Serial.print("Uptime: ");
     Serial.print(millis() / 1000);
     Serial.println(" seconds");
     Serial.println();
 }
 
+void checkFieldStrength() {
+    uint8_t status = encoder.readFieldStatus();
+
+    if (status == MT6701_FIELD_GOOD) {
+        Serial.println("✓ Magnetic field strength is GOOD");
+    } else {
+        if (status & MT6701_FIELD_TOO_STRONG) {
+            Serial.println("⚠ WARNING: Magnetic field TOO STRONG");
+            Serial.println("  → Move magnet further from sensor");
+        }
+        if (status & MT6701_FIELD_TOO_WEAK) {
+            Serial.println("⚠ WARNING: Magnetic field TOO WEAK");
+            Serial.println("  → Move magnet closer to sensor");
+            Serial.println("  → Check magnet is properly magnetized");
+        }
+    }
+}
+
 void resetStats() {
     sample_count = 0;
-    min_angle = encoder.getAngle();
+    min_angle = encoder.readAngleRadians();
     max_angle = min_angle;
     max_velocity = 0;
     error_count = 0;
+    field_warnings = 0;
+    revolutions = 0;
     Serial.println("Statistics reset!");
+}
+
+void setZero() {
+    Serial.print("Setting current position as zero... ");
+    if (encoder.setZeroToCurrent()) {
+        Serial.println("Success!");
+        Serial.print("New zero position: ");
+        Serial.print(encoder.readZeroPosition(), 4);
+        Serial.println(" rad");
+    } else {
+        Serial.println("Failed!");
+    }
+}
+
+void toggleDirection() {
+    bool current_dir = encoder.isClockwise();
+    bool new_dir = !current_dir;
+
+    Serial.print("Changing direction from ");
+    Serial.print(current_dir ? "Clockwise" : "Counter-Clockwise");
+    Serial.print(" to ");
+    Serial.print(new_dir ? "Clockwise" : "Counter-Clockwise");
+    Serial.print("... ");
+
+    if (encoder.setDirection(new_dir)) {
+        Serial.println("Success!");
+    } else {
+        Serial.println("Failed!");
+    }
 }
 
 void processCommand() {
@@ -153,6 +224,15 @@ void processCommand() {
     else if (command_buffer == "c" || command_buffer == "stats") {
         printStats();
     }
+    else if (command_buffer == "z" || command_buffer == "zero") {
+        setZero();
+    }
+    else if (command_buffer == "f" || command_buffer == "field") {
+        checkFieldStrength();
+    }
+    else if (command_buffer == "d" || command_buffer == "dir") {
+        toggleDirection();
+    }
     else {
         Serial.print("Unknown command: '");
         Serial.print(command_buffer);
@@ -171,6 +251,7 @@ void setup() {
     Serial.println("\n\n");
     Serial.println("╔════════════════════════════════════════════════════════════════╗");
     Serial.println("║           ENCODER TEST - CONTINUOUS DATA STREAMING            ║");
+    Serial.println("║              Using Native MT6701 Library                       ║");
     Serial.println("╚════════════════════════════════════════════════════════════════╝");
     Serial.println();
     Serial.println("Test Configuration:");
@@ -194,15 +275,13 @@ void setup() {
     Wire.setClock(400000);  // 400kHz fast mode
     Serial.println("[OK]   I2C initialized");
 
-    // Scan for encoder
-    Serial.print("[SCAN] Looking for MT6701 at address 0x");
-    Serial.print(ENCODER_I2C_ADDR, HEX);
-    Serial.println("...");
-
-    Wire.beginTransmission(ENCODER_I2C_ADDR);
-    byte error = Wire.endTransmission();
-
-    if (error != 0) {
+    // Initialize encoder
+    Serial.print("[INIT] Initializing MT6701 encoder... ");
+    if (encoder.begin(&Wire)) {
+        Serial.println("Success!");
+    } else {
+        Serial.println("FAILED!");
+        Serial.println();
         Serial.println("[ERROR] MT6701 encoder not found!");
         Serial.println();
         Serial.println("Troubleshooting:");
@@ -217,17 +296,14 @@ void setup() {
         Serial.println();
         Serial.println("System will continue anyway for debugging...");
         delay(2000);
-    } else {
-        Serial.println("[OK]   MT6701 encoder detected!");
     }
 
-    // Initialize encoder
-    Serial.println("[INIT] Initializing encoder...");
-    encoder.init();
-    Serial.println("[OK]   Encoder initialized");
+    // Check magnetic field
+    Serial.print("[CHECK] Magnetic field status... ");
+    checkFieldStrength();
 
     // Initial reading
-    float initial_angle = encoder.getAngle();
+    float initial_angle = encoder.readAngleRadians();
     Serial.print("[INFO] Initial angle: ");
     Serial.print(initial_angle, 4);
     Serial.print(" rad (");
@@ -240,15 +316,16 @@ void setup() {
     Serial.println("╚════════════════════════════════════════════════════════════════╝");
     Serial.println();
     Serial.println("Rotate the motor shaft manually to see encoder response!");
-    Serial.println("Type 'h' for help, 'p' to pause streaming");
+    Serial.println("Type 'h' for help, 'p' to pause, 'z' to set zero, 'f' for field check");
     Serial.println();
-    Serial.println("Format: [TIME] Pos: X.XXXX rad | Vel: X.XX rad/s | Raw: XXXXX");
+    Serial.println("Format: [TIME] Pos: X.XXXX rad | Vel: X.XX rad/s | Raw: XXXXX | Field: STATUS");
     Serial.println("─────────────────────────────────────────────────────────────────");
 
     last_angle = initial_angle;
     last_time = millis() / 1000.0;
     min_angle = initial_angle;
     max_angle = initial_angle;
+    last_angle_for_rev = initial_angle;
     last_heartbeat = millis();
     last_sample = millis();
 }
@@ -271,7 +348,8 @@ void loop() {
         last_sample = current_time;
 
         // Read encoder
-        float angle = encoder.getAngle();
+        uint16_t raw = encoder.readRawAngle();
+        float angle = encoder.readAngleRadians();
         float time_now = current_time / 1000.0;
         float dt = time_now - last_time;
 
@@ -279,17 +357,28 @@ void loop() {
         float angle_diff = angle - last_angle;
         if (angle_diff > PI) {
             angle_diff -= 2 * PI;
+            revolutions--;  // Crossed zero backwards
         } else if (angle_diff < -PI) {
             angle_diff += 2 * PI;
+            revolutions++;  // Crossed zero forwards
         }
         float velocity = angle_diff / dt;
 
-        // Get raw count
-        int raw_count = encoder.getMechanicalAngle() * (ENCODER_PPR / (2.0 * PI));
-
-        // Calculate revolutions
-        float full_angle = encoder.getFullRotations() * 2 * PI + angle;
-        int revolutions = encoder.getFullRotations();
+        // Check field status
+        uint8_t field_status = encoder.readFieldStatus();
+        const char* field_str;
+        if (field_status == MT6701_FIELD_GOOD) {
+            field_str = "OK";
+        } else if (field_status & MT6701_FIELD_TOO_STRONG) {
+            field_str = "TOO STRONG";
+            field_warnings++;
+        } else if (field_status & MT6701_FIELD_TOO_WEAK) {
+            field_str = "TOO WEAK";
+            field_warnings++;
+        } else {
+            field_str = "ERROR";
+            error_count++;
+        }
 
         // Update statistics
         sample_count++;
@@ -303,11 +392,19 @@ void loop() {
         Serial.print("s] Pos: ");
         Serial.print(angle, 4);
         Serial.print(" rad | Vel: ");
+        if (velocity >= 0) Serial.print(" ");
         Serial.print(velocity, 2);
         Serial.print(" rad/s | Raw: ");
-        Serial.print(raw_count);
+        if (raw < 10000) Serial.print(" ");
+        if (raw < 1000) Serial.print(" ");
+        if (raw < 100) Serial.print(" ");
+        if (raw < 10) Serial.print(" ");
+        Serial.print(raw);
         Serial.print(" | Rev: ");
-        Serial.println(revolutions);
+        if (abs(revolutions) < 10) Serial.print(" ");
+        Serial.print(revolutions);
+        Serial.print(" | Field: ");
+        Serial.println(field_str);
 
         // Update for next iteration
         last_angle = angle;
@@ -324,6 +421,8 @@ void loop() {
         Serial.print(sample_count);
         Serial.print(" | Errors: ");
         Serial.print(error_count);
+        Serial.print(" | Field Warnings: ");
+        Serial.print(field_warnings);
         Serial.print(" | Streaming: ");
         Serial.println(streaming ? "ON" : "OFF");
         Serial.println();

@@ -86,19 +86,24 @@ arduino-cli monitor -p /dev/ttyUSB0 -c baudrate=115200
 
 **File:** `encoder_test/encoder_test.ino`
 
-**Purpose:** Continuously read and stream encoder position/velocity data.
+**Purpose:** Continuously read and stream encoder position/velocity data using native MT6701 library.
 
 **What It Tests:**
 - MT6701 encoder I2C communication
 - Position accuracy (14-bit resolution)
 - Velocity calculation
 - Full rotation tracking
+- Magnetic field strength monitoring
+- Zero position calibration
+- Direction control
 - Communication reliability
 
 **Hardware Required:**
 - ESP32-S3 board
 - MT6701 14-bit magnetic encoder
 - Magnet (attached to motor shaft)
+
+**Library Used:** Native MT6701 library (based on [I-AM-ENGINEER/MT6701-driver](https://github.com/I-AM-ENGINEER/MT6701-driver))
 
 **Commands:**
 - `h` - Show help
@@ -107,10 +112,13 @@ arduino-cli monitor -p /dev/ttyUSB0 -c baudrate=115200
 - `r` - Reset statistics
 - `i` - Show encoder info
 - `c` - Show statistics
+- `z` - Set current position as zero
+- `f` - Check magnetic field strength
+- `d` - Toggle rotation direction
 
 **Output Format:**
 ```
-[12.34s] Pos: 2.4567 rad | Vel: 1.23 rad/s | Raw: 6234 | Rev: 2
+[12.34s] Pos: 2.4567 rad | Vel: 1.23 rad/s | Raw: 6234 | Rev: 2 | Field: OK
 ```
 
 **Fields:**
@@ -118,6 +126,7 @@ arduino-cli monitor -p /dev/ttyUSB0 -c baudrate=115200
 - **Vel** - Angular velocity (rad/s)
 - **Raw** - Raw encoder count (0-16383)
 - **Rev** - Full rotations completed
+- **Field** - Magnetic field status (OK, TOO STRONG, TOO WEAK)
 
 **Test Procedure:**
 1. Upload sketch
@@ -576,6 +585,57 @@ Use this checklist to verify hardware:
 - [ ] Binary protocol communication works
 
 If all tests pass, your system is ready for normal operation! 🎉
+
+---
+
+## 📚 MT6701 Library
+
+The test suite includes a native Arduino library for the MT6701 encoder, located at `firmware/libraries/MT6701/`.
+
+### Features
+
+- **14-bit resolution** (16,384 positions per revolution)
+- **I2C interface** with Arduino Wire library
+- **Angle reading** in raw counts, radians, or degrees
+- **Zero position calibration** (volatile and non-volatile)
+- **Direction control** (clockwise/counter-clockwise)
+- **Magnetic field strength monitoring**
+- **Simple API** designed for Arduino/ESP32
+
+### Based On
+
+This library is adapted from [I-AM-ENGINEER/MT6701-driver](https://github.com/I-AM-ENGINEER/MT6701-driver), optimized for Arduino compatibility with the Wire library.
+
+### Usage in Tests
+
+- **encoder_test**: Uses MT6701 library directly for full feature access
+- **integration_test**: Uses SimpleFOC's MagneticSensorI2C for motor control compatibility
+- **motor_firmware**: Uses SimpleFOC's MagneticSensorI2C for FOC algorithm integration
+
+### Quick Example
+
+```cpp
+#include <Wire.h>
+#include <MT6701.h>
+
+MT6701 encoder;
+
+void setup() {
+    Wire.begin(47, 48);  // SDA, SCL
+    encoder.begin(&Wire);
+}
+
+void loop() {
+    float angle = encoder.readAngleRadians();
+    uint8_t field = encoder.readFieldStatus();
+
+    if (encoder.isFieldGood()) {
+        Serial.println(angle, 4);
+    }
+}
+```
+
+See `firmware/libraries/MT6701/README.md` for full documentation.
 
 ---
 
