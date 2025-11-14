@@ -11,9 +11,9 @@ MT6701Sensor::MT6701Sensor(uint8_t address)
 }
 
 void MT6701Sensor::init() {
-    // Initialize I2C for MT6701 encoder
-    Wire.setPins(ENCODER_SDA, ENCODER_SCL);
-    Wire.begin();
+    // Initialize I2C for MT6701 encoder (using working approach from encoder_test)
+    Wire.begin(ENCODER_SDA, ENCODER_SCL);
+    Wire.setClock(400000);  // 400kHz fast mode
 
     if (DEBUG_MOTOR) {
         Serial.print("[MT6701] I2C initialized on SDA=GPIO");
