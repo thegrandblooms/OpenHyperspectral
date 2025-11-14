@@ -42,12 +42,42 @@ void MT6701Sensor::init() {
         } else if (field_status == 0x02) {
             Serial.println("[MT6701] WARNING: Magnetic field TOO WEAK");
         }
+
+        // Verify sensor is readable
+        float test_read = encoder.readAngleRadians();
+        Serial.print("[MT6701] Test read: ");
+        Serial.print(test_read, 4);
+        Serial.println(" rad");
     }
 }
 
 float MT6701Sensor::getSensorAngle() {
     // Read angle in radians from MT6701 library
     return encoder.readAngleRadians();
+}
+
+void MT6701Sensor::update() {
+    // SimpleFOC calls this before reading the sensor
+    // For I2C sensors like MT6701, we don't need to do anything here
+    // The actual read happens in getSensorAngle()
+    // This method exists to satisfy SimpleFOC's Sensor interface
+
+    #ifdef DEBUG_MOTOR_VERBOSE
+    if (DEBUG_MOTOR) {
+        Serial.println("[MT6701] update() called by SimpleFOC");
+    }
+    #endif
+}
+
+int MT6701Sensor::needsSearch() {
+    // MT6701 is an absolute encoder - it doesn't need electrical angle search
+    // Return 0 to indicate no search needed
+
+    if (DEBUG_MOTOR) {
+        Serial.println("[MT6701] needsSearch() called - returning 0 (no search needed for absolute encoder)");
+    }
+
+    return 0;
 }
 
 bool MT6701Sensor::isFieldGood() {
@@ -85,10 +115,20 @@ void MotorController::begin() {
     }
 
     // Initialize MT6701 encoder using library from firmware/libraries/MT6701
+    if (DEBUG_MOTOR) {
+        Serial.println("[MOTOR] Initializing MT6701 encoder...");
+    }
     encoder.init();
 
     // Link encoder to motor
+    if (DEBUG_MOTOR) {
+        Serial.println("[MOTOR] Linking encoder to motor...");
+    }
     motor.linkSensor(&encoder);
+
+    if (DEBUG_MOTOR) {
+        Serial.println("[MOTOR] Encoder linked to motor");
+    }
 
     // Driver configuration
     driver.voltage_power_supply = VOLTAGE_PSU;
