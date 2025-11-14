@@ -84,6 +84,13 @@ bool MT6701Sensor::isFieldGood() {
     return encoder.isFieldGood();
 }
 
+float MT6701Sensor::getVelocity() {
+    // SimpleFOC's base Sensor class calculates velocity from angle changes
+    // We just need to return the shaft_velocity if it's been calculated
+    // For now, return 0 and let SimpleFOC handle velocity calculation
+    return 0;
+}
+
 uint8_t MT6701Sensor::getFieldStatus() {
     return encoder.readFieldStatus();
 }
@@ -132,10 +139,27 @@ void MotorController::begin() {
 
     // Driver configuration
     driver.voltage_power_supply = VOLTAGE_PSU;
+    driver.pwm_frequency = 20000;  // 20kHz PWM frequency
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[MOTOR] Driver voltage_power_supply: ");
+        Serial.print(driver.voltage_power_supply);
+        Serial.println(" V");
+        Serial.print("[MOTOR] Initializing driver... ");
+    }
     driver.init();
+    if (DEBUG_MOTOR) {
+        Serial.println("Done");
+    }
 
     // Link driver to motor
+    if (DEBUG_MOTOR) {
+        Serial.println("[MOTOR] Linking driver to motor...");
+    }
     motor.linkDriver(&driver);
+    if (DEBUG_MOTOR) {
+        Serial.println("[MOTOR] Driver linked to motor");
+    }
 
     // Set motor limits
     motor.voltage_limit = VOLTAGE_PSU * 0.8;  // 80% of supply voltage
@@ -184,6 +208,13 @@ void MotorController::begin() {
     motor.PID_current_d.output_ramp = PID_RAMP_CURRENT;
     motor.PID_current_d.limit = current_limit;
 
+    // Enable SimpleFOC monitoring for debugging
+    if (DEBUG_MOTOR) {
+        Serial.println("[MOTOR] Enabling SimpleFOC monitoring...");
+        motor.useMonitoring(Serial);
+        motor.monitor_downsample = 0;  // Show all messages
+    }
+
     // Initialize motor
     if (DEBUG_MOTOR) {
         Serial.print("[FOC] Calling motor.init()... ");
@@ -191,6 +222,11 @@ void MotorController::begin() {
     motor.init();
     if (DEBUG_MOTOR) {
         Serial.println("Done");
+        Serial.println("[MOTOR] Checking motor initialization status:");
+        Serial.print("  - Sensor linked: ");
+        Serial.println(motor.sensor ? "YES" : "NO");
+        Serial.print("  - Driver linked: ");
+        Serial.println(motor.driver ? "YES" : "NO");
     }
 
     if (DEBUG_MOTOR) {
@@ -265,6 +301,12 @@ bool MotorController::runCalibration() {
         Serial.println(" rad");
     }
 
+    // Motor must be enabled before FOC init for some operations
+    if (DEBUG_MOTOR) {
+        Serial.println("[FOC] Enabling motor for calibration...");
+    }
+    motor.enable();
+
     // Run SimpleFOC calibration (aligns motor and encoder)
     if (DEBUG_MOTOR) {
         Serial.println("[FOC] Running motor alignment (initFOC)...");
@@ -274,9 +316,12 @@ bool MotorController::runCalibration() {
         Serial.print("[DEBUG] Pre-initFOC shaft_angle: ");
         Serial.print(motor.shaft_angle, 4);
         Serial.println(" rad");
+        Serial.print("[DEBUG] Sensor needs search: ");
+        Serial.println(encoder.needsSearch());
     }
 
     // Note: initFOC() returns 1 on success, 0 on failure
+    // For absolute encoders, this should skip electrical angle search
     int foc_result = motor.initFOC();
 
     if (DEBUG_MOTOR) {
@@ -296,12 +341,24 @@ bool MotorController::runCalibration() {
         }
     }
 
+    // Disable motor after initFOC (will be re-enabled when user calls enable())
+    motor.disable();
+
     // Check if initFOC actually succeeded
     if (foc_result != 1) {
         if (DEBUG_MOTOR) {
             Serial.println("[ERROR] initFOC failed - calibration unsuccessful");
+            Serial.println("[ERROR] Possible causes:");
+            Serial.println("  - Power supply not connected to motor driver");
+            Serial.println("  - Driver enable pin not working");
+            Serial.println("  - Sensor reading but motor can't align");
+            Serial.println("  - Voltage or current limits too restrictive");
         }
         return false;
+    }
+
+    if (DEBUG_MOTOR) {
+        Serial.println("[SUCCESS] Motor calibration completed successfully!");
     }
 
     return true;
