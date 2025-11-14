@@ -72,6 +72,9 @@ public:
     bool isAtTarget();
     uint8_t getState();
 
+    // Debug helpers
+    float getDirectEncoderAngle();  // Read encoder directly (bypass SimpleFOC)
+
     // Update loop (call frequently)
     void update();
 

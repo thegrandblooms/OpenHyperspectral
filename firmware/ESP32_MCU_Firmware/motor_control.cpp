@@ -145,10 +145,26 @@ void MotorController::begin() {
     motor.PID_current_d.limit = current_limit;
 
     // Initialize motor
+    if (DEBUG_MOTOR) {
+        Serial.print("[FOC] Calling motor.init()... ");
+    }
     motor.init();
+    if (DEBUG_MOTOR) {
+        Serial.println("Done");
+    }
 
     if (DEBUG_MOTOR) {
-        Serial.println("Motor controller initialized");
+        Serial.println("[MOTOR] Motor controller initialized");
+
+        // Test direct encoder read vs SimpleFOC shaft_angle
+        float direct_encoder_read = encoder.getSensorAngle();
+        float simplefoc_angle = motor.shaft_angle;
+        Serial.print("[DEBUG] Direct encoder read: ");
+        Serial.print(direct_encoder_read, 4);
+        Serial.println(" rad");
+        Serial.print("[DEBUG] SimpleFOC shaft_angle: ");
+        Serial.print(simplefoc_angle, 4);
+        Serial.println(" rad");
     }
 
     // Motor starts disabled for safety
@@ -211,12 +227,41 @@ bool MotorController::runCalibration() {
 
     // Run SimpleFOC calibration (aligns motor and encoder)
     if (DEBUG_MOTOR) {
-        Serial.println("[FOC] Running motor alignment...");
+        Serial.println("[FOC] Running motor alignment (initFOC)...");
+        Serial.print("[DEBUG] Pre-initFOC encoder read: ");
+        Serial.print(encoder.getSensorAngle(), 4);
+        Serial.println(" rad");
+        Serial.print("[DEBUG] Pre-initFOC shaft_angle: ");
+        Serial.print(motor.shaft_angle, 4);
+        Serial.println(" rad");
     }
-    motor.initFOC();
+
+    // Note: initFOC() returns 1 on success, 0 on failure
+    int foc_result = motor.initFOC();
 
     if (DEBUG_MOTOR) {
-        Serial.println("[FOC] Motor alignment complete!");
+        Serial.print("[FOC] initFOC() returned: ");
+        Serial.println(foc_result);
+        Serial.print("[DEBUG] Post-initFOC encoder read: ");
+        Serial.print(encoder.getSensorAngle(), 4);
+        Serial.println(" rad");
+        Serial.print("[DEBUG] Post-initFOC shaft_angle: ");
+        Serial.print(motor.shaft_angle, 4);
+        Serial.println(" rad");
+
+        if (foc_result == 1) {
+            Serial.println("[FOC] Motor alignment complete - SUCCESS");
+        } else {
+            Serial.println("[FOC] Motor alignment FAILED!");
+        }
+    }
+
+    // Check if initFOC actually succeeded
+    if (foc_result != 1) {
+        if (DEBUG_MOTOR) {
+            Serial.println("[ERROR] initFOC failed - calibration unsuccessful");
+        }
+        return false;
     }
 
     return true;
@@ -447,6 +492,11 @@ bool MotorController::isAtTarget() {
 
 uint8_t MotorController::getState() {
     return system_state;
+}
+
+float MotorController::getDirectEncoderAngle() {
+    // Read encoder directly, bypassing SimpleFOC
+    return encoder.getSensorAngle();
 }
 
 void MotorController::update() {

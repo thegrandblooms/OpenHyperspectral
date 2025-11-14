@@ -348,6 +348,8 @@ void printHelp() {
     Serial.println("  s, status      - Print current motor status");
     Serial.println("  i, info        - Show system information");
     Serial.println("  scan           - Scan I2C bus for encoder (MT6701)");
+    Serial.println("");
+    Serial.println("Motor Control:");
     Serial.println("  e, enable      - Enable motor");
     Serial.println("  d, disable     - Disable motor");
     Serial.println("  c, calibrate   - Run motor calibration");
@@ -357,7 +359,13 @@ void printHelp() {
     Serial.println("  v <velocity>   - Set velocity (e.g., 'v 10.0' rad/s)");
     Serial.println("  a <accel>      - Set acceleration (e.g., 'a 5.0' rad/s²)");
     Serial.println("  mode <0-2>     - Set control mode (0=position, 1=velocity, 2=torque)");
-    Serial.println("  test           - Run motor test sequence");
+    Serial.println("");
+    Serial.println("Testing:");
+    Serial.println("  test           - Run full test (calibration + motor test)");
+    Serial.println("  motor_test     - Run motor movement test (auto-enables motor)");
+    Serial.println("  encoder_test   - Test encoder readings (press any key to stop)");
+    Serial.println("");
+    Serial.println("Other:");
     Serial.println("  debug <0/1>    - Toggle debug output (0=off, 1=on)");
     Serial.println("\nBinary Protocol Commands:");
     Serial.println("  The controller also accepts binary commands via SerialTransfer");
@@ -460,6 +468,62 @@ void printStatus() {
     Serial.println(motorControl.isCalibrated() ? "YES" : "NO");
     Serial.print("At Target: ");
     Serial.println(motorControl.isAtTarget() ? "YES" : "NO");
+
+    // Debug: show direct encoder read vs SimpleFOC position
+    Serial.print("DEBUG - Direct encoder angle: ");
+    Serial.print(motorControl.getDirectEncoderAngle(), 4);
+    Serial.println(" rad");
+    Serial.println();
+}
+
+void runEncoderTest() {
+    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
+    Serial.println("║                    Encoder Test                                ║");
+    Serial.println("╚════════════════════════════════════════════════════════════════╝");
+    Serial.println("\nThis test reads the encoder directly and displays position data.");
+    Serial.println("Manually rotate the motor shaft to see encoder response.");
+    Serial.println("Press any key to stop the test.\n");
+    Serial.println("Format: [TIME] Encoder: X.XXXX rad | SimpleFOC: X.XXXX rad");
+    Serial.println("─────────────────────────────────────────────────────────────────");
+
+    unsigned long start_time = millis();
+    unsigned long last_sample = 0;
+    const unsigned long sample_interval = 100;  // 10 Hz
+
+    // Clear serial buffer
+    while (Serial.available() > 0) {
+        Serial.read();
+    }
+
+    while (true) {
+        // Check for key press to exit
+        if (Serial.available() > 0) {
+            Serial.read();
+            Serial.println("\n\nEncoder test stopped by user.");
+            break;
+        }
+
+        // Sample at 10 Hz
+        unsigned long current_time = millis();
+        if (current_time - last_sample >= sample_interval) {
+            last_sample = current_time;
+
+            float encoder_angle = motorControl.getDirectEncoderAngle();
+            float simplefoc_angle = motorControl.getCurrentPosition();
+            float time_sec = (current_time - start_time) / 1000.0;
+
+            Serial.print("[");
+            Serial.print(time_sec, 2);
+            Serial.print("s] Encoder: ");
+            Serial.print(encoder_angle, 4);
+            Serial.print(" rad | SimpleFOC: ");
+            Serial.print(simplefoc_angle, 4);
+            Serial.println(" rad");
+        }
+
+        delay(1);
+    }
+
     Serial.println();
 }
 
@@ -468,28 +532,82 @@ void runMotorTest() {
     Serial.println("║                    Motor Test Sequence                         ║");
     Serial.println("╚════════════════════════════════════════════════════════════════╝");
 
-    Serial.println("\n1. Enabling motor...");
-    motorControl.enable();
+    // Auto-enable motor for this test
+    if (!motorControl.isEnabled()) {
+        Serial.print("\nEnabling motor... ");
+        motorControl.enable();
+        if (motorControl.isEnabled()) {
+            Serial.println("Motor enabled");
+        } else {
+            Serial.println("FAILED - motor not calibrated!");
+            Serial.println("Please run calibration first (type 'c' or 'calibrate')");
+            return;
+        }
+    } else {
+        Serial.println("\nMotor already enabled");
+    }
+
     delay(500);
 
-    Serial.println("2. Setting home position...");
+    Serial.print("Setting home position... ");
     motorControl.setHome();
+    Serial.print("Home set at angle: ");
+    Serial.println(motorControl.getCurrentPosition(), 2);
     delay(500);
 
-    Serial.println("3. Moving to 1.57 rad (90 degrees)...");
+    Serial.print("Moving to 1.57 rad (90 degrees)... ");
     motorControl.moveToPosition(1.57);
+    Serial.print("Moving to position: ");
+    Serial.println(motorControl.getTargetPosition(), 2);
     delay(3000);
-
-    Serial.println("4. Moving to 3.14 rad (180 degrees)...");
-    motorControl.moveToPosition(3.14);
-    delay(3000);
-
-    Serial.println("5. Moving back to home (0 rad)...");
-    motorControl.moveToPosition(0.0);
-    delay(3000);
-
-    Serial.println("Test sequence complete!\n");
     printStatus();
+
+    Serial.print("Moving to 3.14 rad (180 degrees)... ");
+    motorControl.moveToPosition(3.14);
+    Serial.print("Moving to position: ");
+    Serial.println(motorControl.getTargetPosition(), 2);
+    delay(3000);
+    printStatus();
+
+    Serial.print("Moving back to home (0 rad)... ");
+    motorControl.moveToPosition(0.0);
+    Serial.print("Moving to position: ");
+    Serial.println(motorControl.getTargetPosition(), 2);
+    delay(3000);
+
+    Serial.println("\nMotor test sequence complete!\n");
+    printStatus();
+}
+
+void runFullTest() {
+    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
+    Serial.println("║                    Full System Test                            ║");
+    Serial.println("╚════════════════════════════════════════════════════════════════╝");
+
+    // Step 1: Calibration
+    Serial.println("\n=== Step 1: Motor Calibration ===");
+    if (motorControl.isCalibrated()) {
+        Serial.println("Motor already calibrated - skipping calibration");
+    } else {
+        Serial.println("Running motor calibration...");
+        if (motorControl.calibrate()) {
+            Serial.println("✓ Calibration successful!");
+        } else {
+            Serial.println("✗ Calibration failed!");
+            Serial.println("Test sequence aborted.");
+            return;
+        }
+    }
+
+    delay(1000);
+
+    // Step 2: Motor test
+    Serial.println("\n=== Step 2: Motor Movement Test ===");
+    runMotorTest();
+
+    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
+    Serial.println("║                    Full Test Complete!                        ║");
+    Serial.println("╚════════════════════════════════════════════════════════════════╝\n");
 }
 
 void processSerialCommand(String cmd) {
@@ -595,7 +713,13 @@ void processSerialCommand(String cmd) {
         }
     }
     else if (command == "test") {
+        runFullTest();
+    }
+    else if (command == "motor_test") {
         runMotorTest();
+    }
+    else if (command == "encoder_test") {
+        runEncoderTest();
     }
     else if (command == "debug") {
         Serial.println("Note: Debug flags are compile-time constants in config.h");
