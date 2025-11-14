@@ -7,7 +7,10 @@
 //=============================================================================
 
 MT6701Sensor::MT6701Sensor(uint8_t address)
-    : encoder(address) {
+    : encoder(address),
+      current_angle(0.0),
+      previous_angle(0.0),
+      last_update_time(0) {
 }
 
 void MT6701Sensor::init() {
@@ -99,46 +102,55 @@ void MT6701Sensor::init() {
         Serial.print(test_read * 180.0 / PI, 2);
         Serial.println(" deg)");
     }
+
+    // Initialize angle cache
+    current_angle = encoder.readAngleRadians();
+    previous_angle = current_angle;
+    last_update_time = micros();
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[MT6701] Initial angle cached: ");
+        Serial.print(current_angle, 4);
+        Serial.println(" rad");
+    }
 }
 
 float MT6701Sensor::getSensorAngle() {
-    // Read angle in radians from MT6701 library
-    float angle = encoder.readAngleRadians();
+    // Return cached angle value (updated by update() method)
+    // SimpleFOC calls update() first, then getSensorAngle()
 
     #ifdef DEBUG_SENSOR_READS
     static unsigned long last_print = 0;
     if (millis() - last_print > 100) {  // Limit to 10Hz to avoid spam
         Serial.print("[SENSOR] getSensorAngle() = ");
-        Serial.print(angle, 4);
-        Serial.println(" rad");
+        Serial.print(current_angle, 4);
+        Serial.println(" rad (cached)");
         last_print = millis();
     }
     #endif
 
-    return angle;
+    return current_angle;
 }
 
 void MT6701Sensor::update() {
-    // SimpleFOC calls this before reading sensor angle
-    // We MUST update the base Sensor class's angle member variable
-    // so SimpleFOC can read it via motor.shaft_angle
+    // SimpleFOC calls this before reading sensor angle via getSensorAngle()
+    // We read the encoder here and cache the value
 
-    // Read current angle from MT6701 and store in base class member
-    float current_angle = encoder.readAngleRadians();
+    // Save previous angle for velocity calculation
+    previous_angle = current_angle;
 
-    // Update Sensor base class member variables
-    // This is what SimpleFOC actually reads!
-    angle_prev = angle;          // Save previous angle
-    angle = current_angle;        // Update current angle
+    // Read fresh angle from MT6701
+    current_angle = encoder.readAngleRadians();
 
-    // Velocity is calculated by SimpleFOC using angle - angle_prev
+    // Update timestamp
+    last_update_time = micros();
 
     #ifdef DEBUG_MOTOR_VERBOSE
     if (DEBUG_MOTOR) {
         Serial.print("[MT6701] update() - angle: ");
-        Serial.print(angle, 4);
-        Serial.print(" rad, angle_prev: ");
-        Serial.print(angle_prev, 4);
+        Serial.print(current_angle, 4);
+        Serial.print(" rad, prev: ");
+        Serial.print(previous_angle, 4);
         Serial.println(" rad");
     }
     #endif
@@ -160,10 +172,29 @@ bool MT6701Sensor::isFieldGood() {
 }
 
 float MT6701Sensor::getVelocity() {
-    // SimpleFOC's base Sensor class calculates velocity from angle changes
-    // We just need to return the shaft_velocity if it's been calculated
-    // For now, return 0 and let SimpleFOC handle velocity calculation
-    return 0;
+    // Calculate velocity from cached angle changes
+    // SimpleFOC may call this, or calculate velocity itself
+
+    // Simple velocity calculation (could be improved with filtering)
+    float angle_diff = current_angle - previous_angle;
+
+    // Handle wraparound (crossing 0/2π boundary)
+    if (angle_diff > PI) {
+        angle_diff -= 2.0 * PI;
+    } else if (angle_diff < -PI) {
+        angle_diff += 2.0 * PI;
+    }
+
+    // Calculate time difference (convert microseconds to seconds)
+    unsigned long current_time = micros();
+    float dt = (current_time - last_update_time) / 1000000.0;
+
+    // Avoid division by zero
+    if (dt < 0.000001) {
+        return 0.0;
+    }
+
+    return angle_diff / dt;
 }
 
 uint8_t MT6701Sensor::getFieldStatus() {

@@ -33,6 +33,9 @@ public:
 
 private:
     MT6701 encoder;
+    float current_angle;      // Cached angle value
+    float previous_angle;     // Previous angle for velocity calculation
+    unsigned long last_update_time;  // Timestamp of last update
 };
 
 class MotorController {
