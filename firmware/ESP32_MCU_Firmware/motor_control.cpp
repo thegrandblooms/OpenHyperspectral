@@ -53,7 +53,19 @@ void MT6701Sensor::init() {
 
 float MT6701Sensor::getSensorAngle() {
     // Read angle in radians from MT6701 library
-    return encoder.readAngleRadians();
+    float angle = encoder.readAngleRadians();
+
+    #ifdef DEBUG_SENSOR_READS
+    static unsigned long last_print = 0;
+    if (millis() - last_print > 100) {  // Limit to 10Hz to avoid spam
+        Serial.print("[SENSOR] getSensorAngle() = ");
+        Serial.print(angle, 4);
+        Serial.println(" rad");
+        last_print = millis();
+    }
+    #endif
+
+    return angle;
 }
 
 void MT6701Sensor::update() {
@@ -311,17 +323,62 @@ bool MotorController::runCalibration() {
     if (DEBUG_MOTOR) {
         Serial.println("[FOC] Running motor alignment (initFOC)...");
         Serial.print("[DEBUG] Pre-initFOC encoder read: ");
-        Serial.print(encoder.getSensorAngle(), 4);
+        float pre_angle = encoder.getSensorAngle();
+        Serial.print(pre_angle, 4);
         Serial.println(" rad");
         Serial.print("[DEBUG] Pre-initFOC shaft_angle: ");
         Serial.print(motor.shaft_angle, 4);
         Serial.println(" rad");
         Serial.print("[DEBUG] Sensor needs search: ");
         Serial.println(encoder.needsSearch());
+
+        // Test: manually read sensor multiple times to check for consistency
+        Serial.println("[DEBUG] Testing sensor consistency (5 reads):");
+        for (int i = 0; i < 5; i++) {
+            float test_angle = encoder.getSensorAngle();
+            Serial.print("  Read ");
+            Serial.print(i+1);
+            Serial.print(": ");
+            Serial.print(test_angle, 4);
+            Serial.print(" rad (diff: ");
+            Serial.print((test_angle - pre_angle) * 180.0 / PI, 2);
+            Serial.println(" deg)");
+            delay(50);
+        }
     }
 
     // Note: initFOC() returns 1 on success, 0 on failure
-    // For absolute encoders, this should skip electrical angle search
+    // For absolute encoders, SimpleFOC's automatic detection sometimes fails
+    // Try manual alignment: provide zero offset and let initFOC determine direction
+    if (DEBUG_MOTOR) {
+        Serial.println("[FOC] Manual approach: Align sensor to electrical zero...");
+    }
+
+    // Get current sensor angle
+    float sensor_angle = encoder.getSensorAngle();
+
+    // Calculate electrical angle (mechanical angle * pole_pairs)
+    float electrical_angle = _normalizeAngle(sensor_angle * POLE_PAIRS);
+
+    // Set zero electrical offset to current position
+    motor.zero_electric_angle = electrical_angle;
+    motor.sensor_direction = Direction::CW;  // Try CW first (can be reversed if motor spins wrong way)
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[FOC] Sensor angle: ");
+        Serial.print(sensor_angle, 4);
+        Serial.println(" rad");
+        Serial.print("[FOC] Electrical angle: ");
+        Serial.print(electrical_angle, 4);
+        Serial.println(" rad");
+        Serial.print("[FOC] Zero electric offset set to: ");
+        Serial.print(motor.zero_electric_angle, 4);
+        Serial.println(" rad");
+        Serial.println("[FOC] Sensor direction set to: CW");
+        Serial.println("[FOC] Calling initFOC() - should skip direction detection...");
+    }
+
+    // Now call initFOC() - it should just verify and not do direction detection
     int foc_result = motor.initFOC();
 
     if (DEBUG_MOTOR) {
