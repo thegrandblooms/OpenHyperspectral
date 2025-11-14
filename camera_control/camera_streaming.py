@@ -18,8 +18,8 @@ from typing import Optional, Tuple, Callable
 from collections import deque
 import logging
 
-# Import from mightex_driver folder
-from mightex_driver.camera import MightexCamera, CameraMode, SensorClock, HBlanking
+# Import from mightex_driver folder (relative import within camera_control module)
+from .mightex_driver.camera import MightexCamera, CameraMode, SensorClock, HBlanking
 
 logger = logging.getLogger(__name__)
 

@@ -8,12 +8,12 @@ import sys
 import os
 from threading import Lock
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add parent directory to path (for running as standalone script)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from camera_streaming import MightexStreamingCamera
-from mightex_driver.camera import SensorClock, HBlanking
-from camera_ui import ModernUI, create_modern_ui
+from .camera_streaming import MightexStreamingCamera
+from .mightex_driver.camera import SensorClock, HBlanking
+from .camera_ui import ModernUI, create_modern_ui
 
 
 class CameraViewer:

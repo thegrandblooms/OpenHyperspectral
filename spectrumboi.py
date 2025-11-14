@@ -39,8 +39,8 @@ plt.style.use('dark_background')
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from camera_streaming import MightexStreamingCamera
-from mightex_driver.camera import SensorClock, HBlanking
+from camera_control.camera_streaming import MightexStreamingCamera
+from camera_control.mightex_driver.camera import SensorClock, HBlanking
 
 
 @dataclass
