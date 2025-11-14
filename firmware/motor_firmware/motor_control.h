@@ -7,14 +7,7 @@
 #include "commands.h"
 
 //=============================================================================
-// ENCODER INTERRUPT SERVICE ROUTINES
-//=============================================================================
-// Forward declarations for encoder ISR callbacks
-void doA();
-void doB();
-
-//=============================================================================
-// MOTOR CONTROL MODULE (SimpleFOC Integration)
+// MOTOR CONTROL MODULE (SimpleFOC Integration with I2C Encoder)
 //=============================================================================
 
 class MotorController {
@@ -65,7 +58,7 @@ private:
     // SimpleFOC objects
     BLDCMotor motor;
     BLDCDriver3PWM driver;
-    Encoder encoder;
+    MagneticSensorI2C encoder;
 
     // State variables
     uint8_t system_state;

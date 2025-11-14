@@ -1,23 +1,11 @@
 #include "motor_control.h"
 #include "commands.h"  // Explicit include for state/mode definitions
-
-// Global encoder instance for ISR access
-// This is required by SimpleFOC for interrupt handling
-Encoder* g_encoder = nullptr;
-
-// Encoder interrupt service routines
-void doA() {
-    if (g_encoder) g_encoder->handleA();
-}
-
-void doB() {
-    if (g_encoder) g_encoder->handleB();
-}
+#include <Wire.h>      // I2C library for MT6701 encoder
 
 MotorController::MotorController()
     : motor(POLE_PAIRS),
       driver(MOTOR_PWM_A, MOTOR_PWM_B, MOTOR_PWM_C, MOTOR_ENABLE),
-      encoder(ENCODER_A, ENCODER_B, ENCODER_PPR),
+      encoder(ENCODER_I2C_ADDR, 14, 0x0E),  // MT6701: I2C address, 14-bit, angle register 0x0E
       system_state(STATE_IDLE),
       control_mode(DEFAULT_CONTROL_MODE),
       motor_enabled(false),
@@ -36,12 +24,19 @@ void MotorController::begin() {
         Serial.println("Initializing motor controller...");
     }
 
-    // Set global encoder pointer for ISR access
-    g_encoder = &encoder;
+    // Initialize I2C for MT6701 encoder
+    Wire.setPins(ENCODER_SDA, ENCODER_SCL);
+    Wire.begin();
 
-    // Initialize encoder
-    encoder.init();
-    encoder.enableInterrupts(doA, doB);  // SimpleFOC interrupt handlers
+    if (DEBUG_MOTOR) {
+        Serial.print("I2C initialized on SDA=");
+        Serial.print(ENCODER_SDA);
+        Serial.print(", SCL=");
+        Serial.println(ENCODER_SCL);
+    }
+
+    // Initialize I2C encoder
+    encoder.init(&Wire);
 
     // Link encoder to motor
     motor.linkSensor(&encoder);
