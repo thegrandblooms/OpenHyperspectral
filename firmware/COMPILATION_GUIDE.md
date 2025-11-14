@@ -11,50 +11,11 @@ The firmware uses the **Arduino framework on ESP32-S3**, not bare-metal ESP-IDF.
 
 ## Required Libraries
 
-The firmware uses the **MT6701 library** included in this repository, plus external libraries:
+The firmware is **fully self-contained** - all encoder code is included directly in the sketch folder.
 
-### 1. MT6701 Encoder Library (Included)
+**IMPORTANT**: Do NOT install "MT6701" or "MT6701-arduino" from Arduino Library Manager! The encoder driver is already included in `firmware/ESP32_MCU_Firmware/encoder/`.
 
-**IMPORTANT**: Do NOT install "MT6701-arduino" from Arduino Library Manager! That is a different library with an incompatible API.
-
-The MT6701 library is located in `firmware/libraries/MT6701/` and is **automatically available** to the firmware via symlink.
-
-**Setup Instructions**:
-
-On **Windows**:
-1. **DO NOT** install MT6701 from Library Manager (uninstall if you already did)
-2. Copy our custom library:
-   - Source: `firmware/libraries/MT6701/`
-   - Destination: `C:\Users\<YourName>\Documents\Arduino\libraries\MT6701\`
-   - Or use the symlink method below if you have admin/developer mode
-
-On **Linux/macOS**:
-1. The symlink `firmware/ESP32_MCU_Firmware/libraries` → `../libraries` should work automatically
-2. If compilation fails, copy to: `~/Arduino/libraries/MT6701/`
-
-**Symlink Setup (Windows - requires admin/developer mode)**:
-```cmd
-cd firmware\ESP32_MCU_Firmware
-mklink /D libraries ..\libraries
-```
-
-**Symlink Setup (Linux/macOS)**:
-```bash
-cd firmware/ESP32_MCU_Firmware
-ln -s ../libraries libraries
-```
-
-**Verification**: After setup, Arduino should find our library at compilation. You should see:
-```
-Using library MT6701 at version 1.0.0 in folder: <path>/firmware/libraries/MT6701
-```
-
-**NOT**:
-```
-Using library MT6701-arduino at version 1.0.3  # WRONG LIBRARY!
-```
-
-### 2. SimpleFOC (Install via Library Manager)
+### External Libraries (Install via Library Manager)
 
 Install these through Arduino Library Manager:
 
@@ -110,9 +71,10 @@ Edit `firmware/ESP32_MCU_Firmware/config.h` before compiling:
 
 ### 1. MT6701 Encoder Integration
 **Updated**: Now uses native MT6701 library instead of SimpleFOC's generic I2C sensor
-- Library location: `firmware/libraries/MT6701/`
+- Encoder driver location: `firmware/ESP32_MCU_Firmware/encoder/`
 - Features: 14-bit resolution, field strength monitoring, zero calibration
-- Accessed via symlink in `firmware/ESP32_MCU_Firmware/libraries/`
+- Self-contained: No external library installation required
+- Arduino IDE automatically compiles files in sketch subdirectories
 
 ### 2. Pin Definitions
 **Fixed**: Changed from ESP-IDF style (`GPIO_NUM_10`) to Arduino style (`10`)
@@ -147,17 +109,17 @@ You may see these warnings during compilation:
 ## Known Issues and Solutions
 
 ### Issue: "MT6701.h: No such file or directory"
-**Solution**: Copy our custom MT6701 library to your Arduino libraries folder.
-- Source: `firmware/libraries/MT6701/`
-- Destination: `~/Arduino/libraries/MT6701/` (Linux/macOS) or `C:\Users\<YourName>\Documents\Arduino\libraries\MT6701\` (Windows)
+**Solution**: This should not occur - the encoder files are in `firmware/ESP32_MCU_Firmware/encoder/`.
+- Verify files exist: `MT6701.h` and `MT6701.cpp` in `encoder/` subdirectory
+- Arduino IDE automatically finds files in sketch subdirectories
+- If still failing, re-download the repository
 
 ### Issue: "no matching function for call to 'MT6701::MT6701(uint8_t&)'"
 **Solution**: You have the wrong MT6701 library installed!
-1. **Uninstall "MT6701-arduino"** from Library Manager if installed
-2. **Use our custom library** from `firmware/libraries/MT6701/`
-3. Copy it to your Arduino libraries folder (see above)
-4. Restart Arduino IDE
-5. Verify compilation uses: `Using library MT6701 at version 1.0.0`
+1. **Uninstall "MT6701-arduino"** from Library Manager
+2. **DO NOT** install any MT6701 library - it's already in the sketch
+3. Restart Arduino IDE
+4. The firmware includes its own encoder driver in `encoder/` subdirectory
 
 ### Issue: "SimpleFOC.h: No such file"
 **Solution**: Install SimpleFOC library via Library Manager
