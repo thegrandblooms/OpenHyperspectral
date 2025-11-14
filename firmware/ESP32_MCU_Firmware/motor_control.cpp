@@ -12,18 +12,49 @@ MT6701Sensor::MT6701Sensor(uint8_t address)
 
 void MT6701Sensor::init() {
     // Initialize I2C for MT6701 encoder (using working approach from encoder_test)
-    Wire.begin(ENCODER_SDA, ENCODER_SCL);
-    Wire.setClock(400000);  // 400kHz fast mode
-
     if (DEBUG_MOTOR) {
-        Serial.print("[MT6701] I2C initialized on SDA=GPIO");
+        Serial.println("[MT6701] Initializing I2C...");
+        Serial.print("  SDA=GPIO");
         Serial.print(ENCODER_SDA);
         Serial.print(", SCL=GPIO");
         Serial.println(ENCODER_SCL);
     }
 
+    Wire.begin(ENCODER_SDA, ENCODER_SCL);
+    Wire.setClock(400000);  // 400kHz fast mode
+    delay(100);  // Give I2C time to stabilize
+
+    if (DEBUG_MOTOR) {
+        Serial.println("[MT6701] Scanning I2C bus for encoder...");
+        Wire.beginTransmission(ENCODER_I2C_ADDR);
+        byte error = Wire.endTransmission();
+        if (error == 0) {
+            Serial.print("[MT6701] Found device at 0x");
+            if (ENCODER_I2C_ADDR < 16) Serial.print("0");
+            Serial.println(ENCODER_I2C_ADDR, HEX);
+        } else {
+            Serial.print("[MT6701] ERROR: No device at 0x");
+            if (ENCODER_I2C_ADDR < 16) Serial.print("0");
+            Serial.print(ENCODER_I2C_ADDR, HEX);
+            Serial.print(" (error code: ");
+            Serial.print(error);
+            Serial.println(")");
+        }
+    }
+
     // Initialize MT6701 encoder library from firmware/libraries/MT6701
-    if (!encoder.begin(&Wire)) {
+    if (DEBUG_MOTOR) {
+        Serial.println("[MT6701] Calling encoder.begin()...");
+    }
+
+    bool init_success = encoder.begin(&Wire);
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[MT6701] encoder.begin() returned: ");
+        Serial.println(init_success ? "SUCCESS" : "FAILURE");
+    }
+
+    if (!init_success) {
         if (DEBUG_MOTOR) {
             Serial.println("[MT6701] ERROR: Encoder initialization failed!");
         }
@@ -33,21 +64,40 @@ void MT6701Sensor::init() {
     if (DEBUG_MOTOR) {
         Serial.println("[MT6701] Encoder initialized successfully");
 
-        // Check field strength
+        // Check field strength with raw register read
         uint8_t field_status = encoder.readFieldStatus();
+        Serial.print("[MT6701] Field status register: 0x");
+        if (field_status < 16) Serial.print("0");
+        Serial.println(field_status, HEX);
+
         if (field_status == 0x00) {
             Serial.println("[MT6701] Magnetic field: GOOD");
         } else if (field_status == 0x01) {
             Serial.println("[MT6701] WARNING: Magnetic field TOO STRONG");
         } else if (field_status == 0x02) {
             Serial.println("[MT6701] WARNING: Magnetic field TOO WEAK");
+        } else {
+            Serial.println("[MT6701] WARNING: Unexpected field status (possible I2C failure)");
         }
+
+        // Read raw angle register
+        uint16_t raw_angle = encoder.readRawAngle();
+        Serial.print("[MT6701] Raw angle register: ");
+        Serial.print(raw_angle);
+        Serial.print(" (0x");
+        if (raw_angle < 0x1000) Serial.print("0");
+        if (raw_angle < 0x100) Serial.print("0");
+        if (raw_angle < 0x10) Serial.print("0");
+        Serial.print(raw_angle, HEX);
+        Serial.println(")");
 
         // Verify sensor is readable
         float test_read = encoder.readAngleRadians();
-        Serial.print("[MT6701] Test read: ");
+        Serial.print("[MT6701] Computed angle: ");
         Serial.print(test_read, 4);
-        Serial.println(" rad");
+        Serial.print(" rad (");
+        Serial.print(test_read * 180.0 / PI, 2);
+        Serial.println(" deg)");
     }
 }
 
