@@ -5,7 +5,7 @@
 MotorController::MotorController()
     : motor(POLE_PAIRS),
       driver(MOTOR_PWM_A, MOTOR_PWM_B, MOTOR_PWM_C, MOTOR_ENABLE),
-      encoder(ENCODER_I2C_ADDR, 14, 0x0E),  // MT6701: I2C address, 14-bit, angle register 0x0E
+      encoder(ENCODER_I2C_ADDR, 14, 0x03, 8),  // MT6701: I2C addr, 14-bit, MSB reg 0x03, 8 bits in MSB
       system_state(STATE_IDLE),
       control_mode(DEFAULT_CONTROL_MODE),
       motor_enabled(false),
