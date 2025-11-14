@@ -25,7 +25,7 @@ bool CommunicationManager::available() {
     // Check for available data
     if (transfer.available()) {
         // Get the command ID (first byte)
-        command_id = transfer.packet.rxBuff[0];
+        command_id = transfer.rxBuff[0];
         command_available = true;
 
         if (DEBUG_COMM) {
@@ -64,7 +64,7 @@ void CommunicationManager::sendErrorResponse(uint8_t command_id, uint8_t error_c
 
     // Clear buffer first
     for (uint8_t i = 0; i < 8; i++) {
-        transfer.packet.txBuff[i] = 0;
+        transfer.txBuff[i] = 0;
     }
 
     sendData(&response, sizeof(response));
@@ -115,7 +115,7 @@ void CommunicationManager::sendStatus(uint8_t state, uint8_t control_mode,
                                       bool motor_enabled, bool calibrated) {
     // Clear buffer first
     for (uint8_t i = 0; i < 32; i++) {
-        transfer.packet.txBuff[i] = 0;
+        transfer.txBuff[i] = 0;
     }
 
     StatusResponse response;

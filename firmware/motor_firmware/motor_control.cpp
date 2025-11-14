@@ -1,5 +1,18 @@
 #include "motor_control.h"
 
+// Global encoder instance for ISR access
+// This is required by SimpleFOC for interrupt handling
+Encoder* g_encoder = nullptr;
+
+// Encoder interrupt service routines
+void doA() {
+    if (g_encoder) g_encoder->handleA();
+}
+
+void doB() {
+    if (g_encoder) g_encoder->handleB();
+}
+
 MotorController::MotorController()
     : motor(POLE_PAIRS),
       driver(MOTOR_PWM_A, MOTOR_PWM_B, MOTOR_PWM_C, MOTOR_ENABLE),
@@ -22,15 +35,12 @@ void MotorController::begin() {
         Serial.println("Initializing motor controller...");
     }
 
+    // Set global encoder pointer for ISR access
+    g_encoder = &encoder;
+
     // Initialize encoder
     encoder.init();
-    encoder.enableInterrupts([]() {
-        extern MotorController* g_motor_controller;
-        if (g_motor_controller) {
-            // Encoder interrupt callback - update encoder position
-            // SimpleFOC handles this internally
-        }
-    });
+    encoder.enableInterrupts(doA, doB);  // SimpleFOC interrupt handlers
 
     // Link encoder to motor
     motor.linkSensor(&encoder);

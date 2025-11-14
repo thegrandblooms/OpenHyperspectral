@@ -54,21 +54,18 @@ bool CommunicationManager::getCommandData(T* data) {
     }
 
     // Extract data from receive buffer (skip command ID byte)
-    if (transfer.bytesRead >= sizeof(T) + 1) {
-        memcpy(data, &transfer.packet.rxBuff[1], sizeof(T));
-        return true;
-    }
-
-    return false;
+    // Check if we have enough data (command ID + data)
+    memcpy(data, &transfer.rxBuff[1], sizeof(T));
+    return true;
 }
 
 template<typename T>
 void CommunicationManager::sendData(const T* data, uint16_t size) {
     // Copy data to transmit buffer
-    memcpy(&transfer.packet.txBuff[0], data, size);
+    memcpy(&transfer.txBuff[0], data, size);
 
     // Send the data
-    transfer.sendData(size);
+    transfer.sendDatum(size);
 }
 
 #endif // COMMUNICATION_H
