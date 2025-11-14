@@ -185,38 +185,38 @@ bool MotorController::calibrate() {
 }
 
 bool MotorController::runCalibration() {
-    // Check magnetic field strength first
+    // Check magnetic field strength first (warning only, not fatal)
     if (!encoder.isFieldGood()) {
         if (DEBUG_MOTOR) {
             Serial.print("[MT6701] Field status: 0x");
             Serial.println(encoder.getFieldStatus(), HEX);
-            Serial.println("[MT6701] Magnetic field not optimal - calibration may fail");
+            Serial.println("[MT6701] WARNING: Magnetic field not optimal");
         }
     }
 
-    // Align motor and encoder
+    // Verify encoder is readable before calibration
+    float test_angle = encoder.getSensorAngle();
+    if (isnan(test_angle) || isinf(test_angle)) {
+        if (DEBUG_MOTOR) {
+            Serial.println("[MT6701] ERROR: Cannot read encoder angle");
+        }
+        return false;
+    }
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[MT6701] Encoder reading OK: ");
+        Serial.print(test_angle, 4);
+        Serial.println(" rad");
+    }
+
+    // Run SimpleFOC calibration (aligns motor and encoder)
+    if (DEBUG_MOTOR) {
+        Serial.println("[FOC] Running motor alignment...");
+    }
     motor.initFOC();
 
-    // Verify encoder is working
-    float test_angle = encoder.getSensorAngle();
-    delay(100);
-    float test_angle2 = encoder.getSensorAngle();
-
-    // Check if encoder is providing different readings (indicating it's working)
-    if (abs(test_angle - test_angle2) < 0.001) {
-        // Try moving motor to check encoder response
-        motor.enable();
-        motor.move(1.0);  // Small test movement
-        delay(500);
-        float test_angle3 = encoder.getSensorAngle();
-        motor.disable();
-
-        if (abs(test_angle - test_angle3) < 0.001) {
-            if (DEBUG_MOTOR) {
-                Serial.println("[MT6701] Encoder not responding - check wiring and magnet");
-            }
-            return false;
-        }
+    if (DEBUG_MOTOR) {
+        Serial.println("[FOC] Motor alignment complete!");
     }
 
     return true;
