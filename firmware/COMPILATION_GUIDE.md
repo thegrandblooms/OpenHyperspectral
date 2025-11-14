@@ -71,10 +71,10 @@ Edit `firmware/ESP32_MCU_Firmware/config.h` before compiling:
 
 ### 1. MT6701 Encoder Integration
 **Updated**: Now uses native MT6701 library instead of SimpleFOC's generic I2C sensor
-- Encoder driver location: `firmware/ESP32_MCU_Firmware/encoder/`
+- Encoder driver files: `MT6701.h` and `MT6701.cpp` in sketch root
 - Features: 14-bit resolution, field strength monitoring, zero calibration
 - Self-contained: No external library installation required
-- Arduino IDE automatically compiles files in sketch subdirectories
+- Arduino IDE automatically compiles .cpp files in sketch root directory
 
 ### 2. Pin Definitions
 **Fixed**: Changed from ESP-IDF style (`GPIO_NUM_10`) to Arduino style (`10`)
@@ -109,17 +109,18 @@ You may see these warnings during compilation:
 ## Known Issues and Solutions
 
 ### Issue: "MT6701.h: No such file or directory"
-**Solution**: This should not occur - the encoder files are in `firmware/ESP32_MCU_Firmware/encoder/`.
-- Verify files exist: `MT6701.h` and `MT6701.cpp` in `encoder/` subdirectory
-- Arduino IDE automatically finds files in sketch subdirectories
+**Solution**: This should not occur - the encoder files are in the sketch root.
+- Verify files exist: `MT6701.h` and `MT6701.cpp` in `firmware/ESP32_MCU_Firmware/`
+- Arduino IDE automatically compiles .cpp files in the sketch root
 - If still failing, re-download the repository
 
-### Issue: "no matching function for call to 'MT6701::MT6701(uint8_t&)'"
-**Solution**: You have the wrong MT6701 library installed!
-1. **Uninstall "MT6701-arduino"** from Library Manager
-2. **DO NOT** install any MT6701 library - it's already in the sketch
-3. Restart Arduino IDE
-4. The firmware includes its own encoder driver in `encoder/` subdirectory
+### Issue: "no matching function for call to 'MT6701::MT6701(uint8_t&)'" or "undefined reference to MT6701::..."
+**Solution**: You have the wrong MT6701 library installed, or files are missing!
+1. **Uninstall "MT6701-arduino"** from Library Manager if installed
+2. **DO NOT** install any MT6701 library - it's included in the sketch
+3. Verify `MT6701.h` and `MT6701.cpp` exist in sketch root
+4. Restart Arduino IDE
+5. The firmware includes its own encoder driver (`MT6701.h` and `MT6701.cpp`)
 
 ### Issue: "SimpleFOC.h: No such file"
 **Solution**: Install SimpleFOC library via Library Manager

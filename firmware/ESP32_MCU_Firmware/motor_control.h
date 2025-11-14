@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include <SimpleFOC.h>
-#include "encoder/MT6701.h"  // MT6701 encoder (local file)
+#include "MT6701.h"  // MT6701 encoder driver (local file in sketch root)
 #include "config.h"
 #include "commands.h"
 
