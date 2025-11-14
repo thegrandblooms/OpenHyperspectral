@@ -24,6 +24,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <SimpleFOC.h>
+#include "../../ESP32_MCU_Firmware/pid_auto_tuner.h"
 
 // Hardware configuration (from motor_firmware config.h)
 #define MOTOR_ENABLE     15
@@ -74,6 +75,7 @@ void printHelp() {
     Serial.println("Commands:");
     Serial.println("  h, help      - Show this help menu");
     Serial.println("  c, calibrate - Run motor calibration");
+    Serial.println("  p, pidtune   - Run PID auto-tuning (after calibration)");
     Serial.println("  e, enable    - Enable motor");
     Serial.println("  d, disable   - Disable motor");
     Serial.println("  t, test      - Run automated test sequence");
@@ -232,6 +234,82 @@ void runCalibration() {
     Serial.println("║               CALIBRATION SUCCESSFUL!                          ║");
     Serial.println("╚════════════════════════════════════════════════════════════════╝");
     Serial.println();
+    Serial.println("TIP: Run 'p' or 'pidtune' to auto-tune PID parameters for");
+    Serial.println("     optimal position tracking performance.");
+    Serial.println();
+}
+
+void runPIDTuning() {
+    if (!calibrated) {
+        Serial.println("ERROR: Motor must be calibrated first! Run 'c' to calibrate.");
+        return;
+    }
+
+    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
+    Serial.println("║                  PID AUTO-TUNING                               ║");
+    Serial.println("╚════════════════════════════════════════════════════════════════╝");
+    Serial.println();
+    Serial.println("Starting PID auto-tuning...");
+    Serial.println("This will:");
+    Serial.println("  1. Test motor response at multiple positions");
+    Serial.println("  2. Start with conservative PID values to prevent overshoot");
+    Serial.println("  3. Gradually increase gains for optimal performance");
+    Serial.println("  4. Apply tuned parameters automatically");
+    Serial.println();
+    Serial.println("⚠ Motor will move to multiple positions during tuning!");
+    Serial.println("  This may take several minutes.");
+    Serial.println();
+    delay(2000);
+
+    // Ensure motor is enabled
+    if (!motor.enabled) {
+        Serial.println("Enabling motor...");
+        motor.enable();
+        delay(500);
+    }
+
+    // Create tuner and run tuning
+    PIDAutoTuner tuner(motor, encoder);
+    bool success = tuner.runTuning(true);  // verbose = true
+
+    if (success) {
+        // Apply optimal PID parameters
+        float p, i, d, ramp;
+        tuner.getOptimalPID(p, i, d, ramp);
+
+        motor.P_angle.P = p;
+        motor.P_angle.I = i;
+        motor.P_angle.D = d;
+        motor.P_angle.output_ramp = ramp;
+
+        Serial.println();
+        Serial.println("╔════════════════════════════════════════════════════════════════╗");
+        Serial.println("║             PID TUNING SUCCESSFUL!                             ║");
+        Serial.println("╚════════════════════════════════════════════════════════════════╝");
+        Serial.println();
+        Serial.println("Optimal PID parameters have been applied.");
+        Serial.println();
+        Serial.println("To make these values permanent, update config.h:");
+        Serial.print("  #define PID_P_POSITION ");
+        Serial.println(p, 2);
+        Serial.print("  #define PID_I_POSITION ");
+        Serial.println(i, 2);
+        Serial.print("  #define PID_D_POSITION ");
+        Serial.println(d, 3);
+        Serial.println();
+    } else {
+        Serial.println();
+        Serial.println("╔════════════════════════════════════════════════════════════════╗");
+        Serial.println("║             PID TUNING FAILED!                                 ║");
+        Serial.println("╚════════════════════════════════════════════════════════════════╝");
+        Serial.println();
+        Serial.println("PID tuning was unsuccessful. Check:");
+        Serial.println("  - Motor is properly calibrated");
+        Serial.println("  - Motor can move freely");
+        Serial.println("  - Power supply is adequate");
+        Serial.println("  - Encoder is reading correctly");
+        Serial.println();
+    }
 }
 
 void runTestSequence() {
@@ -300,6 +378,9 @@ void processCommand() {
     }
     else if (command_buffer == "c" || command_buffer == "calibrate") {
         runCalibration();
+    }
+    else if (command_buffer == "p" || command_buffer == "pidtune") {
+        runPIDTuning();
     }
     else if (command_buffer == "e" || command_buffer == "enable") {
         motor.enable();

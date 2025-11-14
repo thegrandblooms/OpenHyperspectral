@@ -1,5 +1,6 @@
 #include "motor_control.h"
 #include "commands.h"  // Explicit include for state/mode definitions
+#include "pid_auto_tuner.h"  // PID auto-tuning functionality
 #include <Wire.h>      // I2C library for MT6701 encoder
 
 //=============================================================================
@@ -692,6 +693,67 @@ void MotorController::setCurrentPID(float p, float i, float d, float ramp) {
     if (DEBUG_MOTOR) {
         Serial.println("Current PID updated");
     }
+}
+
+bool MotorController::autoTunePID(bool verbose) {
+    // Ensure motor is calibrated and enabled
+    if (!motor_calibrated) {
+        if (verbose) {
+            Serial.println("[TUNE] ERROR: Motor must be calibrated before PID tuning");
+        }
+        return false;
+    }
+
+    if (!motor_enabled) {
+        if (verbose) {
+            Serial.println("[TUNE] Enabling motor for tuning...");
+        }
+        enable();
+        delay(500);
+    }
+
+    // Save current control mode and switch to position control
+    uint8_t saved_mode = control_mode;
+    if (control_mode != CONTROL_MODE_POSITION) {
+        if (verbose) {
+            Serial.println("[TUNE] Switching to position control mode...");
+        }
+        setControlMode(CONTROL_MODE_POSITION);
+    }
+
+    // Create tuner and run tuning
+    PIDAutoTuner tuner(motor, encoder);
+    bool success = tuner.runTuning(verbose);
+
+    if (success) {
+        // Apply optimal PID parameters
+        float p, i, d, ramp;
+        tuner.getOptimalPID(p, i, d, ramp);
+
+        setPositionPID(p, i, d, ramp);
+
+        if (verbose) {
+            Serial.println("[TUNE] Optimal PID parameters applied!");
+            Serial.println("[TUNE] To make permanent, update config.h:");
+            Serial.print("  #define PID_P_POSITION ");
+            Serial.println(p, 2);
+            Serial.print("  #define PID_I_POSITION ");
+            Serial.println(i, 2);
+            Serial.print("  #define PID_D_POSITION ");
+            Serial.println(d, 3);
+        }
+    } else {
+        if (verbose) {
+            Serial.println("[TUNE] ERROR: PID tuning failed!");
+        }
+    }
+
+    // Restore original control mode
+    if (saved_mode != control_mode) {
+        setControlMode(saved_mode);
+    }
+
+    return success;
 }
 
 float MotorController::getCurrentPosition() {
