@@ -26,9 +26,9 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-#include <MT6701.h>  // Use MT6701 library from firmware/libraries/MT6701
+#include "encoder/MT6701.h"  // MT6701 encoder (local file)
 
-// Encoder pins (from motor_firmware config.h)
+// Encoder pins (from ESP32_MCU_Firmware config.h)
 #define ENCODER_SDA      47   // MT6701 I2C SDA
 #define ENCODER_SCL      48   // MT6701 I2C SCL
 #define ENCODER_I2C_ADDR 0x06 // MT6701 I2C address
