@@ -26,7 +26,7 @@
 // Wiring: 3V3 → VDD, GND → GND, GPIO47 → SDA, GPIO48 → SCL
 #define ENCODER_SDA      47   // MT6701 I2C SDA (GPIO47)
 #define ENCODER_SCL      48   // MT6701 I2C SCL (GPIO48)
-#define ENCODER_I2C_ADDR 0x06 // MT6701 default I2C address (verify with datasheet)
+#define ENCODER_I2C_ADDR 0x06 // MT6701 I2C address (angle data at register 0x03-0x04)
 
 //=============================================================================
 // MOTOR PARAMETERS
