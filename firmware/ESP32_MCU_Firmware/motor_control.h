@@ -24,6 +24,8 @@ public:
     float getSensorAngle() override;
     void update() override;           // Update sensor state (called by SimpleFOC before reading)
     int needsSearch() override;       // For absolute encoders, return 0 (no search needed)
+    float getVelocity() override;     // Get angular velocity (SimpleFOC calculates this internally)
+    int32_t getFullRotations() { return 0; }  // For absolute single-turn encoder
 
     // Additional MT6701 features
     bool isFieldGood();
