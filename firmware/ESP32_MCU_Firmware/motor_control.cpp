@@ -2,10 +2,70 @@
 #include "commands.h"  // Explicit include for state/mode definitions
 #include <Wire.h>      // I2C library for MT6701 encoder
 
+//=============================================================================
+// MT6701 Sensor Wrapper Implementation
+//=============================================================================
+
+MT6701Sensor::MT6701Sensor(uint8_t address)
+    : encoder(address) {
+}
+
+void MT6701Sensor::init() {
+    // Initialize I2C for MT6701 encoder
+    Wire.setPins(ENCODER_SDA, ENCODER_SCL);
+    Wire.begin();
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[MT6701] I2C initialized on SDA=GPIO");
+        Serial.print(ENCODER_SDA);
+        Serial.print(", SCL=GPIO");
+        Serial.println(ENCODER_SCL);
+    }
+
+    // Initialize MT6701 encoder library from firmware/libraries/MT6701
+    if (!encoder.begin(&Wire)) {
+        if (DEBUG_MOTOR) {
+            Serial.println("[MT6701] ERROR: Encoder initialization failed!");
+        }
+        return;
+    }
+
+    if (DEBUG_MOTOR) {
+        Serial.println("[MT6701] Encoder initialized successfully");
+
+        // Check field strength
+        uint8_t field_status = encoder.readFieldStatus();
+        if (field_status == 0x00) {
+            Serial.println("[MT6701] Magnetic field: GOOD");
+        } else if (field_status == 0x01) {
+            Serial.println("[MT6701] WARNING: Magnetic field TOO STRONG");
+        } else if (field_status == 0x02) {
+            Serial.println("[MT6701] WARNING: Magnetic field TOO WEAK");
+        }
+    }
+}
+
+float MT6701Sensor::getSensorAngle() {
+    // Read angle in radians from MT6701 library
+    return encoder.readAngleRadians();
+}
+
+bool MT6701Sensor::isFieldGood() {
+    return encoder.isFieldGood();
+}
+
+uint8_t MT6701Sensor::getFieldStatus() {
+    return encoder.readFieldStatus();
+}
+
+//=============================================================================
+// Motor Controller Implementation
+//=============================================================================
+
 MotorController::MotorController()
     : motor(POLE_PAIRS),
       driver(MOTOR_PWM_A, MOTOR_PWM_B, MOTOR_PWM_C, MOTOR_ENABLE),
-      encoder(ENCODER_I2C_ADDR, 14, 0x03, 8),  // MT6701: I2C addr, 14-bit, MSB reg 0x03, 8 bits in MSB
+      encoder(ENCODER_I2C_ADDR),
       system_state(STATE_IDLE),
       control_mode(DEFAULT_CONTROL_MODE),
       motor_enabled(false),
@@ -24,19 +84,8 @@ void MotorController::begin() {
         Serial.println("Initializing motor controller...");
     }
 
-    // Initialize I2C for MT6701 encoder
-    Wire.setPins(ENCODER_SDA, ENCODER_SCL);
-    Wire.begin();
-
-    if (DEBUG_MOTOR) {
-        Serial.print("I2C initialized on SDA=");
-        Serial.print(ENCODER_SDA);
-        Serial.print(", SCL=");
-        Serial.println(ENCODER_SCL);
-    }
-
-    // Initialize I2C encoder
-    encoder.init(&Wire);
+    // Initialize MT6701 encoder using library from firmware/libraries/MT6701
+    encoder.init();
 
     // Link encoder to motor
     motor.linkSensor(&encoder);
@@ -136,13 +185,22 @@ bool MotorController::calibrate() {
 }
 
 bool MotorController::runCalibration() {
+    // Check magnetic field strength first
+    if (!encoder.isFieldGood()) {
+        if (DEBUG_MOTOR) {
+            Serial.print("[MT6701] Field status: 0x");
+            Serial.println(encoder.getFieldStatus(), HEX);
+            Serial.println("[MT6701] Magnetic field not optimal - calibration may fail");
+        }
+    }
+
     // Align motor and encoder
     motor.initFOC();
 
     // Verify encoder is working
-    float test_angle = encoder.getAngle();
+    float test_angle = encoder.getSensorAngle();
     delay(100);
-    float test_angle2 = encoder.getAngle();
+    float test_angle2 = encoder.getSensorAngle();
 
     // Check if encoder is providing different readings (indicating it's working)
     if (abs(test_angle - test_angle2) < 0.001) {
@@ -150,12 +208,12 @@ bool MotorController::runCalibration() {
         motor.enable();
         motor.move(1.0);  // Small test movement
         delay(500);
-        float test_angle3 = encoder.getAngle();
+        float test_angle3 = encoder.getSensorAngle();
         motor.disable();
 
         if (abs(test_angle - test_angle3) < 0.001) {
             if (DEBUG_MOTOR) {
-                Serial.println("Encoder not responding");
+                Serial.println("[MT6701] Encoder not responding - check wiring and magnet");
             }
             return false;
         }

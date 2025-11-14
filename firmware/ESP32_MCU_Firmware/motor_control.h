@@ -3,12 +3,33 @@
 
 #include <Arduino.h>
 #include <SimpleFOC.h>
+#include <MT6701.h>
 #include "config.h"
 #include "commands.h"
 
 //=============================================================================
-// MOTOR CONTROL MODULE (SimpleFOC Integration with I2C Encoder)
+// MOTOR CONTROL MODULE (SimpleFOC Integration with MT6701 Encoder)
 //=============================================================================
+
+/**
+ * SimpleFOC-compatible wrapper for MT6701 encoder library
+ * This class adapts the MT6701 library to work with SimpleFOC's Sensor interface
+ */
+class MT6701Sensor : public Sensor {
+public:
+    MT6701Sensor(uint8_t address = 0x06);
+
+    // Sensor interface implementation
+    void init() override;
+    float getSensorAngle() override;
+
+    // Additional MT6701 features
+    bool isFieldGood();
+    uint8_t getFieldStatus();
+
+private:
+    MT6701 encoder;
+};
 
 class MotorController {
 public:
@@ -58,7 +79,7 @@ private:
     // SimpleFOC objects
     BLDCMotor motor;
     BLDCDriver3PWM driver;
-    MagneticSensorI2C encoder;
+    MT6701Sensor encoder;
 
     // State variables
     uint8_t system_state;
