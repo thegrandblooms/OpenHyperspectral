@@ -29,6 +29,10 @@ MotorController motorControl;
 uint16_t current_sequence_id = 0;
 unsigned long last_update_time = 0;
 unsigned long last_status_print = 0;
+unsigned long last_heartbeat = 0;
+
+// Serial command buffer for interactive testing
+String serialCommandBuffer = "";
 
 //=============================================================================
 // COMMAND PROCESSING
@@ -281,6 +285,286 @@ void checkPositionReached() {
 }
 
 //=============================================================================
+// INTERACTIVE SERIAL COMMANDS (for testing)
+//=============================================================================
+
+void printHelp() {
+    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
+    Serial.println("║          OpenHyperspectral Motor Controller - Help            ║");
+    Serial.println("╚════════════════════════════════════════════════════════════════╝");
+    Serial.println("\nInteractive Test Commands (type and press Enter):");
+    Serial.println("  h, help        - Show this help menu");
+    Serial.println("  s, status      - Print current motor status");
+    Serial.println("  i, info        - Show system information");
+    Serial.println("  e, enable      - Enable motor");
+    Serial.println("  d, disable     - Disable motor");
+    Serial.println("  c, calibrate   - Run motor calibration");
+    Serial.println("  home           - Set current position as home");
+    Serial.println("  stop           - Stop motor movement");
+    Serial.println("  m <angle>      - Move to angle (e.g., 'm 3.14' for π radians)");
+    Serial.println("  v <velocity>   - Set velocity (e.g., 'v 10.0' rad/s)");
+    Serial.println("  a <accel>      - Set acceleration (e.g., 'a 5.0' rad/s²)");
+    Serial.println("  mode <0-2>     - Set control mode (0=position, 1=velocity, 2=torque)");
+    Serial.println("  test           - Run motor test sequence");
+    Serial.println("  debug <0/1>    - Toggle debug output (0=off, 1=on)");
+    Serial.println("\nBinary Protocol Commands:");
+    Serial.println("  The controller also accepts binary commands via SerialTransfer");
+    Serial.println("  Use the Python/PC software for full protocol communication");
+    Serial.println("\n");
+}
+
+void printSystemInfo() {
+    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
+    Serial.println("║                    System Information                          ║");
+    Serial.println("╚════════════════════════════════════════════════════════════════╝");
+    Serial.print("Firmware Version: 1.0.0\n");
+    Serial.print("Board: ESP32-S3-Touch-LCD-2 (Waveshare)\n");
+    Serial.print("Chip Model: ");
+    Serial.println(ESP.getChipModel());
+    Serial.print("CPU Frequency: ");
+    Serial.print(ESP.getCpuFreqMHz());
+    Serial.println(" MHz");
+    Serial.print("Flash Size: ");
+    Serial.print(ESP.getFlashChipSize() / 1024 / 1024);
+    Serial.println(" MB");
+    Serial.print("Free Heap: ");
+    Serial.print(ESP.getFreeHeap() / 1024);
+    Serial.println(" KB");
+    Serial.print("Uptime: ");
+    Serial.print(millis() / 1000);
+    Serial.println(" seconds");
+
+    Serial.println("\n--- Motor Configuration ---");
+    Serial.print("Pole Pairs: ");
+    Serial.println(POLE_PAIRS);
+    Serial.print("Encoder PPR: ");
+    Serial.println(ENCODER_PPR);
+    Serial.print("Power Supply: ");
+    Serial.print(VOLTAGE_PSU);
+    Serial.println(" V");
+    Serial.print("Current Limit: ");
+    Serial.print(CURRENT_LIMIT);
+    Serial.println(" A");
+    Serial.print("Max Velocity: ");
+    Serial.print(MAX_VELOCITY);
+    Serial.println(" rad/s");
+
+    Serial.println("\n--- Pin Configuration ---");
+    Serial.print("Motor PWM: A=");
+    Serial.print(MOTOR_PWM_A);
+    Serial.print(", B=");
+    Serial.print(MOTOR_PWM_B);
+    Serial.print(", C=");
+    Serial.println(MOTOR_PWM_C);
+    Serial.print("Encoder: A=");
+    Serial.print(ENCODER_A);
+    Serial.print(", B=");
+    Serial.println(ENCODER_B);
+    Serial.println();
+}
+
+void printStatus() {
+    Serial.println("\n--- Motor Status ---");
+    Serial.print("Position: ");
+    Serial.print(motorControl.getCurrentPosition(), 4);
+    Serial.println(" rad");
+    Serial.print("Velocity: ");
+    Serial.print(motorControl.getCurrentVelocity(), 4);
+    Serial.println(" rad/s");
+    Serial.print("Current: ");
+    Serial.print(motorControl.getCurrent(), 3);
+    Serial.println(" A");
+    Serial.print("Voltage: ");
+    Serial.print(motorControl.getVoltage(), 2);
+    Serial.println(" V");
+    Serial.print("State: ");
+    switch (motorControl.getState()) {
+        case STATE_IDLE: Serial.println("IDLE"); break;
+        case STATE_MOVING: Serial.println("MOVING"); break;
+        case STATE_ERROR: Serial.println("ERROR"); break;
+        case STATE_CALIBRATING: Serial.println("CALIBRATING"); break;
+        default: Serial.println("UNKNOWN");
+    }
+    Serial.print("Control Mode: ");
+    switch (motorControl.getControlMode()) {
+        case MODE_POSITION: Serial.println("POSITION"); break;
+        case MODE_VELOCITY: Serial.println("VELOCITY"); break;
+        case MODE_TORQUE: Serial.println("TORQUE"); break;
+        default: Serial.println("UNKNOWN");
+    }
+    Serial.print("Motor Enabled: ");
+    Serial.println(motorControl.isEnabled() ? "YES" : "NO");
+    Serial.print("Calibrated: ");
+    Serial.println(motorControl.isCalibrated() ? "YES" : "NO");
+    Serial.print("At Target: ");
+    Serial.println(motorControl.isAtTarget() ? "YES" : "NO");
+    Serial.println();
+}
+
+void runMotorTest() {
+    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
+    Serial.println("║                    Motor Test Sequence                         ║");
+    Serial.println("╚════════════════════════════════════════════════════════════════╝");
+
+    Serial.println("\n1. Enabling motor...");
+    motorControl.enable();
+    delay(500);
+
+    Serial.println("2. Setting home position...");
+    motorControl.setHome();
+    delay(500);
+
+    Serial.println("3. Moving to 1.57 rad (90 degrees)...");
+    motorControl.moveToPosition(1.57);
+    delay(3000);
+
+    Serial.println("4. Moving to 3.14 rad (180 degrees)...");
+    motorControl.moveToPosition(3.14);
+    delay(3000);
+
+    Serial.println("5. Moving back to home (0 rad)...");
+    motorControl.moveToPosition(0.0);
+    delay(3000);
+
+    Serial.println("Test sequence complete!\n");
+    printStatus();
+}
+
+void processSerialCommand(String cmd) {
+    cmd.trim();
+    cmd.toLowerCase();
+
+    if (cmd.length() == 0) return;
+
+    Serial.print("\n> ");
+    Serial.println(cmd);
+
+    // Parse command and arguments
+    int spaceIndex = cmd.indexOf(' ');
+    String command = (spaceIndex > 0) ? cmd.substring(0, spaceIndex) : cmd;
+    String args = (spaceIndex > 0) ? cmd.substring(spaceIndex + 1) : "";
+
+    // Process commands
+    if (command == "h" || command == "help") {
+        printHelp();
+    }
+    else if (command == "s" || command == "status") {
+        printStatus();
+    }
+    else if (command == "i" || command == "info") {
+        printSystemInfo();
+    }
+    else if (command == "e" || command == "enable") {
+        Serial.println("Enabling motor...");
+        motorControl.enable();
+        Serial.println("Motor enabled!");
+    }
+    else if (command == "d" || command == "disable") {
+        Serial.println("Disabling motor...");
+        motorControl.disable();
+        Serial.println("Motor disabled!");
+    }
+    else if (command == "c" || command == "calibrate") {
+        Serial.println("Running motor calibration...");
+        if (motorControl.calibrate()) {
+            Serial.println("Calibration successful!");
+        } else {
+            Serial.println("Calibration failed!");
+        }
+    }
+    else if (command == "home") {
+        Serial.println("Setting current position as home...");
+        motorControl.setHome();
+        Serial.println("Home position set!");
+    }
+    else if (command == "stop") {
+        Serial.println("Stopping motor...");
+        motorControl.stop();
+        Serial.println("Motor stopped!");
+    }
+    else if (command == "m" || command == "move") {
+        if (args.length() > 0) {
+            float angle = args.toFloat();
+            Serial.print("Moving to position: ");
+            Serial.print(angle);
+            Serial.println(" rad");
+            motorControl.moveToPosition(angle);
+        } else {
+            Serial.println("Error: Please specify angle (e.g., 'm 3.14')");
+        }
+    }
+    else if (command == "v" || command == "velocity") {
+        if (args.length() > 0) {
+            float vel = args.toFloat();
+            Serial.print("Setting velocity to: ");
+            Serial.print(vel);
+            Serial.println(" rad/s");
+            motorControl.setVelocity(vel);
+        } else {
+            Serial.println("Error: Please specify velocity (e.g., 'v 10.0')");
+        }
+    }
+    else if (command == "a" || command == "accel") {
+        if (args.length() > 0) {
+            float accel = args.toFloat();
+            Serial.print("Setting acceleration to: ");
+            Serial.print(accel);
+            Serial.println(" rad/s²");
+            motorControl.setAcceleration(accel);
+        } else {
+            Serial.println("Error: Please specify acceleration (e.g., 'a 5.0')");
+        }
+    }
+    else if (command == "mode") {
+        if (args.length() > 0) {
+            int mode = args.toInt();
+            if (mode >= 0 && mode <= 2) {
+                Serial.print("Setting control mode to: ");
+                Serial.println(mode);
+                motorControl.setControlMode(mode);
+            } else {
+                Serial.println("Error: Mode must be 0 (position), 1 (velocity), or 2 (torque)");
+            }
+        } else {
+            Serial.println("Error: Please specify mode (e.g., 'mode 0')");
+        }
+    }
+    else if (command == "test") {
+        runMotorTest();
+    }
+    else if (command == "debug") {
+        Serial.println("Note: Debug flags are compile-time constants in config.h");
+        Serial.print("Current debug state: DEBUG_SERIAL=");
+        Serial.print(DEBUG_SERIAL ? "ON" : "OFF");
+        Serial.print(", DEBUG_MOTOR=");
+        Serial.print(DEBUG_MOTOR ? "ON" : "OFF");
+        Serial.print(", DEBUG_COMM=");
+        Serial.println(DEBUG_COMM ? "ON" : "OFF");
+    }
+    else {
+        Serial.print("Unknown command: '");
+        Serial.print(cmd);
+        Serial.println("'");
+        Serial.println("Type 'help' for available commands");
+    }
+}
+
+void checkSerialInput() {
+    while (Serial.available() > 0) {
+        char c = Serial.read();
+
+        if (c == '\n' || c == '\r') {
+            if (serialCommandBuffer.length() > 0) {
+                processSerialCommand(serialCommandBuffer);
+                serialCommandBuffer = "";
+            }
+        } else {
+            serialCommandBuffer += c;
+        }
+    }
+}
+
+//=============================================================================
 // SETUP
 //=============================================================================
 
@@ -291,32 +575,69 @@ void setup() {
         while (!Serial && millis() < 3000) {
             delay(10);
         }
-        Serial.println("\n\n=== OpenHyperspectral Motor Controller ===");
-        Serial.println("Firmware Version: 1.0.0");
-        Serial.println("Board: ESP32-S3-Touch-LCD-2 (Waveshare)");
+        Serial.println("\n\n");
+        Serial.println("╔════════════════════════════════════════════════════════════════╗");
+        Serial.println("║        OpenHyperspectral Motor Controller v1.0.0              ║");
+        Serial.println("║        ESP32-S3-Touch-LCD-2 (Waveshare)                       ║");
+        Serial.println("╚════════════════════════════════════════════════════════════════╝");
+        Serial.println();
+
+        Serial.print("[INIT] CPU: ");
+        Serial.print(ESP.getChipModel());
+        Serial.print(" @ ");
+        Serial.print(ESP.getCpuFreqMHz());
+        Serial.println(" MHz");
+
+        Serial.print("[INIT] Free RAM: ");
+        Serial.print(ESP.getFreeHeap() / 1024);
+        Serial.println(" KB");
+
+        Serial.print("[INIT] Serial baud rate: ");
+        Serial.println(SERIAL_BAUD);
     }
 
     // Initialize communication
+    Serial.println("[INIT] Initializing communication...");
     comm.begin(SERIAL_BAUD);
-    Serial.println("Communication initialized");
+    Serial.println("[OK]   Communication initialized");
 
     // Initialize motor controller
+    Serial.println("[INIT] Initializing motor controller...");
+    Serial.print("[INFO] Motor config: ");
+    Serial.print(POLE_PAIRS);
+    Serial.print(" pole pairs, ");
+    Serial.print(ENCODER_PPR);
+    Serial.println(" PPR encoder");
+
     motorControl.begin();
-    Serial.println("Motor controller initialized");
+    Serial.println("[OK]   Motor controller initialized");
 
     // Optional: Run automatic calibration on startup
     // Uncomment if you want automatic calibration
-    // Serial.println("Running motor calibration...");
+    // Serial.println("[INIT] Running motor calibration...");
     // if (motorControl.calibrate()) {
-    //     Serial.println("Calibration successful");
+    //     Serial.println("[OK]   Calibration successful");
     // } else {
-    //     Serial.println("Calibration failed - please calibrate manually");
+    //     Serial.println("[WARN] Calibration failed - please calibrate manually");
     // }
 
-    Serial.println("System ready!");
-    Serial.println("Waiting for commands...\n");
+    Serial.println();
+    Serial.println("╔════════════════════════════════════════════════════════════════╗");
+    Serial.println("║                      SYSTEM READY!                             ║");
+    Serial.println("╚════════════════════════════════════════════════════════════════╝");
+    Serial.println();
+    Serial.println("✓ Serial monitor is working!");
+    Serial.println("✓ Type 'help' for available commands");
+    Serial.println("✓ System is ready to accept binary protocol commands");
+    Serial.println();
+    Serial.println("Quick test commands:");
+    Serial.println("  - Type 'info' to see detailed system information");
+    Serial.println("  - Type 'status' to see current motor status");
+    Serial.println("  - Type 'test' to run a motor movement test");
+    Serial.println();
 
     last_update_time = micros();
+    last_heartbeat = millis();
 }
 
 //=============================================================================
@@ -324,7 +645,12 @@ void setup() {
 //=============================================================================
 
 void loop() {
-    // Check for incoming commands
+    // Check for interactive serial commands (typed by user)
+    if (DEBUG_SERIAL) {
+        checkSerialInput();
+    }
+
+    // Check for incoming binary protocol commands
     if (comm.available()) {
         processCommand();
     }
@@ -337,21 +663,49 @@ void loop() {
         checkPositionReached();
     }
 
-    // Periodic status printing for debugging
-    if (DEBUG_SERIAL && (millis() - last_status_print > 1000)) {
+    // Periodic heartbeat message
+    if (DEBUG_HEARTBEAT && (millis() - last_heartbeat > HEARTBEAT_INTERVAL_MS)) {
+        last_heartbeat = millis();
+
+        Serial.print("[HEARTBEAT] Uptime: ");
+        Serial.print(millis() / 1000);
+        Serial.print("s | Pos: ");
+        Serial.print(motorControl.getCurrentPosition(), 2);
+        Serial.print(" rad | State: ");
+        switch (motorControl.getState()) {
+            case STATE_IDLE: Serial.print("IDLE"); break;
+            case STATE_MOVING: Serial.print("MOVING"); break;
+            case STATE_ERROR: Serial.print("ERROR"); break;
+            case STATE_CALIBRATING: Serial.print("CALIBRATING"); break;
+            default: Serial.print("UNKNOWN");
+        }
+        Serial.print(" | Enabled: ");
+        Serial.println(motorControl.isEnabled() ? "Y" : "N");
+    }
+
+    // Periodic detailed status printing for debugging
+    if (DEBUG_SERIAL && (millis() - last_status_print > 10000)) {
         last_status_print = millis();
 
-        Serial.print("Status: ");
-        Serial.print("pos=");
-        Serial.print(motorControl.getCurrentPosition(), 3);
-        Serial.print(", vel=");
-        Serial.print(motorControl.getCurrentVelocity(), 3);
-        Serial.print(", state=");
+        Serial.println("\n[DEBUG] Detailed Status:");
+        Serial.print("  Position: ");
+        Serial.print(motorControl.getCurrentPosition(), 4);
+        Serial.println(" rad");
+        Serial.print("  Velocity: ");
+        Serial.print(motorControl.getCurrentVelocity(), 4);
+        Serial.println(" rad/s");
+        Serial.print("  Current: ");
+        Serial.print(motorControl.getCurrent(), 3);
+        Serial.println(" A");
+        Serial.print("  State: ");
         Serial.print(motorControl.getState());
-        Serial.print(", enabled=");
+        Serial.print(" | Enabled: ");
         Serial.print(motorControl.isEnabled() ? "Y" : "N");
-        Serial.print(", calibrated=");
+        Serial.print(" | Calibrated: ");
         Serial.println(motorControl.isCalibrated() ? "Y" : "N");
+        Serial.print("  Free Heap: ");
+        Serial.print(ESP.getFreeHeap() / 1024);
+        Serial.println(" KB\n");
     }
 
     // Maintain loop timing

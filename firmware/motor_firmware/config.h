@@ -133,7 +133,9 @@
 // DEBUGGING
 //=============================================================================
 #define DEBUG_SERIAL     true           // Enable debug output on serial
-#define DEBUG_MOTOR      false          // Enable detailed motor debug output
-#define DEBUG_COMM       false          // Enable communication debug output
+#define DEBUG_MOTOR      true           // Enable detailed motor debug output
+#define DEBUG_COMM       true           // Enable communication debug output
+#define DEBUG_HEARTBEAT  true           // Enable heartbeat messages
+#define HEARTBEAT_INTERVAL_MS 5000      // Heartbeat message interval
 
 #endif // CONFIG_H
