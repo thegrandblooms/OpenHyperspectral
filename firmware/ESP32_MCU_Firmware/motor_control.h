@@ -19,9 +19,11 @@ class MT6701Sensor : public Sensor {
 public:
     MT6701Sensor(uint8_t address = 0x06);
 
-    // Sensor interface implementation
+    // Sensor interface implementation (required by SimpleFOC)
     void init() override;
     float getSensorAngle() override;
+    void update() override;           // Update sensor state (called by SimpleFOC before reading)
+    int needsSearch() override;       // For absolute encoders, return 0 (no search needed)
 
     // Additional MT6701 features
     bool isFieldGood();
