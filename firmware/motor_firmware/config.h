@@ -65,15 +65,28 @@
 #define PID_RAMP_CURRENT 1000.0         // Output ramp for current control
 
 //=============================================================================
+// SYSTEM STATES
+//=============================================================================
+#define STATE_IDLE               0      // Motor is idle
+#define STATE_MOVING             1      // Motor is moving to target
+#define STATE_ERROR              2      // System in error state
+#define STATE_CALIBRATING        3      // Motor calibration in progress
+
+//=============================================================================
 // CONTROL MODES
 //=============================================================================
-// SimpleFOC control modes
+// Protocol control modes (used in commands)
+#define MODE_POSITION            0      // Position control mode
+#define MODE_VELOCITY            1      // Velocity control mode
+#define MODE_TORQUE              2      // Torque control mode
+
+// SimpleFOC control modes (legacy, kept for reference)
 #define TORQUE_MODE      0              // Torque/current control
 #define VELOCITY_MODE    1              // Velocity control
 #define ANGLE_MODE       2              // Position/angle control
 
 // Default control mode
-#define DEFAULT_CONTROL_MODE ANGLE_MODE
+#define DEFAULT_CONTROL_MODE MODE_POSITION
 
 //=============================================================================
 // SERIAL COMMUNICATION
