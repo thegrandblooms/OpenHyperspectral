@@ -1,4 +1,5 @@
 #include "motor_control.h"
+#include "commands.h"  // Explicit include for state/mode definitions
 
 // Global encoder instance for ISR access
 // This is required by SimpleFOC for interrupt handling
