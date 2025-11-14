@@ -285,6 +285,57 @@ void checkPositionReached() {
 }
 
 //=============================================================================
+// I2C SCANNER UTILITY
+//=============================================================================
+
+void scanI2C() {
+    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
+    Serial.println("║                      I2C Scanner                               ║");
+    Serial.println("╚════════════════════════════════════════════════════════════════╝");
+    Serial.print("Scanning I2C bus (SDA=GPIO");
+    Serial.print(ENCODER_SDA);
+    Serial.print(", SCL=GPIO");
+    Serial.print(ENCODER_SCL);
+    Serial.println(")...\n");
+
+    byte count = 0;
+    for (byte i = 1; i < 127; i++) {
+        Wire.beginTransmission(i);
+        byte error = Wire.endTransmission();
+
+        if (error == 0) {
+            Serial.print("Found I2C device at 0x");
+            if (i < 16) Serial.print("0");
+            Serial.print(i, HEX);
+
+            // Identify known devices
+            if (i == 0x06) {
+                Serial.print(" (MT6701 encoder - DETECTED!)");
+            } else if (i == 0x15) {
+                Serial.print(" (CST816D touch controller)");
+            } else if (i == 0x6B) {
+                Serial.print(" (QMI8658 IMU)");
+            }
+            Serial.println();
+            count++;
+        }
+    }
+
+    if (count == 0) {
+        Serial.println("⚠ WARNING: No I2C devices found!");
+        Serial.println("Check wiring:");
+        Serial.print("  - 3V3 → MT6701 VDD\n");
+        Serial.print("  - GND → MT6701 GND\n");
+        Serial.print("  - GPIO47 → MT6701 SDA\n");
+        Serial.print("  - GPIO48 → MT6701 SCL\n");
+    } else {
+        Serial.print("\nTotal devices found: ");
+        Serial.println(count);
+    }
+    Serial.println();
+}
+
+//=============================================================================
 // INTERACTIVE SERIAL COMMANDS (for testing)
 //=============================================================================
 
@@ -296,6 +347,7 @@ void printHelp() {
     Serial.println("  h, help        - Show this help menu");
     Serial.println("  s, status      - Print current motor status");
     Serial.println("  i, info        - Show system information");
+    Serial.println("  scan           - Scan I2C bus for encoder (MT6701)");
     Serial.println("  e, enable      - Enable motor");
     Serial.println("  d, disable     - Disable motor");
     Serial.println("  c, calibrate   - Run motor calibration");
@@ -350,16 +402,26 @@ void printSystemInfo() {
     Serial.println(" rad/s");
 
     Serial.println("\n--- Pin Configuration ---");
-    Serial.print("Motor PWM: A=");
+    Serial.print("Motor Driver (SimpleFOC Mini):\n");
+    Serial.print("  EN=GPIO");
+    Serial.print(MOTOR_ENABLE);
+    Serial.print(", IN1=GPIO");
     Serial.print(MOTOR_PWM_A);
-    Serial.print(", B=");
+    Serial.print(", IN2=GPIO");
     Serial.print(MOTOR_PWM_B);
-    Serial.print(", C=");
+    Serial.print(", IN3=GPIO");
     Serial.println(MOTOR_PWM_C);
-    Serial.print("Encoder: A=");
-    Serial.print(ENCODER_A);
-    Serial.print(", B=");
-    Serial.println(ENCODER_B);
+    Serial.print("  nFT=GPIO");
+    Serial.print(MOTOR_FAULT);
+    Serial.print(", nRT=GPIO");
+    Serial.println(MOTOR_RESET);
+    Serial.print("Encoder (MT6701 I2C):\n");
+    Serial.print("  SDA=GPIO");
+    Serial.print(ENCODER_SDA);
+    Serial.print(", SCL=GPIO");
+    Serial.print(ENCODER_SCL);
+    Serial.print(", Addr=0x");
+    Serial.println(ENCODER_I2C_ADDR, HEX);
     Serial.println();
 }
 
@@ -453,6 +515,9 @@ void processSerialCommand(String cmd) {
     }
     else if (command == "i" || command == "info") {
         printSystemInfo();
+    }
+    else if (command == "scan") {
+        scanI2C();
     }
     else if (command == "e" || command == "enable") {
         Serial.println("Enabling motor...");

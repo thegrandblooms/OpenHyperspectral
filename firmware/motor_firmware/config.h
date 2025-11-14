@@ -6,32 +6,38 @@
 //=============================================================================
 
 //=============================================================================
-// MOTOR DRIVER PINS (3-Phase BLDC)
+// MOTOR DRIVER PINS (SimpleFOC Mini v1 - DRV8313)
 //=============================================================================
-// Configure these pins based on your motor driver wiring
-// Note: Using plain integers for Arduino framework compatibility
-#define MOTOR_PWM_A      10   // Phase A PWM output (GPIO10)
-#define MOTOR_PWM_B      11   // Phase B PWM output (GPIO11)
-#define MOTOR_PWM_C      12   // Phase C PWM output (GPIO12)
-#define MOTOR_ENABLE     13   // Motor driver enable pin (GPIO13)
+// SimpleFOC Mini cluster - Middle Right header positions 7-13
+// Wiring: Connect ESP32 to SimpleFOC Mini as follows
+#define MOTOR_ENABLE     15   // Motor driver enable pin (GPIO15 → EN)
+#define MOTOR_PWM_A      13   // Phase 1 PWM output (GPIO13 → IN1)
+#define MOTOR_PWM_B      11   // Phase 2 PWM output (GPIO11 → IN2)
+#define MOTOR_PWM_C      12   // Phase 3 PWM output (GPIO12 → IN3)
+
+// Optional motor driver monitoring/control pins
+#define MOTOR_FAULT      14   // Fault detection (GPIO14 → nFT, active LOW)
+#define MOTOR_RESET      9    // Driver reset (GPIO9 → nRT, active LOW)
 
 //=============================================================================
-// ENCODER PINS
+// ENCODER PINS (MT6701 14-bit Magnetic Encoder via I2C)
 //=============================================================================
-#define ENCODER_A        14   // Encoder channel A (GPIO14)
-#define ENCODER_B        15   // Encoder channel B (GPIO15)
-#define ENCODER_I        -1   // Encoder index (set to -1 if not used, or GPIO16 if available)
+// MT6701 encoder cluster - Top Right header positions 1-6
+// Wiring: 3V3 → VDD, GND → GND, GPIO47 → SDA, GPIO48 → SCL
+#define ENCODER_SDA      47   // MT6701 I2C SDA (GPIO47)
+#define ENCODER_SCL      48   // MT6701 I2C SCL (GPIO48)
+#define ENCODER_I2C_ADDR 0x06 // MT6701 default I2C address (verify with datasheet)
 
 //=============================================================================
 // MOTOR PARAMETERS
 //=============================================================================
-#define POLE_PAIRS       7             // Number of pole pairs in the BLDC motor
-#define ENCODER_PPR      2048           // Encoder pulses per revolution
-#define VOLTAGE_PSU      12.0           // Power supply voltage (V)
-#define CURRENT_LIMIT    1.0            // Maximum current limit (A)
+#define POLE_PAIRS       7             // Mitoot 2804 motor: 7 pole pairs
+#define ENCODER_PPR      16384          // MT6701 14-bit encoder: 2^14 = 16384 positions/revolution
+#define VOLTAGE_PSU      12.0           // Power supply voltage (V) - adjust to your supply (8-35V range)
+#define CURRENT_LIMIT    2.0            // Maximum current limit (A) - SimpleFOC Mini max 2A continuous
 
-// Motor characteristics
-#define MOTOR_RESISTANCE 2.5            // Phase resistance (Ohms) - measure with multimeter
+// Motor characteristics (Mitoot 2804 100kv Gimbal Motor)
+#define MOTOR_RESISTANCE 10.0           // Phase resistance (Ohms) - gimbal motors typically R>10Ω
 #define MOTOR_KV         100            // Motor KV rating (RPM/V)
 
 //=============================================================================
