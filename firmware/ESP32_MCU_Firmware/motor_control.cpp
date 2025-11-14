@@ -119,14 +119,27 @@ float MT6701Sensor::getSensorAngle() {
 }
 
 void MT6701Sensor::update() {
-    // SimpleFOC calls this before reading the sensor
-    // For I2C sensors like MT6701, we don't need to do anything here
-    // The actual read happens in getSensorAngle()
-    // This method exists to satisfy SimpleFOC's Sensor interface
+    // SimpleFOC calls this before reading sensor angle
+    // We MUST update the base Sensor class's angle member variable
+    // so SimpleFOC can read it via motor.shaft_angle
+
+    // Read current angle from MT6701 and store in base class member
+    float current_angle = encoder.readAngleRadians();
+
+    // Update Sensor base class member variables
+    // This is what SimpleFOC actually reads!
+    angle_prev = angle;          // Save previous angle
+    angle = current_angle;        // Update current angle
+
+    // Velocity is calculated by SimpleFOC using angle - angle_prev
 
     #ifdef DEBUG_MOTOR_VERBOSE
     if (DEBUG_MOTOR) {
-        Serial.println("[MT6701] update() called by SimpleFOC");
+        Serial.print("[MT6701] update() - angle: ");
+        Serial.print(angle, 4);
+        Serial.print(" rad, angle_prev: ");
+        Serial.print(angle_prev, 4);
+        Serial.println(" rad");
     }
     #endif
 }
