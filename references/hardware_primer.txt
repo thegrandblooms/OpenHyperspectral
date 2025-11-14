@@ -1,0 +1,386 @@
+Hyperspectral Line Scan Camera Project - Technical Primer
+Project Owner: Blake
+Last Updated: 2025
+Hardware Platform: Waveshare ESP32-S3-Touch-LCD-2
+
+Project Overview
+Building a hyperspectral line scan camera using:
+
+Motor Control: Brushless gimbal motor (Mitoot 2804 100kv) with FOC control
+Position Feedback: MT6701 14-bit magnetic encoder
+Controller Board: Waveshare ESP32-S3-Touch-LCD-2 (chosen for integrated display/IMU, but camera interface not used)
+Motor Driver: SimpleFOC Mini v1 (DRV8313-based)
+
+Key Design Decision: Camera interface on the Waveshare board is NOT being used - those GPIOs are available for the motor control and encoder system.
+
+Hardware Components
+ESP32-S3-Touch-LCD-2 Board
+
+MCU: ESP32-S3R8 (dual-core Xtensa LX7 @ 240MHz)
+Memory: 512KB SRAM, 8MB PSRAM, 16MB Flash
+Display: 2" capacitive touch LCD (ST7789T3, 240×320, SPI)
+Touch: CST816D (I2C)
+IMU: QMI8658 6-axis (3-axis accel + 3-axis gyro, I2C)
+Extras: SD card slot, LiPo charging circuit, 22× GPIO headers
+Power: USB-C, can run from 3.7V LiPo battery
+
+Important: This board is GPIO-constrained due to onboard peripherals. Many "available" GPIOs are actually allocated to the LCD, touch, SD card, and IMU.
+MT6701 Magnetic Encoder
+
+Resolution: 14-bit absolute position (16,384 positions/revolution)
+Interface: I2C, SSI, analog, PWM, or ABZ (we're using I2C)
+Supply Voltage: 3.0-5.5V (typical 3.3-5.0V) - We're using 3.3V
+Output: 14-bit digital angle via I2C interface
+Magnet: Requires diametrically magnetized magnet (Ø6-8mm × 2.5mm recommended)
+Features: <±1° linearity, <5μs delay, supports up to 55,000 RPM
+
+Key Specs:
+
+VDD: 3.0-5.5V (we use 3.3V)
+Current: ~10-14mA
+I2C address: Check datasheet (typically 0x06)
+
+SimpleFOC Mini v1 Motor Controller
+
+Driver IC: DRV8313 (3-phase BLDC driver)
+Power Supply: 8-35V (absolute max)
+Max Current: 2A continuous per phase, 3A peak (designed for gimbal motors R>10Ω)
+Control Interface: 3× PWM inputs (IN1, IN2, IN3) + Enable
+Onboard 3.3V LDO: 10mA max (can power sensor, NOT microcontroller)
+Size: 26×21mm
+
+Pin Functions:
+
+IN1, IN2, IN3: PWM inputs for 3-phase control
+EN: Enable pin (active HIGH)
+nFT: Fault output (active LOW) - LOW means driver is in fault state
+nRT: Reset input (active LOW) - resets DRV8313 from fault
+nSP: Sleep mode (active LOW) - <1μA sleep current
+3.3V: Output only (10mA max)
+GND: Common ground (MUST share with ESP32)
+
+Mitoot 2804 100kv Gimbal Motor
+
+KV Rating: 100kv (brushless)
+Type: 3-phase BLDC gimbal motor
+Resistance: High (gimbal motors typically R>10Ω, ideal for SimpleFOC Mini)
+Phase Wires: Unlabeled (order doesn't matter - just swap any two if rotation is backwards)
+
+
+GPIO Pin Assignments
+Design Philosophy: Pins are clustered by physical board position, not GPIO number, for clean wiring and easy debugging.
+MT6701 Encoder Cluster (Top Right Corner)
+Physical positions 1-6 on right side header:
+Board PositionGPIOFunctionConnection13V3Power→ MT6701 VDD2GNDGround→ MT6701 GND5GPIO47I2C SDA→ MT6701 SDA6GPIO48I2C SCL→ MT6701 SCL
+Result: 4-wire bundle at top-right corner. Very clean.
+SimpleFOC Motor Controller Cluster (Middle Right)
+Physical positions 7-13 on right side header:
+Board PositionGPIOFunctionConnection7GPIO15Enable→ SimpleFOC EN8GPIO13PWM Phase 1→ SimpleFOC IN19GPIO11PWM Phase 2→ SimpleFOC IN210GPIO12PWM Phase 3→ SimpleFOC IN311GPIO14Fault Monitor→ SimpleFOC nFT (optional)12GPIO9Driver Reset→ SimpleFOC nRT (optional)13GNDCommon Ground→ SimpleFOC GND
+Result: 7 pins in sequential physical row. Can use ribbon cable or wire bundle.
+Code Pin Definitions
+cpp// MT6701 Encoder (I2C)
+#define ENCODER_SDA 47
+#define ENCODER_SCL 48
+
+// SimpleFOC Motor Driver
+#define MOTOR_EN 15      // Enable
+#define MOTOR_IN1 13     // Phase 1 PWM
+#define MOTOR_IN2 11     // Phase 2 PWM  
+#define MOTOR_IN3 12     // Phase 3 PWM
+
+// Optional monitoring/control
+#define MOTOR_FAULT 14   // nFT - fault detection
+#define MOTOR_RESET 9    // nRT - driver reset
+
+Critical Wiring Notes
+Power Architecture
+
+Main motor power: 8-35V connects to SimpleFOC power terminals (+/-)
+ESP32 power: Via USB-C or LiPo battery (3.7V)
+Encoder power: 3.3V from ESP32 board → MT6701 VDD
+CRITICAL: Common Ground: ESP32 GND MUST connect to SimpleFOC GND
+
+Without shared ground, PWM signals won't be read correctly
+This is separate from the encoder ground connection
+All grounds should be connected together
+
+
+
+Motor Phase Wiring
+Important: Motor phase order doesn't matter initially. If motor spins backwards:
+
+Simply swap ANY TWO of the three motor phase wires
+This is completely safe - won't damage anything
+SimpleFOC can also reverse direction in software
+
+The Mitoot motor wires are unlabeled, so the plan is:
+
+Wire them up in any order
+Test direction
+Swap two wires if needed
+
+I2C Configuration
+The MT6701 encoder is on its own I2C bus (GPIO47/48), separate from:
+
+Touch controller (also on GPIO47/48 but different address)
+IMU (on GPIO8/9 dedicated bus)
+
+In Arduino code:
+cppWire.setPins(ENCODER_SDA, ENCODER_SCL);
+Wire.begin();
+PWM Configuration
+All ESP32-S3 GPIO pins (except input-only pins) can generate PWM via the LEDC peripheral. No special "PWM pins" needed - any output GPIO works.
+SimpleFOC expects:
+cppBLDCDriver3PWM driver = BLDCDriver3PWM(MOTOR_IN1, MOTOR_IN2, MOTOR_IN3, MOTOR_EN);
+
+Known Issues & Gotchas
+ESP32-S3-Touch-LCD-2 Board Quirks
+
+Library Compatibility:
+
+Board demos ship with LVGL v8.3
+Upgrading to LVGL v9.x causes significant issues
+Some display libraries have problems with GPIO >32 (our touch uses GPIO47/48)
+If using TFT_eSPI or similar, ensure library version >2.5.30
+
+
+High GPIO Numbers:
+
+GPIO 33-48 are valid but some older libraries expect GPIO <32 for chip select
+Our encoder on GPIO47/48 uses standard I2C so should be fine
+If issues arise, could move to GPIO10/11 instead
+
+
+CircuitPython Note:
+
+ESP32-S3 boards with 4MB flash need TinyUF2 bootloader v0.33.0+
+This board has 16MB flash, so less critical
+
+
+Arduino IDE Setup:
+
+Windows username must be in English (non-English causes compile errors)
+Requires specific ESP32 Arduino core versions for demos
+Use ESP32 board package v3.0.2 or later
+
+
+
+SimpleFOC Mini v1 Notes
+
+Power Limitations:
+
+Designed for gimbal motors with R>10Ω internal resistance
+Max 2A continuous, 3A peak
+Using with high-power drone motors (R<1Ω) will burn the DRV8313
+Our Mitoot 2804 gimbal motor is perfect for this
+
+
+3.3V LDO Limitation:
+
+The onboard 3.3V regulator is LIMITED to 10mA
+Enough for LED or position sensor
+NOT enough to power ESP32
+We're using ESP32's own 3.3V for the encoder (safer)
+
+
+Common Ground is Critical:
+
+DRV8313 won't read PWM signals correctly without shared GND
+Connect ESP32 GND to SimpleFOC GND pin
+This is the most common wiring mistake
+
+
+Fault Detection:
+
+nFT pin goes LOW when DRV8313 is in fault state
+Can't clear fault by toggling EN - must use nRT (reset) pin
+Monitor GPIO14 (nFT) to detect overcurrent/thermal issues
+
+
+
+MT6701 Encoder Notes
+
+Voltage Range:
+
+Operates 3.0-5.5V but typical is 3.3-5.0V
+We're using 3.3V from ESP32 (safest, most common)
+
+
+I2C Address:
+
+Default I2C address should be documented in your specific module
+Use I2C scanner if unknown
+Multiple MT6701s can share bus with different addresses
+
+
+Magnet Requirements:
+
+Needs diametrically magnetized magnet
+Recommended: Ø6-8mm × 2.5mm
+Magnet must be centered over sensor chip
+Air gap affects accuracy
+
+
+
+
+Initial Setup Code Template
+cpp#include <SimpleFOC.h>
+#include <Wire.h>
+
+// Pin Definitions
+#define ENCODER_SDA 47
+#define ENCODER_SCL 48
+#define MOTOR_EN 15
+#define MOTOR_IN1 13
+#define MOTOR_IN2 11
+#define MOTOR_IN3 12
+#define MOTOR_FAULT 14
+#define MOTOR_RESET 9
+
+// SimpleFOC Objects
+BLDCDriver3PWM driver = BLDCDriver3PWM(MOTOR_IN1, MOTOR_IN2, MOTOR_IN3, MOTOR_EN);
+BLDCMotor motor = BLDCMotor(7);  // 7 pole pairs for 2804 motors (verify this!)
+
+// Encoder object (specific library depends on your MT6701 module)
+// Example: MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Initialize I2C for encoder
+  Wire.setPins(ENCODER_SDA, ENCODER_SCL);
+  Wire.begin();
+  
+  // Initialize driver
+  driver.voltage_power_supply = 12;  // Adjust to your power supply
+  driver.init();
+  
+  // Link motor to driver
+  motor.linkDriver(&driver);
+  
+  // Link motor to sensor
+  // motor.linkSensor(&sensor);
+  
+  // Initialize motor
+  motor.init();
+  
+  // Optional: Monitor fault pin
+  pinMode(MOTOR_FAULT, INPUT_PULLUP);
+  
+  Serial.println("SimpleFOC Motor Initialized");
+}
+
+void loop() {
+  // Check for driver fault
+  if (digitalRead(MOTOR_FAULT) == LOW) {
+    Serial.println("DRIVER FAULT DETECTED!");
+    // Could toggle MOTOR_RESET pin to clear
+  }
+  
+  // motor.loopFOC();
+  // motor.move();
+}
+
+Debugging Checklist
+If Motor Doesn't Spin:
+
+☐ Verify motor power supply is 8-35V and connected to SimpleFOC terminals
+☐ Check ESP32 GND is connected to SimpleFOC GND (common ground)
+☐ Verify EN pin (GPIO15) is HIGH when trying to drive motor
+☐ Check nFT pin (GPIO14) - if LOW, driver is in fault state
+☐ Measure voltage on motor phases - should see switching
+☐ Try swapping any two motor phase wires (changes direction)
+
+If Encoder Doesn't Read:
+
+☐ Verify 3.3V and GND connected to MT6701
+☐ Check I2C wiring (SDA=GPIO47, SCL=GPIO48)
+☐ Run I2C scanner to detect device address
+☐ Verify magnet is properly positioned over sensor
+☐ Check magnet polarity (diametrically magnetized)
+
+If ESP32 Won't Program:
+
+☐ Hold BOOT button while connecting USB
+☐ Check USB cable (must be data cable, not charge-only)
+☐ Verify correct board selected in Arduino IDE
+☐ Try different USB port
+☐ Check that no pins are shorted
+
+
+Key Documentation Links
+Hardware Datasheets:
+
+MT6701: https://www.magntek.com.cn (search MT6701 datasheet)
+DRV8313: https://www.ti.com/product/DRV8313 (SimpleFOC Mini driver IC)
+ESP32-S3: https://www.espressif.com/en/products/socs/esp32-s3
+
+SimpleFOC Resources:
+
+Main Docs: https://docs.simplefoc.com/
+SimpleFOC Mini: https://docs.simplefoc.com/simplefocmini
+Hardware Connection: https://docs.simplefoc.com/mini_v11_connect_hardware
+GitHub: https://github.com/simplefoc/SimpleFOC
+
+Waveshare Board:
+
+Wiki: https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-2
+Schematic: Available as PDF download from wiki
+Demo Code: https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-2/
+
+ESP32-S3 Arduino:
+
+Pinout Reference: https://randomnerdtutorials.com/esp32-s3-devkitc-pinout-guide/
+I2C Guide: https://randomnerdtutorials.com/esp32-i2c-communication-arduino-ide/
+PWM/LEDC Guide: https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/ledc.html
+
+
+Project Context Notes
+Blake is a PhD student working on hyperspectral imaging. He has extensive experience with:
+
+Precision manufacturing and prototyping
+Computational manufacturing with Houdini
+Design for manufacturing (DFM)
+SimpleFOC for motor control
+Fiber laser systems (exploring 200W MOPA for jewelry business "Resonant Goods")
+
+Blake prefers:
+
+Evidence-based technical evaluation over marketing claims
+First-principles understanding of systems
+Rigorous analytical methodology
+Clean, well-documented designs
+
+This hyperspectral camera is part of his PhD thesis work and requires precise motor control for line scanning.
+
+Version History
+
+2025-01-XX: Initial primer created
+GPIO assignments finalized based on physical board layout
+Pin clustering optimized for clean wiring
+
+
+Quick Reference Card
+ENCODER (MT6701) - Top Right, positions 1-6:
+  3V3 → VDD
+  GND → GND  
+  GPIO47 → SDA
+  GPIO48 → SCL
+
+MOTOR CONTROLLER (SimpleFOC) - Middle Right, positions 7-13:
+  GPIO15 → EN (Enable)
+  GPIO13 → IN1 (Phase 1)
+  GPIO11 → IN2 (Phase 2)
+  GPIO12 → IN3 (Phase 3)
+  GPIO14 → nFT (Fault, optional)
+  GPIO9 → nRT (Reset, optional)
+  GND → GND (SHARED COMMON GROUND!)
+
+MOTOR PHASES:
+  SimpleFOC M1, M2, M3 → Any order to motor wires
+  If backwards, swap any 2 wires
+
+POWER:
+  8-35V → SimpleFOC power terminals
+  3.3V from ESP32 → MT6701
+  USB-C or LiPo → ESP32-S3-Touch-LCD-2
