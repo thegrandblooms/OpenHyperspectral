@@ -2,37 +2,80 @@
 
 ## System Overview
 
-OpenHyperspectral is a hyperspectral imaging system that synchronizes a camera with motorized scanning via USB communication. The system combines:
+OpenHyperspectral is a **1D line-scanning hyperspectral imaging system** that synchronizes a monochrome camera with a single-motor scanning mechanism via USB communication. The system combines:
 
 1. **ESP32-S3-Touch-LCD-2** (Waveshare) - Motor control with display
-2. **SimpleFOC** - BLDC motor control library
-3. **USB Serial Protocol** - Synchronization between PC and ESP32
-4. **Mightex Camera** - Hyperspectral image capture
-5. **Python Controller** - High-level scanning and data collection
+2. **SimpleFOC** - BLDC motor control library with DRV8313 driver
+3. **MT6701** - 14-bit magnetic encoder for position feedback
+4. **USB Serial Protocol** - Synchronization between PC and ESP32
+5. **Mightex Monochrome Camera** - Hyperspectral line capture
+6. **SpectrumBoi** - Spectrometer and camera preview UI
+7. **Python Main Program** - Orchestrates scanning, capture, and processing
 
-## Architecture Diagram
+## Hardware Architecture
+
+```
+Main Computer
+     │
+     ├─── USB ───> Mightex Monochrome Camera
+     │
+     └─── USB ───> ESP32-S3-Touch-LCD-2
+                        │
+                        ├─── 3-Phase PWM + Enable ───> DRV8313 SimpleFOC Driver
+                        │                                      │
+                        │                                      └──> BLDC Motor
+                        │
+                        └─── I2C/ABZ Interface ───> MT6701 14-bit Encoder
+                                                         │
+                                                         └──> Motor Shaft
+```
+
+## Software Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        PC/Computer                               │
+│                     Main Program (Python)                        │
+│                                                                  │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │  camera_viewer.py / camera_ui.py                           │ │
-│  │  - Mightex camera interface                                │ │
-│  │  - Image capture and display                               │ │
+│  │  SpectrumBoi UI Module                                     │ │
+│  │  - Spectrometer preview                                    │ │
+│  │  - Camera live view                                        │ │
+│  │  - Scan progress monitoring                                │ │
 │  └────────────────────────────────────────────────────────────┘ │
 │                              │                                   │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │  motor_controller.py (based on HyperMicro controller)      │ │
+│  │  Camera Capture Module                                     │ │
+│  │  - Mightex camera interface                                │ │
+│  │  - Line image acquisition                                  │ │
+│  │  - Triggered capture on position events                    │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                              │                                   │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │  Motor Control Module (controller.py)                      │ │
 │  │  - USB serial communication                                │ │
 │  │  - Position tracking and callbacks                         │ │
-│  │  - Movement queue management                               │ │
+│  │  - 1D linear scan coordination                             │ │
 │  └────────────────────────────────────────────────────────────┘ │
 │                              │                                   │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │  scanner.py (based on HyperMicro scanner)                  │ │
-│  │  - Grid/spiral scanning patterns                           │ │
-│  │  - Camera + motor synchronization                          │ │
-│  │  - Data organization and metadata                          │ │
+│  │  Image Storage Module                                      │ │
+│  │  - Data file organization                                  │ │
+│  │  - Metadata management                                     │ │
+│  │  - Position-indexed storage                                │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                              │                                   │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │  Image Processing Pipeline                                 │ │
+│  │  - Line-by-line processing                                 │ │
+│  │  - Real-time or batch processing                           │ │
+│  │  - Data cube construction                                  │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                              │                                   │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │  Data Cube Visualization & Analysis UI                     │ │
+│  │  - 3D hyperspectral data visualization                     │ │
+│  │  - Spectral analysis tools                                 │ │
+│  │  - Export and reporting                                    │ │
 │  └────────────────────────────────────────────────────────────┘ │
 └──────────────────────────┼──────────────────────────────────────┘
                            │ USB Serial (SerialTransfer Protocol)
@@ -41,7 +84,7 @@ OpenHyperspectral is a hyperspectral imaging system that synchronizes a camera w
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │  motor_firmware.ino                                        │ │
 │  │  ┌──────────────────────────────────────────────────────┐ │ │
-│  │  │  Serial Communication Module (HyperMicro protocol)   │ │ │
+│  │  │  Serial Communication Module                         │ │ │
 │  │  │  - Command processing                                │ │ │
 │  │  │  - Position notifications                            │ │ │
 │  │  │  - Status reporting                                  │ │ │
@@ -49,8 +92,8 @@ OpenHyperspectral is a hyperspectral imaging system that synchronizes a camera w
 │  │  ┌──────────────────────────────────────────────────────┐ │ │
 │  │  │  Motor Control Module (SimpleFOC)                    │ │ │
 │  │  │  - FOC algorithm                                     │ │ │
-│  │  │  - Position/velocity control                         │ │ │
-│  │  │  - Encoder feedback                                  │ │ │
+│  │  │  - Position control (1D linear)                      │ │ │
+│  │  │  - MT6701 encoder feedback                           │ │ │
 │  │  └──────────────────────────────────────────────────────┘ │ │
 │  │  ┌──────────────────────────────────────────────────────┐ │ │
 │  │  │  Display Module (LVGL + ST7789)                      │ │ │
@@ -59,18 +102,16 @@ OpenHyperspectral is a hyperspectral imaging system that synchronizes a camera w
 │  │  │  - Touch/encoder input                               │ │ │
 │  │  └──────────────────────────────────────────────────────┘ │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│                              │                                   │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │  SimpleFOC Driver                                          │ │
-│  │  - Motor driver abstraction                                │ │
-│  │  - Encoder interface                                       │ │
-│  │  - Current sensing (optional)                              │ │
-│  └────────────────────────────────────────────────────────────┘ │
 └──────────────────────────┼──────────────────────────────────────┘
+                           │ 3-phase PWM
+                    ┌──────┴──────┐
+                    │   DRV8313   │
+                    │SimpleFOC Drv│
+                    └──────┬──────┘
                            │
                     ┌──────┴──────┐
                     │  BLDC Motor  │
-                    │  + Encoder   │
+                    │  + MT6701    │
                     └─────────────┘
 ```
 
@@ -116,9 +157,9 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(pwmA, pwmB, pwmC, enable);
 Encoder encoder = Encoder(encoderA, encoderB, ppr);
 
 // Control modes
-- Position control: For precise grid scanning
-- Velocity control: For continuous rotation
-- Open-loop control: For testing without encoder
+- Position control: For precise 1D linear scanning
+- Velocity control: For continuous scanning motion
+- Torque control: For force-limited applications
 ```
 
 ### Control Flow
@@ -140,16 +181,12 @@ OpenHyperspectral/
 │   │   ├── commands.h            # Command definitions
 │   │   ├── communication.h/.cpp  # Serial protocol
 │   │   ├── motor_control.h/.cpp  # SimpleFOC integration
-│   │   └── display.h/.cpp        # LVGL display
-│   └── libraries/                # Required libraries
-│       ├── SimpleFOC/
-│       ├── SerialTransfer/
-│       └── LVGL/
+│   │   └── display.h/.cpp        # LVGL display (future)
+│   └── COMPILATION_GUIDE.md      # Compilation instructions
 ├── motor_control/                 # Python motor control
 │   ├── __init__.py
 │   ├── controller.py             # Motor controller class
-│   ├── scanner.py                # Scanning patterns
-│   └── calibration.py            # Motor calibration tools
+│   └── calibration.py            # Motor calibration tools (future)
 ├── camera/                        # Camera interface (existing)
 │   ├── camera_ui.py
 │   ├── camera_viewer.py
@@ -157,14 +194,16 @@ OpenHyperspectral/
 ├── mightex_driver/               # Camera driver (existing)
 │   ├── __init__.py
 │   └── camera.py
-├── examples/                      # Usage examples
+├── spectrumboi/                   # SpectrumBoi UI (existing)
+│   └── ...
+├── examples/                      # Usage examples (future)
 │   ├── basic_motor_control.py
-│   ├── grid_scan.py
+│   ├── line_scan.py
 │   └── synchronized_capture.py
-└── tests/                         # Test scripts
+└── tests/                         # Test scripts (future)
     ├── test_motor_communication.py
     ├── test_camera_sync.py
-    └── test_full_scan.py
+    └── test_line_scan.py
 ```
 
 ## Key Features
@@ -172,50 +211,59 @@ OpenHyperspectral/
 ### From HyperMicro
 - ✅ Binary serial communication protocol
 - ✅ Position-based synchronization
-- ✅ Grid and spiral scanning patterns
 - ✅ Async position monitoring with threading
 - ✅ Movement queue management
 - ✅ Data organization and metadata
 
 ### From ESP32 Motor Control
 - ✅ Modular driver architecture
-- ✅ Display with LVGL
-- ✅ Manual control modes
+- ✅ Display with LVGL (planned)
+- ✅ Manual control modes (planned)
 - ✅ Encoder input
-- ✅ Sleep/wake power management
 - ✅ Acceleration profiles
 
-### New for OpenHyperspectral
-- ✅ SimpleFOC BLDC motor control
+### OpenHyperspectral Specific
+- ✅ SimpleFOC BLDC motor control with DRV8313
+- ✅ MT6701 14-bit encoder integration
 - ✅ FOC current limiting
-- ✅ Encoder feedback for position
+- ✅ 1D line-scanning motor control
 - ✅ Camera + motor synchronization
 - ✅ Hyperspectral data acquisition
-- ✅ Real-time preview with motor position overlay
+- ✅ SpectrumBoi UI integration
+- ✅ Data cube construction and visualization
 
 ## Implementation Phases
 
-### Phase 1: Basic Motor Control (Current Phase)
-- [ ] ESP32 firmware with SimpleFOC
-- [ ] Serial communication protocol
-- [ ] Python motor controller
-- [ ] Basic position control
+### Phase 1: Basic Motor Control ✅ (Current Phase)
+- ✅ ESP32 firmware with SimpleFOC
+- ✅ Serial communication protocol
+- ✅ Python motor controller
+- ✅ Basic position control
+- ⏳ Fix compilation issues
+- ⏳ MT6701 encoder integration
 
-### Phase 2: Display Integration
+### Phase 2: Camera Synchronization
+- [ ] Position callbacks in Python
+- [ ] Mightex camera trigger on position reached
+- [ ] 1D line scan coordination
+- [ ] Data organization system
+
+### Phase 3: SpectrumBoi UI Integration
+- [ ] Motor control integration
+- [ ] Live camera preview
+- [ ] Scan progress visualization
+- [ ] Real-time spectral preview
+
+### Phase 4: Data Pipeline
+- [ ] Image storage module
+- [ ] Processing pipeline
+- [ ] Data cube construction
+- [ ] Visualization and analysis UI
+
+### Phase 5: Display Integration (Optional)
 - [ ] LVGL display with motor status
 - [ ] Manual control interface
 - [ ] Touch/encoder input
-
-### Phase 3: Camera Synchronization
-- [ ] Position callbacks in Python
-- [ ] Camera trigger on position reached
-- [ ] Data organization system
-
-### Phase 4: Advanced Scanning
-- [ ] Grid scanning implementation
-- [ ] Spiral scanning patterns
-- [ ] Automated calibration
-- [ ] Real-time preview
 
 ## Dependencies
 
@@ -237,19 +285,24 @@ OpenHyperspectral/
 
 ### Hardware Pin Mapping (ESP32-S3)
 ```cpp
-// Motor driver pins (3-phase PWM)
-#define MOTOR_PWM_A  GPIO_NUM_10
-#define MOTOR_PWM_B  GPIO_NUM_11
-#define MOTOR_PWM_C  GPIO_NUM_12
-#define MOTOR_ENABLE GPIO_NUM_13
+// Motor driver pins (3-phase PWM) - Arduino framework style
+#define MOTOR_PWM_A  10         // GPIO10 - Phase A PWM
+#define MOTOR_PWM_B  11         // GPIO11 - Phase B PWM
+#define MOTOR_PWM_C  12         // GPIO12 - Phase C PWM
+#define MOTOR_ENABLE 13         // GPIO13 - Enable pin
 
-// Encoder pins
-#define ENCODER_A    GPIO_NUM_14
-#define ENCODER_B    GPIO_NUM_15
-#define ENCODER_I    GPIO_NUM_16  // Index (optional)
+// MT6701 Encoder pins
+// Option 1: ABZ interface (incremental)
+#define ENCODER_A    14         // GPIO14 - Channel A
+#define ENCODER_B    15         // GPIO15 - Channel B
+#define ENCODER_I    -1         // Index not used
+
+// Option 2: I2C interface (absolute position)
+// #define ENCODER_SDA  21      // I2C data
+// #define ENCODER_SCL  22      // I2C clock
 
 // Display pins (built-in on Waveshare board)
-// Already configured by Display_ST7789.h
+// Already configured by board support package
 
 // Serial communication
 #define SERIAL_BAUD  115200
@@ -258,20 +311,34 @@ OpenHyperspectral/
 ### Motor Configuration
 ```cpp
 // BLDC motor parameters
-#define POLE_PAIRS   7          // Motor pole pairs
+#define POLE_PAIRS   7          // Motor pole pairs (count magnets / 2)
 #define ENCODER_PPR  2048       // Encoder pulses per revolution
-#define VOLTAGE_PSU  12.0       // Power supply voltage
-#define CURRENT_LIMIT 1.0       // Current limit in amps
+#define VOLTAGE_PSU  12.0       // Power supply voltage (V)
+#define CURRENT_LIMIT 1.0       // Current limit (A)
 
-// Motion parameters
+// Motion parameters for 1D scanning
 #define MAX_VELOCITY 100.0      // Max velocity (rad/s)
 #define MAX_ACCELERATION 50.0   // Max acceleration (rad/s²)
+#define POSITION_TOLERANCE 0.1  // Position reached tolerance (rad)
 ```
 
 ## Notes
 
-- The ESP32-S3 has sufficient processing power for FOC algorithm at high frequencies
+### Hardware
+- ESP32-S3 has sufficient processing power for FOC algorithm at high frequencies (~1kHz)
+- DRV8313 is SimpleFOC motor driver board v1 (3-phase BLDC driver)
+- MT6701 provides 14-bit absolute position sensing (can use ABZ or I2C interface)
+- Waveshare ESP32-S3-Touch-LCD-2 has built-in 2.1" ST7789 LCD display
+
+### Software
 - SimpleFOC provides smooth motion control with encoder feedback
-- Serial communication uses binary protocol for efficiency
+- Serial communication uses binary protocol (SerialTransfer) for efficiency
 - Position synchronization ensures camera captures at exact motor positions
-- Display provides feedback and manual control when not connected to PC
+- SpectrumBoi UI provides real-time preview and control
+- 1D line scanning builds up hyperspectral data cube line-by-line
+
+### Scanning Strategy
+- Single motor controls 1D linear scan position
+- Motor moves to position → notifies PC → PC triggers camera capture
+- Each position corresponds to one line in the final hyperspectral data cube
+- Data cube: (spatial lines, spectral channels, wavelengths)
