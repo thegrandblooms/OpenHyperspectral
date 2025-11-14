@@ -11,6 +11,38 @@ The firmware uses the **Arduino framework on ESP32-S3**, not bare-metal ESP-IDF.
 
 ## Required Libraries
 
+The firmware uses the **MT6701 library** included in this repository, plus external libraries:
+
+### 1. MT6701 Encoder Library (Included)
+The MT6701 library is located in `firmware/libraries/MT6701/` and is **automatically available** to the firmware via symlink.
+
+**Important**: If you're on Windows and the compilation fails with "MT6701.h: No such file or directory":
+1. **Option A (Recommended)**: Enable symlink support in Git for Windows:
+   ```bash
+   git config --global core.symlinks true
+   # Then re-clone or reset the repository
+   ```
+
+2. **Option B**: Manually copy the library:
+   - Copy `firmware/libraries/MT6701/` to your Arduino libraries folder:
+     - Windows: `C:\Users\<YourName>\Documents\Arduino\libraries\MT6701\`
+     - macOS: `~/Documents/Arduino/libraries/MT6701/`
+     - Linux: `~/Arduino/libraries/MT6701/`
+
+3. **Option C**: Create the symlink manually:
+   - On Windows (requires admin/developer mode):
+     ```cmd
+     cd firmware\ESP32_MCU_Firmware
+     mklink /D libraries ..\libraries
+     ```
+   - On Linux/macOS:
+     ```bash
+     cd firmware/ESP32_MCU_Firmware
+     ln -s ../libraries libraries
+     ```
+
+### 2. SimpleFOC (Install via Library Manager)
+
 Install these through Arduino Library Manager:
 
 1. **SimpleFOC** (>= 2.3.0)
@@ -38,50 +70,53 @@ In Arduino IDE, select:
 
 ## Pin Configuration
 
-Edit `firmware/motor_firmware/config.h` before compiling:
+The firmware is now located in `firmware/ESP32_MCU_Firmware/`.
+
+Edit `firmware/ESP32_MCU_Firmware/config.h` before compiling:
 
 ```cpp
-// Motor driver pins
+// Motor driver pins (SimpleFOC Mini)
 #define MOTOR_PWM_A      10   // Phase A PWM
 #define MOTOR_PWM_B      11   // Phase B PWM
 #define MOTOR_PWM_C      12   // Phase C PWM
 #define MOTOR_ENABLE     13   // Enable pin
 
-// Encoder pins
-#define ENCODER_A        14   // Channel A
-#define ENCODER_B        15   // Channel B
+// MT6701 Encoder pins (I2C)
+#define ENCODER_SDA      47   // I2C SDA
+#define ENCODER_SCL      48   // I2C SCL
+#define ENCODER_I2C_ADDR 0x06 // MT6701 I2C address
 
 // Motor parameters (IMPORTANT: Match your motor!)
 #define POLE_PAIRS       7     // Count magnets, divide by 2
-#define ENCODER_PPR      2048  // Pulses per revolution
+#define ENCODER_PPR      16384 // MT6701: 14-bit = 16384 counts
 #define VOLTAGE_PSU      12.0  // Your power supply voltage
 #define CURRENT_LIMIT    1.0   // Safe current limit (amps)
 ```
 
 ## Compilation Fixes Applied
 
-### 1. Pin Definitions
+### 1. MT6701 Encoder Integration
+**Updated**: Now uses native MT6701 library instead of SimpleFOC's generic I2C sensor
+- Library location: `firmware/libraries/MT6701/`
+- Features: 14-bit resolution, field strength monitoring, zero calibration
+- Accessed via symlink in `firmware/ESP32_MCU_Firmware/libraries/`
+
+### 2. Pin Definitions
 **Fixed**: Changed from ESP-IDF style (`GPIO_NUM_10`) to Arduino style (`10`)
 - Arduino framework uses plain integers for pins
 - ESP-IDF uses `gpio_num_t` enum
 
-### 2. Encoder Interrupts
-**Fixed**: Added proper ISR handlers for SimpleFOC encoder
-```cpp
-// Added global encoder pointer and ISR functions
-Encoder* g_encoder = nullptr;
-
-void doA() { if (g_encoder) g_encoder->handleA(); }
-void doB() { if (g_encoder) g_encoder->handleB(); }
-```
-
-### 3. SerialTransfer API
+### 3. Encoder Interface
+**Updated**: Replaced quadrature encoder with MT6701 I2C encoder
+- No interrupt handlers needed (I2C communication)
+- SimpleFOC wrapper class provides compatibility
+- Automatic field strength validation
 **Fixed**: Corrected buffer access
 - Changed `transfer.packet.rxBuff` → `transfer.rxBuff`
 - Changed `transfer.packet.txBuff` → `transfer.txBuff`
 - Changed `transfer.sendData()` → `transfer.sendDatum()`
 
-### 4. Removed Unused Code
+### 5. Removed Unused Code
 **Fixed**: Removed `g_motor_controller` global pointer (not needed)
 
 ## Expected Warnings (Safe to Ignore)
@@ -98,6 +133,12 @@ You may see these warnings during compilation:
 
 ## Known Issues and Solutions
 
+### Issue: "MT6701.h: No such file or directory"
+**Solution**: The MT6701 library needs to be accessible to the Arduino IDE.
+- **Linux/macOS**: The symlink should work automatically
+- **Windows**: See "Required Libraries" section above for symlink setup
+- **Alternative**: Copy `firmware/libraries/MT6701/` to your Arduino libraries folder
+
 ### Issue: "SimpleFOC.h: No such file"
 **Solution**: Install SimpleFOC library via Library Manager
 
@@ -105,7 +146,9 @@ You may see these warnings during compilation:
 **Solution**: Install SerialTransfer library via Library Manager
 
 ### Issue: "Encoder was not declared"
-**Solution**: Make sure SimpleFOC library is installed correctly
+**Solution**: This error should no longer occur with MT6701 integration
+- Old firmware used SimpleFOC's Encoder class (quadrature)
+- New firmware uses MT6701Sensor wrapper class
 
 ### Issue: Compilation takes a long time
 **Expected**: First compilation of SimpleFOC is slow (~2-3 minutes)
