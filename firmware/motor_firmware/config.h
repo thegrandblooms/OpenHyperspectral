@@ -142,6 +142,6 @@
 #define DEBUG_MOTOR      true           // Enable detailed motor debug output
 #define DEBUG_COMM       true           // Enable communication debug output
 #define DEBUG_HEARTBEAT  true           // Enable heartbeat messages
-#define HEARTBEAT_INTERVAL_MS 5000      // Heartbeat message interval
+#define HEARTBEAT_INTERVAL_MS 10000     // Heartbeat message interval (10 seconds)
 
 #endif // CONFIG_H
