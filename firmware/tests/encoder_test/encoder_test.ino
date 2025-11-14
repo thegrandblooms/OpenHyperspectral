@@ -26,7 +26,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-#include "encoder/MT6701.h"  // MT6701 encoder (local file)
+#include "MT6701.h"  // MT6701 encoder driver (local file in sketch root)
 
 // Encoder pins (from ESP32_MCU_Firmware config.h)
 #define ENCODER_SDA      47   // MT6701 I2C SDA
