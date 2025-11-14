@@ -25,9 +25,6 @@
 CommunicationManager comm;
 MotorController motorControl;
 
-// Global pointer for ISR access
-MotorController* g_motor_controller = nullptr;
-
 // State tracking
 uint16_t current_sequence_id = 0;
 unsigned long last_update_time = 0;
@@ -302,9 +299,6 @@ void setup() {
     // Initialize communication
     comm.begin(SERIAL_BAUD);
     Serial.println("Communication initialized");
-
-    // Set global pointer for ISR access
-    g_motor_controller = &motorControl;
 
     // Initialize motor controller
     motorControl.begin();

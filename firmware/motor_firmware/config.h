@@ -9,17 +9,18 @@
 // MOTOR DRIVER PINS (3-Phase BLDC)
 //=============================================================================
 // Configure these pins based on your motor driver wiring
-#define MOTOR_PWM_A      GPIO_NUM_10   // Phase A PWM output
-#define MOTOR_PWM_B      GPIO_NUM_11   // Phase B PWM output
-#define MOTOR_PWM_C      GPIO_NUM_12   // Phase C PWM output
-#define MOTOR_ENABLE     GPIO_NUM_13   // Motor driver enable pin
+// Note: Using plain integers for Arduino framework compatibility
+#define MOTOR_PWM_A      10   // Phase A PWM output (GPIO10)
+#define MOTOR_PWM_B      11   // Phase B PWM output (GPIO11)
+#define MOTOR_PWM_C      12   // Phase C PWM output (GPIO12)
+#define MOTOR_ENABLE     13   // Motor driver enable pin (GPIO13)
 
 //=============================================================================
 // ENCODER PINS
 //=============================================================================
-#define ENCODER_A        GPIO_NUM_14   // Encoder channel A
-#define ENCODER_B        GPIO_NUM_15   // Encoder channel B
-#define ENCODER_I        GPIO_NUM_16   // Encoder index (optional, set to -1 if not used)
+#define ENCODER_A        14   // Encoder channel A (GPIO14)
+#define ENCODER_B        15   // Encoder channel B (GPIO15)
+#define ENCODER_I        -1   // Encoder index (set to -1 if not used, or GPIO16 if available)
 
 //=============================================================================
 // MOTOR PARAMETERS
