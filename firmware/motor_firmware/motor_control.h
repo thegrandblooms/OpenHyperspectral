@@ -7,6 +7,22 @@
 #include "commands.h"
 
 //=============================================================================
+// SYSTEM STATE DEFINITIONS
+//=============================================================================
+enum SystemState {
+    STATE_IDLE = 0,
+    STATE_CALIBRATING = 1,
+    STATE_MOVING = 2,
+    STATE_ERROR = 3
+};
+
+enum ControlMode {
+    MODE_TORQUE = 0,
+    MODE_VELOCITY = 1,
+    MODE_POSITION = 2
+};
+
+//=============================================================================
 // ENCODER INTERRUPT SERVICE ROUTINES
 //=============================================================================
 // Forward declarations for encoder ISR callbacks
