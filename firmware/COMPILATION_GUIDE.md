@@ -14,32 +14,45 @@ The firmware uses the **Arduino framework on ESP32-S3**, not bare-metal ESP-IDF.
 The firmware uses the **MT6701 library** included in this repository, plus external libraries:
 
 ### 1. MT6701 Encoder Library (Included)
+
+**IMPORTANT**: Do NOT install "MT6701-arduino" from Arduino Library Manager! That is a different library with an incompatible API.
+
 The MT6701 library is located in `firmware/libraries/MT6701/` and is **automatically available** to the firmware via symlink.
 
-**Important**: If you're on Windows and the compilation fails with "MT6701.h: No such file or directory":
-1. **Option A (Recommended)**: Enable symlink support in Git for Windows:
-   ```bash
-   git config --global core.symlinks true
-   # Then re-clone or reset the repository
-   ```
+**Setup Instructions**:
 
-2. **Option B**: Manually copy the library:
-   - Copy `firmware/libraries/MT6701/` to your Arduino libraries folder:
-     - Windows: `C:\Users\<YourName>\Documents\Arduino\libraries\MT6701\`
-     - macOS: `~/Documents/Arduino/libraries/MT6701/`
-     - Linux: `~/Arduino/libraries/MT6701/`
+On **Windows**:
+1. **DO NOT** install MT6701 from Library Manager (uninstall if you already did)
+2. Copy our custom library:
+   - Source: `firmware/libraries/MT6701/`
+   - Destination: `C:\Users\<YourName>\Documents\Arduino\libraries\MT6701\`
+   - Or use the symlink method below if you have admin/developer mode
 
-3. **Option C**: Create the symlink manually:
-   - On Windows (requires admin/developer mode):
-     ```cmd
-     cd firmware\ESP32_MCU_Firmware
-     mklink /D libraries ..\libraries
-     ```
-   - On Linux/macOS:
-     ```bash
-     cd firmware/ESP32_MCU_Firmware
-     ln -s ../libraries libraries
-     ```
+On **Linux/macOS**:
+1. The symlink `firmware/ESP32_MCU_Firmware/libraries` → `../libraries` should work automatically
+2. If compilation fails, copy to: `~/Arduino/libraries/MT6701/`
+
+**Symlink Setup (Windows - requires admin/developer mode)**:
+```cmd
+cd firmware\ESP32_MCU_Firmware
+mklink /D libraries ..\libraries
+```
+
+**Symlink Setup (Linux/macOS)**:
+```bash
+cd firmware/ESP32_MCU_Firmware
+ln -s ../libraries libraries
+```
+
+**Verification**: After setup, Arduino should find our library at compilation. You should see:
+```
+Using library MT6701 at version 1.0.0 in folder: <path>/firmware/libraries/MT6701
+```
+
+**NOT**:
+```
+Using library MT6701-arduino at version 1.0.3  # WRONG LIBRARY!
+```
 
 ### 2. SimpleFOC (Install via Library Manager)
 
@@ -134,10 +147,17 @@ You may see these warnings during compilation:
 ## Known Issues and Solutions
 
 ### Issue: "MT6701.h: No such file or directory"
-**Solution**: The MT6701 library needs to be accessible to the Arduino IDE.
-- **Linux/macOS**: The symlink should work automatically
-- **Windows**: See "Required Libraries" section above for symlink setup
-- **Alternative**: Copy `firmware/libraries/MT6701/` to your Arduino libraries folder
+**Solution**: Copy our custom MT6701 library to your Arduino libraries folder.
+- Source: `firmware/libraries/MT6701/`
+- Destination: `~/Arduino/libraries/MT6701/` (Linux/macOS) or `C:\Users\<YourName>\Documents\Arduino\libraries\MT6701\` (Windows)
+
+### Issue: "no matching function for call to 'MT6701::MT6701(uint8_t&)'"
+**Solution**: You have the wrong MT6701 library installed!
+1. **Uninstall "MT6701-arduino"** from Library Manager if installed
+2. **Use our custom library** from `firmware/libraries/MT6701/`
+3. Copy it to your Arduino libraries folder (see above)
+4. Restart Arduino IDE
+5. Verify compilation uses: `Using library MT6701 at version 1.0.0`
 
 ### Issue: "SimpleFOC.h: No such file"
 **Solution**: Install SimpleFOC library via Library Manager
