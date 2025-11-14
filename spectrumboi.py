@@ -40,7 +40,7 @@ plt.style.use('dark_background')
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from camera_streaming import MightexStreamingCamera
-from camera import SensorClock, HBlanking
+from mightex_driver.camera import SensorClock, HBlanking
 
 
 @dataclass

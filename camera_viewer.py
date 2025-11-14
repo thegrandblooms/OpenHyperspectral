@@ -12,7 +12,7 @@ from threading import Lock
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from camera_streaming import MightexStreamingCamera
-from camera import SensorClock, HBlanking
+from mightex_driver.camera import SensorClock, HBlanking
 from camera_ui import ModernUI, create_modern_ui
 
 
