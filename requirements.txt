@@ -1,0 +1,24 @@
+# OpenHyperspectral Camera Dependencies
+# Python package dependencies for Mightex camera control and spectral analysis
+
+# Core scientific computing
+numpy>=1.21.0
+
+# Computer vision and image processing
+opencv-python>=4.5.0
+
+# USB device communication (for Mightex camera)
+pyusb>=1.2.0
+
+# OpenGL for UI rendering
+PyOpenGL>=3.1.0
+
+# GLFW for window management
+glfw>=2.5.0
+
+# Dear ImGui for modern UI
+imgui[glfw]>=2.0.0
+
+# Plotting and visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
