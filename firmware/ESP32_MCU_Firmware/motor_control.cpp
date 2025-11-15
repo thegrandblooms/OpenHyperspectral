@@ -283,12 +283,15 @@ void MotorController::begin() {
 
     // Driver configuration
     driver.voltage_power_supply = VOLTAGE_PSU;
-    driver.pwm_frequency = 20000;  // 20kHz PWM frequency
+    driver.pwm_frequency = 25000;  // 25kHz PWM frequency (was 20kHz) - better for ESP32
 
     if (DEBUG_MOTOR) {
         Serial.print("[MOTOR] Driver voltage_power_supply: ");
         Serial.print(driver.voltage_power_supply);
         Serial.println(" V");
+        Serial.print("[MOTOR] PWM frequency: ");
+        Serial.print(driver.pwm_frequency);
+        Serial.println(" Hz");
         Serial.print("[MOTOR] Initializing driver... ");
     }
     driver.init();
@@ -305,13 +308,31 @@ void MotorController::begin() {
         Serial.println("[MOTOR] Driver linked to motor");
     }
 
-    // Set motor limits (SIMPLEFOC BOUNDARY: convert degrees to radians)
-    motor.voltage_limit = VOLTAGE_PSU * 0.8;  // 80% of supply voltage
+    // Set motor limits (CRITICAL FOR GIMBAL MOTORS)
+    // SIMPLEFOC BOUNDARY: convert degrees to radians
+    // Voltage limit: Research shows 6V is optimal for gimbal motors (prevents overshoot/cogging)
+    motor.voltage_limit = VOLTAGE_LIMIT_GIMBAL;  // 6V for smooth gimbal operation (was 9.6V)
     motor.current_limit = current_limit_a;
     motor.velocity_limit = degreesToRadians(max_velocity_deg_s);
 
+    if (DEBUG_MOTOR) {
+        Serial.print("[MOTOR] Voltage limit set to: ");
+        Serial.print(motor.voltage_limit);
+        Serial.println(" V (optimized for gimbal)");
+        Serial.print("[MOTOR] Current limit: ");
+        Serial.print(motor.current_limit);
+        Serial.println(" A");
+        Serial.print("[MOTOR] Velocity limit: ");
+        Serial.print(max_velocity_deg_s);
+        Serial.println("°/s");
+    }
+
     // Set FOC modulation (space vector PWM is more efficient)
     motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
+
+    // CRITICAL: Use voltage mode for gimbal motors (not torque mode)
+    // Torque mode can cause cogging at low speeds
+    motor.torque_controller = TorqueControlType::voltage;
 
     // Set motion control type based on default mode
     switch (control_mode) {
