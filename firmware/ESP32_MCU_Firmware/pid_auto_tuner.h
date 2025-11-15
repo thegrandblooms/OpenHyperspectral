@@ -42,21 +42,22 @@ public:
     static constexpr unsigned long TUNING_MOVEMENT_TIMEOUT = 10000;  // ms
     static constexpr unsigned long TUNING_SETTLING_WINDOW = 500;     // ms
 
-    // Initial conservative PID values
-    static constexpr float TUNING_INITIAL_P = 2.0;
+    // Initial conservative PID values for GIMBAL MOTORS
+    // Gimbal motors (2804, etc.) require MUCH lower gains than regular BLDC motors
+    static constexpr float TUNING_INITIAL_P = 0.2;   // Very conservative for gimbal motor
     static constexpr float TUNING_INITIAL_I = 0.0;
     static constexpr float TUNING_INITIAL_D = 0.0;
     static constexpr float TUNING_INITIAL_RAMP = 1000.0;
 
-    // PID increment steps
-    static constexpr float TUNING_P_STEP = 2.0;
-    static constexpr float TUNING_D_STEP = 0.05;
-    static constexpr float TUNING_I_STEP = 0.1;
+    // PID increment steps - small increments for gimbal motors
+    static constexpr float TUNING_P_STEP = 0.5;      // Smaller steps for fine control
+    static constexpr float TUNING_D_STEP = 0.02;     // Fine D adjustment
+    static constexpr float TUNING_I_STEP = 0.05;     // Fine I adjustment
 
-    // Tuning limits
-    static constexpr float TUNING_MAX_P = 50.0;
-    static constexpr float TUNING_MAX_I = 5.0;
-    static constexpr float TUNING_MAX_D = 2.0;
+    // Tuning limits - lower max for gimbal motors
+    static constexpr float TUNING_MAX_P = 20.0;      // Typically won't exceed 10-12 for gimbal
+    static constexpr float TUNING_MAX_I = 2.0;       // Lower I limit for gimbal motors
+    static constexpr float TUNING_MAX_D = 1.0;       // Lower D limit
 
     // Performance thresholds
     static constexpr float TUNING_MAX_OVERSHOOT = 0.1;              // rad (5.7°)

@@ -294,6 +294,7 @@ void MotorController::begin() {
     motor.PID_velocity.I = PID_I_VELOCITY;
     motor.PID_velocity.D = PID_D_VELOCITY;
     motor.PID_velocity.output_ramp = PID_RAMP_VELOCITY;
+    motor.LPF_velocity.Tf = PID_LPF_VELOCITY;  // Low-pass filter for gimbal motor stability
     motor.PID_velocity.limit = max_velocity;
 
     motor.P_angle.P = PID_P_POSITION;
