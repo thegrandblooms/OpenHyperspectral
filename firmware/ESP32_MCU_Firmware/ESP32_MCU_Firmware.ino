@@ -134,8 +134,8 @@ void processCommand() {
         }
 
         case CMD_GET_STATUS: {
-            float position = motorControl.getCurrentPosition();
-            float velocity = motorControl.getCurrentVelocity();
+            float position = motorControl.getCurrentPositionDeg();
+            float velocity = motorControl.getCurrentVelocityDegPerSec();
             float current = motorControl.getCurrent();
             float voltage = motorControl.getVoltage();
             uint8_t state = motorControl.getState();
@@ -270,7 +270,7 @@ void checkPositionReached() {
 
     // Detect transition to target reached
     if (at_target && !last_at_target) {
-        float position = motorControl.getCurrentPosition();
+        float position = motorControl.getCurrentPositionDeg();
         comm.sendPositionReached(current_sequence_id, position);
 
         if (DEBUG_SERIAL) {
@@ -437,11 +437,11 @@ void printSystemInfo() {
 void printStatus() {
     Serial.println("\n--- Motor Status ---");
     Serial.print("Position: ");
-    Serial.print(motorControl.getCurrentPosition(), 4);
-    Serial.println(" rad");
+    Serial.print(motorControl.getCurrentPositionDeg(), 2);
+    Serial.println("°");
     Serial.print("Velocity: ");
-    Serial.print(motorControl.getCurrentVelocity(), 4);
-    Serial.println(" rad/s");
+    Serial.print(motorControl.getCurrentVelocityDegPerSec(), 2);
+    Serial.println("°/s");
     Serial.print("Current: ");
     Serial.print(motorControl.getCurrent(), 3);
     Serial.println(" A");
@@ -472,8 +472,8 @@ void printStatus() {
 
     // Debug: show direct encoder read vs SimpleFOC position
     Serial.print("DEBUG - Direct encoder angle: ");
-    Serial.print(motorControl.getDirectEncoderAngle(), 4);
-    Serial.println(" rad");
+    Serial.print(motorControl.getEncoderDegrees(), 2);
+    Serial.println("°");
     Serial.println();
 }
 
@@ -509,8 +509,8 @@ void runEncoderTest() {
         if (current_time - last_sample >= sample_interval) {
             last_sample = current_time;
 
-            float encoder_angle = motorControl.getDirectEncoderAngle();
-            float simplefoc_angle = motorControl.getCurrentPosition();
+            float encoder_angle = motorControl.getEncoderDegrees();
+            float simplefoc_angle = motorControl.getCurrentPositionDeg();
             float time_sec = (current_time - start_time) / 1000.0;
 
             Serial.print("[");
@@ -553,27 +553,31 @@ void runMotorTest() {
     Serial.print("Setting home position... ");
     motorControl.setHome();
     Serial.print("Home set at angle: ");
-    Serial.println(motorControl.getCurrentPosition(), 2);
+    Serial.print(motorControl.getCurrentPositionDeg(), 2);
+    Serial.println("°");
     delay(500);
 
-    Serial.print("Moving to 1.57 rad (90 degrees)... ");
-    motorControl.moveToPosition(1.57);
+    Serial.print("Moving to 90°... ");
+    motorControl.moveToPosition(90.0);
     Serial.print("Moving to position: ");
-    Serial.println(motorControl.getTargetPosition(), 2);
+    Serial.print(motorControl.getTargetPositionDeg(), 2);
+    Serial.println("°");
     delay(3000);
     printStatus();
 
-    Serial.print("Moving to 3.14 rad (180 degrees)... ");
-    motorControl.moveToPosition(3.14);
+    Serial.print("Moving to 180°... ");
+    motorControl.moveToPosition(180.0);
     Serial.print("Moving to position: ");
-    Serial.println(motorControl.getTargetPosition(), 2);
+    Serial.print(motorControl.getTargetPositionDeg(), 2);
+    Serial.println("°");
     delay(3000);
     printStatus();
 
-    Serial.print("Moving back to home (0 rad)... ");
+    Serial.print("Moving back to home (0°)... ");
     motorControl.moveToPosition(0.0);
     Serial.print("Moving to position: ");
-    Serial.println(motorControl.getTargetPosition(), 2);
+    Serial.print(motorControl.getTargetPositionDeg(), 2);
+    Serial.println("°");
     delay(3000);
 
     Serial.println("\nMotor test sequence complete!\n");
@@ -891,8 +895,8 @@ void loop() {
         Serial.print("[HEARTBEAT] Uptime: ");
         Serial.print(millis() / 1000);
         Serial.print("s | Pos: ");
-        Serial.print(motorControl.getCurrentPosition(), 2);
-        Serial.print(" rad | State: ");
+        Serial.print(motorControl.getCurrentPositionDeg(), 2);
+        Serial.print("° | State: ");
         switch (motorControl.getState()) {
             case STATE_IDLE: Serial.print("IDLE"); break;
             case STATE_MOVING: Serial.print("MOVING"); break;
@@ -910,11 +914,11 @@ void loop() {
 
         Serial.println("\n[DEBUG] Detailed Status:");
         Serial.print("  Position: ");
-        Serial.print(motorControl.getCurrentPosition(), 4);
-        Serial.println(" rad");
+        Serial.print(motorControl.getCurrentPositionDeg(), 2);
+        Serial.println("°");
         Serial.print("  Velocity: ");
-        Serial.print(motorControl.getCurrentVelocity(), 4);
-        Serial.println(" rad/s");
+        Serial.print(motorControl.getCurrentVelocityDegPerSec(), 2);
+        Serial.println("°/s");
         Serial.print("  Current: ");
         Serial.print(motorControl.getCurrent(), 3);
         Serial.println(" A");
