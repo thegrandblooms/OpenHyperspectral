@@ -353,6 +353,7 @@ void printHelp() {
     Serial.println("  e, enable      - Enable motor");
     Serial.println("  d, disable     - Disable motor");
     Serial.println("  c, calibrate   - Run motor calibration");
+    Serial.println("  p, pidtune     - Run PID auto-tuning (after calibration)");
     Serial.println("  home           - Set current position as home");
     Serial.println("  stop           - Stop motor movement");
     Serial.println("  m <angle>      - Move to angle (e.g., 'm 3.14' for π radians)");
@@ -361,7 +362,7 @@ void printHelp() {
     Serial.println("  mode <0-2>     - Set control mode (0=position, 1=velocity, 2=torque)");
     Serial.println("");
     Serial.println("Testing:");
-    Serial.println("  test           - Run full test (calibration + motor test)");
+    Serial.println("  test           - Run full test (calibration + PID tuning + motor test)");
     Serial.println("  motor_test     - Run motor movement test (auto-enables motor)");
     Serial.println("  encoder_test   - Test encoder readings (press any key to stop)");
     Serial.println("");
@@ -601,8 +602,24 @@ void runFullTest() {
 
     delay(1000);
 
-    // Step 2: Motor test
-    Serial.println("\n=== Step 2: Motor Movement Test ===");
+    // Step 2: PID Auto-Tuning
+    Serial.println("\n=== Step 2: PID Auto-Tuning ===");
+    Serial.println("This will test motor response and find optimal PID values.");
+    Serial.println("This may take 2-5 minutes depending on motor response...");
+    Serial.println();
+
+    if (motorControl.autoTunePID(true)) {
+        Serial.println("✓ PID auto-tuning successful!");
+        Serial.println("Optimal PID parameters have been applied.");
+    } else {
+        Serial.println("✗ PID auto-tuning failed!");
+        Serial.println("Continuing with current PID values...");
+    }
+
+    delay(1000);
+
+    // Step 3: Motor test
+    Serial.println("\n=== Step 3: Motor Movement Test ===");
     runMotorTest();
 
     Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
@@ -653,6 +670,21 @@ void processSerialCommand(String cmd) {
             Serial.println("Calibration successful!");
         } else {
             Serial.println("Calibration failed!");
+        }
+    }
+    else if (command == "p" || command == "pidtune") {
+        if (!motorControl.isCalibrated()) {
+            Serial.println("Error: Motor must be calibrated first!");
+            Serial.println("Run 'calibrate' or 'c' first.");
+        } else {
+            Serial.println("Running PID auto-tuning...");
+            Serial.println("This may take 2-5 minutes.");
+            Serial.println();
+            if (motorControl.autoTunePID(true)) {
+                Serial.println("PID auto-tuning successful!");
+            } else {
+                Serial.println("PID auto-tuning failed!");
+            }
         }
     }
     else if (command == "home") {
