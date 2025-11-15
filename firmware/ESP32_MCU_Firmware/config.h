@@ -55,9 +55,9 @@
 
 // Position control PID parameters - OPTIMIZED FOR GIMBAL MOTORS (2804, etc.)
 // NOTE: Gimbal motors require MUCH lower gains than regular BLDC motors!
-// These are ULTRA CONSERVATIVE defaults to prevent oscillation on first power-up
+// These are CONSERVATIVE defaults to prevent oscillation on first power-up
 // Run PID auto-tuning ('p' or 'pidtune' command) to find optimal values (typically P=5-12)
-#define PID_P_POSITION   0.05           // Proportional gain (ultra conservative - may be sluggish but stable)
+#define PID_P_POSITION   0.1            // Proportional gain (conservative but functional)
 #define PID_I_POSITION   0.0            // Integral gain for position control
 #define PID_D_POSITION   0.0            // Derivative gain for position control
 #define PID_RAMP_POSITION 100.0         // Output ramp - lower for smoother velocity changes
