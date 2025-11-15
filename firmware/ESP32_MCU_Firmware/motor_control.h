@@ -67,6 +67,9 @@ public:
     void setVelocityPID(float p, float i, float d, float ramp);
     void setCurrentPID(float p, float i, float d, float ramp);
 
+    // PID auto-tuning
+    bool autoTunePID(bool verbose = true);
+
     // State queries
     float getCurrentPosition();
     float getCurrentVelocity();
