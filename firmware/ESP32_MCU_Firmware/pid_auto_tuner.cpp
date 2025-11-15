@@ -221,7 +221,7 @@ bool PIDAutoTuner::evaluatePID(float p, float i, float d, float ramp_deg_s, floa
         valid_tests++;
 
         if (verbose_output) {
-            printMetrics(metrics, target);
+            printMetrics(metrics, target_deg);
         }
 
         // Small delay between movements
