@@ -43,24 +43,33 @@
 //=============================================================================
 // MOTION CONTROL PARAMETERS
 //=============================================================================
-// Velocity limits (in rad/s) - OPTIMIZED FOR GIMBAL MOTORS
-// Gimbal motors are designed for slow, precise movements, not high speed
-#define MAX_VELOCITY     10.0           // Maximum velocity (rad/s) ~95 RPM - conservative for gimbal
-#define DEFAULT_VELOCITY 5.0            // Default velocity (rad/s) ~48 RPM
-#define MIN_VELOCITY     0.1            // Minimum velocity (rad/s)
+// NOTE: Internal code uses DEGREES, SimpleFOC uses radians.
+// We define both for clarity, but DEGREES are preferred for user-facing values.
 
-// Acceleration limits (in rad/s²) - OPTIMIZED FOR GIMBAL MOTORS
-#define MAX_ACCELERATION 20.0           // Maximum acceleration - lower for smooth gimbal movement
-#define DEFAULT_ACCELERATION 5.0        // Default acceleration - gentle for precise control
+// Velocity limits - OPTIMIZED FOR GIMBAL MOTORS
+// Gimbal motors are designed for slow, precise movements, not high speed
+#define MAX_VELOCITY_DEG     573.0      // Maximum velocity (deg/s) ~95 RPM
+#define MAX_VELOCITY         10.0       // Maximum velocity (rad/s) - for SimpleFOC
+#define DEFAULT_VELOCITY_DEG 286.5      // Default velocity (deg/s) ~48 RPM
+#define DEFAULT_VELOCITY     5.0        // Default velocity (rad/s)
+#define MIN_VELOCITY_DEG     5.7        // Minimum velocity (deg/s)
+#define MIN_VELOCITY         0.1        // Minimum velocity (rad/s)
+
+// Acceleration limits - OPTIMIZED FOR GIMBAL MOTORS
+#define MAX_ACCELERATION_DEG 1146.0     // Maximum acceleration (deg/s²)
+#define MAX_ACCELERATION     20.0       // Maximum acceleration (rad/s²) - for SimpleFOC
+#define DEFAULT_ACCELERATION_DEG 286.5  // Default acceleration (deg/s²)
+#define DEFAULT_ACCELERATION 5.0        // Default acceleration (rad/s²)
 
 // Position control PID parameters - OPTIMIZED FOR GIMBAL MOTORS (2804, etc.)
 // NOTE: Gimbal motors require MUCH lower gains than regular BLDC motors!
-// These are CONSERVATIVE defaults to prevent oscillation on first power-up
-// Run PID auto-tuning ('p' or 'pidtune' command) to find optimal values (typically P=5-12)
-#define PID_P_POSITION   0.1            // Proportional gain (conservative but functional)
+// Research shows P=0.5-2.0 is typical for gimbal motors
+// Run PID auto-tuning ('p' or 'pidtune' command) to find optimal values
+#define PID_P_POSITION   1.0            // Proportional gain (based on gimbal motor research)
 #define PID_I_POSITION   0.0            // Integral gain for position control
 #define PID_D_POSITION   0.0            // Derivative gain for position control
-#define PID_RAMP_POSITION 100.0         // Output ramp - lower for smoother velocity changes
+#define PID_RAMP_POSITION_DEG 1000.0    // Output ramp (deg/s)
+#define PID_RAMP_POSITION 100.0         // Output ramp (rad/s) - for SimpleFOC
 
 // Velocity control PID parameters - Inner loop (more critical for stability)
 // Optimized for gimbal motors based on SimpleFOC recommendations
@@ -109,8 +118,10 @@
 //=============================================================================
 // POSITION TRACKING
 //=============================================================================
-#define POSITION_TOLERANCE 0.1          // Position tolerance in radians (~5.7 degrees)
-#define VELOCITY_THRESHOLD 0.01         // Velocity threshold to consider motor stopped
+#define POSITION_TOLERANCE_DEG 5.7      // Position tolerance (degrees)
+#define POSITION_TOLERANCE 0.1          // Position tolerance (radians) - for SimpleFOC
+#define VELOCITY_THRESHOLD_DEG 0.57     // Velocity threshold (deg/s)
+#define VELOCITY_THRESHOLD 0.01         // Velocity threshold (rad/s) - for SimpleFOC
 
 //=============================================================================
 // SYSTEM TIMING
