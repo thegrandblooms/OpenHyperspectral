@@ -36,6 +36,11 @@
 #define VOLTAGE_PSU      12.0           // Power supply voltage (V) - adjust to your supply (8-35V range)
 #define CURRENT_LIMIT    2.0            // Maximum current limit (A) - SimpleFOC Mini max 2A continuous
 
+// GIMBAL MOTOR VOLTAGE LIMIT
+// Research shows gimbal motors work best with 5-10V, preferably starting at 6V
+// This prevents overshooting and cogging/detent issues
+#define VOLTAGE_LIMIT_GIMBAL 6.0        // Voltage limit for gimbal motor (V) - conservative for smooth operation
+
 // Motor characteristics (Mitoot 2804 100kv Gimbal Motor)
 #define MOTOR_RESISTANCE 10.0           // Phase resistance (Ohms) - gimbal motors typically R>10Ω
 #define MOTOR_KV         100            // Motor KV rating (RPM/V)
@@ -72,12 +77,13 @@
 #define PID_RAMP_POSITION 100.0         // Output ramp (rad/s) - for SimpleFOC
 
 // Velocity control PID parameters - Inner loop (more critical for stability)
-// Optimized for gimbal motors based on SimpleFOC recommendations
-#define PID_P_VELOCITY   0.1            // Very low P for smooth operation
-#define PID_I_VELOCITY   10.0           // Moderate I for steady-state accuracy
-#define PID_D_VELOCITY   0.0001         // Minimal D for slight damping
-#define PID_RAMP_VELOCITY 100.0         // Lower ramp for smoother control
-#define PID_LPF_VELOCITY 0.005          // Low-pass filter time constant (5ms, more filtering)
+// CRITICAL: These values are based on SimpleFOC gimbal motor recommendations
+// Research shows gimbal motors typically use: P=0.2, I=20, output_ramp=1000, voltage_limit=6V
+#define PID_P_VELOCITY   0.2            // Standard for gimbal motors (was 0.1)
+#define PID_I_VELOCITY   20.0           // Standard for gimbal motors (was 10.0)
+#define PID_D_VELOCITY   0.0            // Usually 0 for gimbal motors
+#define PID_RAMP_VELOCITY 1000.0        // Higher ramp for smoother control (was 100.0)
+#define PID_LPF_VELOCITY 0.01           // Low-pass filter time constant (10ms, less aggressive)
 
 // Current control PID parameters (for FOC)
 #define PID_P_CURRENT    5.0            // Proportional gain for current control
