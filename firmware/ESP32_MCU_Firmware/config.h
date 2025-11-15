@@ -43,31 +43,32 @@
 //=============================================================================
 // MOTION CONTROL PARAMETERS
 //=============================================================================
-// Velocity limits (in rad/s)
-#define MAX_VELOCITY     100.0          // Maximum velocity (rad/s) ~955 RPM
-#define DEFAULT_VELOCITY 20.0           // Default velocity (rad/s) ~191 RPM
+// Velocity limits (in rad/s) - OPTIMIZED FOR GIMBAL MOTORS
+// Gimbal motors are designed for slow, precise movements, not high speed
+#define MAX_VELOCITY     10.0           // Maximum velocity (rad/s) ~95 RPM - conservative for gimbal
+#define DEFAULT_VELOCITY 5.0            // Default velocity (rad/s) ~48 RPM
 #define MIN_VELOCITY     0.1            // Minimum velocity (rad/s)
 
-// Acceleration limits (in rad/s²)
-#define MAX_ACCELERATION 50.0           // Maximum acceleration
-#define DEFAULT_ACCELERATION 10.0       // Default acceleration
+// Acceleration limits (in rad/s²) - OPTIMIZED FOR GIMBAL MOTORS
+#define MAX_ACCELERATION 20.0           // Maximum acceleration - lower for smooth gimbal movement
+#define DEFAULT_ACCELERATION 5.0        // Default acceleration - gentle for precise control
 
 // Position control PID parameters - OPTIMIZED FOR GIMBAL MOTORS (2804, etc.)
 // NOTE: Gimbal motors require MUCH lower gains than regular BLDC motors!
-// These are VERY CONSERVATIVE defaults to prevent oscillation on first power-up
+// These are ULTRA CONSERVATIVE defaults to prevent oscillation on first power-up
 // Run PID auto-tuning ('p' or 'pidtune' command) to find optimal values (typically P=5-12)
-#define PID_P_POSITION   0.2            // Proportional gain (very conservative for gimbal motor)
+#define PID_P_POSITION   0.05           // Proportional gain (ultra conservative - may be sluggish but stable)
 #define PID_I_POSITION   0.0            // Integral gain for position control
 #define PID_D_POSITION   0.0            // Derivative gain for position control
-#define PID_RAMP_POSITION 1000.0        // Output ramp for position control
+#define PID_RAMP_POSITION 100.0         // Output ramp - lower for smoother velocity changes
 
 // Velocity control PID parameters - Inner loop (more critical for stability)
 // Optimized for gimbal motors based on SimpleFOC recommendations
-#define PID_P_VELOCITY   0.2            // Lower P reduces vibrations
-#define PID_I_VELOCITY   20.0           // Higher I for steady-state accuracy
-#define PID_D_VELOCITY   0.001          // Small D for damping (not 0!)
-#define PID_RAMP_VELOCITY 1000.0        // Output ramp for velocity control
-#define PID_LPF_VELOCITY 0.002          // Low-pass filter time constant (2ms, helps stability)
+#define PID_P_VELOCITY   0.1            // Very low P for smooth operation
+#define PID_I_VELOCITY   10.0           // Moderate I for steady-state accuracy
+#define PID_D_VELOCITY   0.0001         // Minimal D for slight damping
+#define PID_RAMP_VELOCITY 100.0         // Lower ramp for smoother control
+#define PID_LPF_VELOCITY 0.005          // Low-pass filter time constant (5ms, more filtering)
 
 // Current control PID parameters (for FOC)
 #define PID_P_CURRENT    5.0            // Proportional gain for current control
