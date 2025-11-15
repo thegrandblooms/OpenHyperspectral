@@ -56,6 +56,14 @@ unsigned long last_heartbeat = 0;
 bool calibrated = false;
 String command_buffer = "";
 
+// Oscillation detection
+float last_positions[10];  // Ring buffer for position history
+int position_index = 0;
+unsigned long last_oscillation_check = 0;
+#define OSCILLATION_CHECK_INTERVAL 100  // ms
+#define OSCILLATION_THRESHOLD 5  // Number of direction changes in history
+#define OSCILLATION_MIN_CHANGE 0.05  // rad - minimum change to count as movement
+
 // Test statistics
 struct TestResult {
     float target_position;
@@ -68,20 +76,71 @@ struct TestResult {
 TestResult test_results[10];
 int test_count = 0;
 
+bool checkForOscillation() {
+    // Update position history
+    float current_pos = encoder.getAngle();
+    last_positions[position_index] = current_pos;
+    position_index = (position_index + 1) % 10;
+
+    // Need at least a full buffer to detect oscillation
+    static bool buffer_filled = false;
+    static int fill_count = 0;
+    if (!buffer_filled) {
+        fill_count++;
+        if (fill_count >= 10) {
+            buffer_filled = true;
+        }
+        return false;
+    }
+
+    // Count direction changes
+    int direction_changes = 0;
+    for (int i = 0; i < 9; i++) {
+        int curr_idx = (position_index + i) % 10;
+        int next_idx = (position_index + i + 1) % 10;
+        int next_next_idx = (position_index + i + 2) % 10;
+
+        float change1 = last_positions[next_idx] - last_positions[curr_idx];
+        float change2 = last_positions[next_next_idx] - last_positions[next_idx];
+
+        // Check if significant movement and direction changed
+        if (abs(change1) > OSCILLATION_MIN_CHANGE && abs(change2) > OSCILLATION_MIN_CHANGE) {
+            if ((change1 > 0 && change2 < 0) || (change1 < 0 && change2 > 0)) {
+                direction_changes++;
+            }
+        }
+    }
+
+    // If too many direction changes, we're oscillating
+    if (direction_changes >= OSCILLATION_THRESHOLD) {
+        return true;
+    }
+
+    return false;
+}
+
 void printHelp() {
     Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
     Serial.println("║               INTEGRATION TEST - COMMANDS                      ║");
     Serial.println("╚════════════════════════════════════════════════════════════════╝");
-    Serial.println("Commands:");
+    Serial.println();
+    Serial.println("RECOMMENDED WORKFLOW:");
+    Serial.println("  1. c, calibrate  - Run motor/encoder calibration (REQUIRED FIRST)");
+    Serial.println("  2. p, pidtune    - Auto-tune PID (HIGHLY RECOMMENDED)");
+    Serial.println("  3. t, test       - Run automated position test sequence");
+    Serial.println();
+    Serial.println("OTHER COMMANDS:");
     Serial.println("  h, help      - Show this help menu");
-    Serial.println("  c, calibrate - Run motor calibration");
-    Serial.println("  p, pidtune   - Run PID auto-tuning (after calibration)");
     Serial.println("  e, enable    - Enable motor");
-    Serial.println("  d, disable   - Disable motor");
-    Serial.println("  t, test      - Run automated test sequence");
-    Serial.println("  s, status    - Show current status");
-    Serial.println("  r, results   - Show test results");
-    Serial.println("  m <angle>    - Move to angle (rad)");
+    Serial.println("  d, disable   - Disable motor (emergency stop)");
+    Serial.println("  s, status    - Show current motor/encoder status");
+    Serial.println("  r, results   - Show test results from last test run");
+    Serial.println("  m <angle>    - Move to angle in radians (e.g., 'm 3.14')");
+    Serial.println();
+    Serial.println("SAFETY:");
+    Serial.println("  - Oscillation detection is active and will auto-disable motor");
+    Serial.println("  - Press 'd' any time for emergency stop");
+    Serial.println("  - Always run PID tuning after calibration to prevent oscillation");
     Serial.println();
 }
 
@@ -234,8 +293,16 @@ void runCalibration() {
     Serial.println("║               CALIBRATION SUCCESSFUL!                          ║");
     Serial.println("╚════════════════════════════════════════════════════════════════╝");
     Serial.println();
-    Serial.println("TIP: Run 'p' or 'pidtune' to auto-tune PID parameters for");
-    Serial.println("     optimal position tracking performance.");
+    Serial.println("IMPORTANT NEXT STEP:");
+    Serial.println("  Run 'p' or 'pidtune' to auto-tune PID parameters!");
+    Serial.println();
+    Serial.println("Why PID tuning is critical:");
+    Serial.println("  - Prevents motor oscillation and wild movements");
+    Serial.println("  - Ensures accurate position tracking");
+    Serial.println("  - Finds optimal gains for YOUR specific motor setup");
+    Serial.println();
+    Serial.println("Current PID: P=2.0 (very conservative, may be slow)");
+    Serial.println("Expected after tuning: P=6-12 (fast and accurate)");
     Serial.println();
 }
 
@@ -314,13 +381,59 @@ void runPIDTuning() {
 
 void runTestSequence() {
     if (!calibrated) {
-        Serial.println("Please calibrate first! Send 'c' to calibrate.");
+        Serial.println("ERROR: Motor must be calibrated first! Run 'c' to calibrate.");
         return;
     }
 
     Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
     Serial.println("║             AUTOMATED TEST SEQUENCE                            ║");
     Serial.println("╚════════════════════════════════════════════════════════════════╝");
+    Serial.println();
+    Serial.print("Current PID: P=");
+    Serial.print(motor.P_angle.P, 2);
+    Serial.print(", I=");
+    Serial.print(motor.P_angle.I, 2);
+    Serial.print(", D=");
+    Serial.println(motor.P_angle.D, 3);
+    Serial.println();
+
+    if (motor.P_angle.P < 3.0) {
+        Serial.println("WARNING: PID values are very conservative (P < 3.0)");
+        Serial.println("         This may result in slow movements and poor tracking.");
+        Serial.println("         Consider running 'p' to auto-tune PID first.");
+        Serial.println();
+        Serial.println("Continue anyway? Type 'y' and press enter, or 'n' to cancel:");
+
+        // Wait for user confirmation
+        String response = "";
+        unsigned long start = millis();
+        while (millis() - start < 10000) {  // 10 second timeout
+            if (Serial.available() > 0) {
+                char c = Serial.read();
+                if (c == '\n' || c == '\r') {
+                    response.trim();
+                    response.toLowerCase();
+                    if (response == "y" || response == "yes") {
+                        break;
+                    } else {
+                        Serial.println("Test cancelled. Run 'p' to tune PID first.");
+                        return;
+                    }
+                } else {
+                    response += c;
+                }
+            }
+            delay(10);
+        }
+    }
+
+    // Ensure motor is enabled
+    if (!motor.enabled) {
+        Serial.println("Enabling motor...");
+        motor.enable();
+        delay(500);
+    }
+
     Serial.println();
 
     test_count = 0;
@@ -446,13 +559,16 @@ void setup() {
     Serial.println("[INIT] Linking encoder to motor...");
     motor.linkSensor(&encoder);
 
-    // Configure motor
+    // Configure motor with CONSERVATIVE PID values
+    // These prevent oscillation but may be slow - run PID tuning for optimal values
     motor.controller = MotionControlType::angle;
     motor.voltage_limit = VOLTAGE_PSU / 2;
     motor.velocity_limit = MAX_VELOCITY;
     motor.PID_velocity.P = 0.5;
     motor.PID_velocity.I = 10.0;
-    motor.P_angle.P = 20.0;
+    motor.P_angle.P = 2.0;   // Conservative - prevents oscillation
+    motor.P_angle.I = 0.0;
+    motor.P_angle.D = 0.0;
     motor.current_limit = CURRENT_LIMIT;
 
     // Initialize motor
@@ -464,19 +580,52 @@ void setup() {
     Serial.println("║                      SYSTEM READY!                             ║");
     Serial.println("╚════════════════════════════════════════════════════════════════╝");
     Serial.println();
-    Serial.println("IMPORTANT: Run calibration before testing!");
-    Serial.println("  Type 'c' to calibrate");
-    Serial.println("  Type 't' to run automated test");
-    Serial.println("  Type 'h' for all commands");
+    Serial.println("RECOMMENDED WORKFLOW:");
+    Serial.println("  1. Type 'c' to calibrate motor/encoder");
+    Serial.println("  2. Type 'p' to auto-tune PID (prevents oscillation!)");
+    Serial.println("  3. Type 't' to run automated position tests");
+    Serial.println("  4. Type 'h' for all commands");
+    Serial.println();
+    Serial.println("NOTE: Using conservative PID values (P=2.0) until tuning is run.");
+    Serial.println("      This prevents oscillation but may be slow. Run 'p' for optimal PID.");
     Serial.println();
 
     last_heartbeat = millis();
+
+    // Initialize position history for oscillation detection
+    for (int i = 0; i < 10; i++) {
+        last_positions[i] = 0.0;
+    }
 }
 
 void loop() {
     // Run motor control loop
     motor.loopFOC();
     motor.move();
+
+    // Oscillation detection
+    unsigned long current_time = millis();
+    if (motor.enabled && current_time - last_oscillation_check >= OSCILLATION_CHECK_INTERVAL) {
+        last_oscillation_check = current_time;
+
+        if (checkForOscillation()) {
+            Serial.println();
+            Serial.println("╔════════════════════════════════════════════════════════════════╗");
+            Serial.println("║                   ⚠ OSCILLATION DETECTED! ⚠                   ║");
+            Serial.println("╚════════════════════════════════════════════════════════════════╝");
+            Serial.println("Motor is oscillating wildly - DISABLING for safety!");
+            Serial.println();
+            Serial.println("This usually means PID gains are too aggressive.");
+            Serial.println("Solutions:");
+            Serial.println("  1. Run 'p' to auto-tune PID parameters");
+            Serial.println("  2. Manually reduce P gain (currently using conservative defaults)");
+            Serial.println("  3. Check for mechanical obstructions");
+            Serial.println();
+
+            motor.disable();
+            calibrated = false;  // Require recalibration after oscillation
+        }
+    }
 
     // Check for serial commands
     while (Serial.available() > 0) {
