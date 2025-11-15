@@ -9,8 +9,10 @@
 
 MT6701Sensor::MT6701Sensor(uint8_t address)
     : encoder(address),
-      current_angle(0.0),
-      previous_angle(0.0),
+      cached_raw_count(0),
+      cached_degrees(0.0f),
+      cached_radians(0.0f),
+      previous_degrees(0.0f),
       last_update_time(0) {
 }
 
@@ -104,54 +106,72 @@ void MT6701Sensor::init() {
         Serial.println(" deg)");
     }
 
-    // Initialize angle cache
-    current_angle = encoder.readAngleRadians();
-    previous_angle = current_angle;
+    // Initialize cached values
+    cached_raw_count = encoder.readRawAngle();
+    cached_degrees = rawToDegrees(cached_raw_count);
+    cached_radians = degreesToRadians(cached_degrees);
+    previous_degrees = cached_degrees;
     last_update_time = micros();
 
     if (DEBUG_MOTOR) {
-        Serial.print("[MT6701] Initial angle cached: ");
-        Serial.print(current_angle, 4);
+        Serial.println("[MT6701] Initial values cached:");
+        Serial.print("  Raw count: ");
+        Serial.println(cached_raw_count);
+        Serial.print("  Degrees: ");
+        Serial.print(cached_degrees, 2);
+        Serial.println("°");
+        Serial.print("  Radians: ");
+        Serial.print(cached_radians, 4);
         Serial.println(" rad");
     }
 }
 
 float MT6701Sensor::getSensorAngle() {
-    // Return cached angle value (updated by update() method)
+    // SIMPLEFOC BOUNDARY: Return angle in RADIANS (SimpleFOC expects this)
     // SimpleFOC calls update() first, then getSensorAngle()
 
     #ifdef DEBUG_SENSOR_READS
     static unsigned long last_print = 0;
     if (millis() - last_print > 100) {  // Limit to 10Hz to avoid spam
         Serial.print("[SENSOR] getSensorAngle() = ");
-        Serial.print(current_angle, 4);
-        Serial.println(" rad (cached)");
+        Serial.print(cached_radians, 4);
+        Serial.print(" rad (");
+        Serial.print(cached_degrees, 2);
+        Serial.println("°)");
         last_print = millis();
     }
     #endif
 
-    return current_angle;
+    return cached_radians;
 }
 
 void MT6701Sensor::update() {
     // SimpleFOC calls this before reading sensor angle via getSensorAngle()
-    // We read the encoder here and cache the value
+    // We read the encoder here and cache ALL values (raw, degrees, radians)
 
-    // Save previous angle for velocity calculation
-    previous_angle = current_angle;
+    // Save previous for velocity calculation
+    previous_degrees = cached_degrees;
 
-    // Read fresh angle from MT6701
-    current_angle = encoder.readAngleRadians();
+    // Read raw encoder count (MINIMAL ABSTRACTION - closest to hardware)
+    cached_raw_count = encoder.readRawAngle();
+
+    // Convert to degrees (our preferred unit)
+    cached_degrees = rawToDegrees(cached_raw_count);
+
+    // Convert to radians for SimpleFOC
+    cached_radians = degreesToRadians(cached_degrees);
 
     // Update timestamp
     last_update_time = micros();
 
     #ifdef DEBUG_MOTOR_VERBOSE
     if (DEBUG_MOTOR) {
-        Serial.print("[MT6701] update() - angle: ");
-        Serial.print(current_angle, 4);
-        Serial.print(" rad, prev: ");
-        Serial.print(previous_angle, 4);
+        Serial.print("[MT6701] update() - Raw: ");
+        Serial.print(cached_raw_count);
+        Serial.print(", Deg: ");
+        Serial.print(cached_degrees, 2);
+        Serial.print("°, Rad: ");
+        Serial.print(cached_radians, 4);
         Serial.println(" rad");
     }
     #endif
@@ -173,29 +193,46 @@ bool MT6701Sensor::isFieldGood() {
 }
 
 float MT6701Sensor::getVelocity() {
-    // Calculate velocity from cached angle changes
-    // SimpleFOC may call this, or calculate velocity itself
+    // SIMPLEFOC BOUNDARY: Return velocity in RADIANS/SECOND
+    // Calculate from degrees, then convert to radians
 
-    // Simple velocity calculation (could be improved with filtering)
-    float angle_diff = current_angle - previous_angle;
+    float velocity_deg_s = getDegreesPerSecond();
+    return degreesToRadians(velocity_deg_s);
+}
 
-    // Handle wraparound (crossing 0/2π boundary)
-    if (angle_diff > PI) {
-        angle_diff -= 2.0 * PI;
-    } else if (angle_diff < -PI) {
-        angle_diff += 2.0 * PI;
+//=============================================================================
+// DIRECT ENCODER ACCESS (Our preferred interface)
+//=============================================================================
+
+uint16_t MT6701Sensor::getRawCount() {
+    return cached_raw_count;
+}
+
+float MT6701Sensor::getDegrees() {
+    return cached_degrees;
+}
+
+float MT6701Sensor::getDegreesPerSecond() {
+    // Calculate velocity from angle changes in DEGREES
+    float angle_diff_deg = cached_degrees - previous_degrees;
+
+    // Handle wraparound (crossing 0/360° boundary)
+    if (angle_diff_deg > 180.0f) {
+        angle_diff_deg -= 360.0f;
+    } else if (angle_diff_deg < -180.0f) {
+        angle_diff_deg += 360.0f;
     }
 
     // Calculate time difference (convert microseconds to seconds)
     unsigned long current_time = micros();
-    float dt = (current_time - last_update_time) / 1000000.0;
+    float dt = (current_time - last_update_time) / 1000000.0f;
 
     // Avoid division by zero
-    if (dt < 0.000001) {
-        return 0.0;
+    if (dt < 0.000001f) {
+        return 0.0f;
     }
 
-    return angle_diff / dt;
+    return angle_diff_deg / dt;
 }
 
 uint8_t MT6701Sensor::getFieldStatus() {
@@ -214,13 +251,13 @@ MotorController::MotorController()
       control_mode(DEFAULT_CONTROL_MODE),
       motor_enabled(false),
       motor_calibrated(false),
-      target_position(0.0),
-      target_velocity(0.0),
-      max_velocity(MAX_VELOCITY),
-      max_acceleration(DEFAULT_ACCELERATION),
-      current_limit(CURRENT_LIMIT),
+      target_position_deg(0.0f),
+      target_velocity_deg_s(0.0f),
+      max_velocity_deg_s(MAX_VELOCITY_DEG),
+      max_acceleration_deg_s2(DEFAULT_ACCELERATION_DEG),
+      current_limit_a(CURRENT_LIMIT),
       target_reached(false),
-      position_tolerance(POSITION_TOLERANCE) {
+      position_tolerance_deg(POSITION_TOLERANCE_DEG) {
 }
 
 void MotorController::begin() {
@@ -268,10 +305,10 @@ void MotorController::begin() {
         Serial.println("[MOTOR] Driver linked to motor");
     }
 
-    // Set motor limits
+    // Set motor limits (SIMPLEFOC BOUNDARY: convert degrees to radians)
     motor.voltage_limit = VOLTAGE_PSU * 0.8;  // 80% of supply voltage
-    motor.current_limit = current_limit;
-    motor.velocity_limit = max_velocity;
+    motor.current_limit = current_limit_a;
+    motor.velocity_limit = degreesToRadians(max_velocity_deg_s);
 
     // Set FOC modulation (space vector PWM is more efficient)
     motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
@@ -290,31 +327,34 @@ void MotorController::begin() {
     }
 
     // Configure PID controllers
+    // Velocity PID (SIMPLEFOC: uses radians internally)
     motor.PID_velocity.P = PID_P_VELOCITY;
     motor.PID_velocity.I = PID_I_VELOCITY;
     motor.PID_velocity.D = PID_D_VELOCITY;
-    motor.PID_velocity.output_ramp = PID_RAMP_VELOCITY;
+    motor.PID_velocity.output_ramp = PID_RAMP_VELOCITY;  // rad/s
     motor.LPF_velocity.Tf = PID_LPF_VELOCITY;  // Low-pass filter for gimbal motor stability
-    motor.PID_velocity.limit = max_velocity;
+    motor.PID_velocity.limit = degreesToRadians(max_velocity_deg_s);
 
+    // Position PID (SIMPLEFOC: uses radians internally)
     motor.P_angle.P = PID_P_POSITION;
     motor.P_angle.I = PID_I_POSITION;
     motor.P_angle.D = PID_D_POSITION;
-    motor.P_angle.output_ramp = PID_RAMP_POSITION;
-    motor.P_angle.limit = max_velocity;
+    motor.P_angle.output_ramp = PID_RAMP_POSITION;  // rad/s
+    motor.P_angle.limit = degreesToRadians(max_velocity_deg_s);
 
     // Current control PID (for FOC)
+    // Current control PID (FOC - uses amperes, no unit conversion needed)
     motor.PID_current_q.P = PID_P_CURRENT;
     motor.PID_current_q.I = PID_I_CURRENT;
     motor.PID_current_q.D = PID_D_CURRENT;
     motor.PID_current_q.output_ramp = PID_RAMP_CURRENT;
-    motor.PID_current_q.limit = current_limit;
+    motor.PID_current_q.limit = current_limit_a;
 
     motor.PID_current_d.P = PID_P_CURRENT;
     motor.PID_current_d.I = PID_I_CURRENT;
     motor.PID_current_d.D = PID_D_CURRENT;
     motor.PID_current_d.output_ramp = PID_RAMP_CURRENT;
-    motor.PID_current_d.limit = current_limit;
+    motor.PID_current_d.limit = current_limit_a;
 
     // Enable SimpleFOC monitoring for debugging
     if (DEBUG_MOTOR) {
@@ -450,22 +490,24 @@ bool MotorController::runCalibration() {
         Serial.println("[FOC] Manual approach: Align sensor to electrical zero...");
     }
 
-    // Get current sensor angle
-    float sensor_angle = encoder.getSensorAngle();
+    // Get current sensor angle (SimpleFOC boundary - returns radians)
+    float sensor_angle_rad = encoder.getSensorAngle();
 
     // Calculate electrical angle (mechanical angle * pole_pairs)
-    float electrical_angle = _normalizeAngle(sensor_angle * POLE_PAIRS);
+    float electrical_angle_rad = normalizeRadians(sensor_angle_rad * POLE_PAIRS);
 
     // Set zero electrical offset to current position
-    motor.zero_electric_angle = electrical_angle;
+    motor.zero_electric_angle = electrical_angle_rad;
     motor.sensor_direction = Direction::CW;  // Try CW first (can be reversed if motor spins wrong way)
 
     if (DEBUG_MOTOR) {
         Serial.print("[FOC] Sensor angle: ");
-        Serial.print(sensor_angle, 4);
-        Serial.println(" rad");
+        Serial.print(sensor_angle_rad, 4);
+        Serial.print(" rad (");
+        Serial.print(radiansToDegrees(sensor_angle_rad), 2);
+        Serial.println("°)");
         Serial.print("[FOC] Electrical angle: ");
-        Serial.print(electrical_angle, 4);
+        Serial.print(electrical_angle_rad, 4);
         Serial.println(" rad");
         Serial.print("[FOC] Zero electric offset set to: ");
         Serial.print(motor.zero_electric_angle, 4);
@@ -555,16 +597,20 @@ void MotorController::stop() {
 
 void MotorController::setHome() {
     // Set current position as home (zero)
-    float current_angle = motor.shaft_angle;
-    motor.sensor_offset = current_angle;
+    // SIMPLEFOC BOUNDARY: Read radians, display in degrees
+    float current_angle_rad = motor.shaft_angle;
+    motor.sensor_offset = current_angle_rad;
 
     if (DEBUG_MOTOR) {
         Serial.print("Home set at angle: ");
-        Serial.println(current_angle);
+        Serial.print(radiansToDegrees(current_angle_rad), 2);
+        Serial.print("° (");
+        Serial.print(current_angle_rad, 4);
+        Serial.println(" rad)");
     }
 }
 
-void MotorController::moveToPosition(float position_rad) {
+void MotorController::moveToPosition(float position_deg) {
     if (!motor_enabled) {
         if (DEBUG_MOTOR) {
             Serial.println("Cannot move - motor not enabled");
@@ -579,45 +625,50 @@ void MotorController::moveToPosition(float position_rad) {
         return;
     }
 
-    target_position = position_rad;
+    target_position_deg = position_deg;
     target_reached = false;
     system_state = STATE_MOVING;
 
     if (DEBUG_MOTOR) {
         Serial.print("Moving to position: ");
-        Serial.println(position_rad);
+        Serial.print(position_deg, 2);
+        Serial.println("°");
     }
 }
 
-void MotorController::setVelocity(float velocity_rad_s) {
-    target_velocity = constrain(velocity_rad_s, -max_velocity, max_velocity);
+void MotorController::setVelocity(float velocity_deg_s) {
+    target_velocity_deg_s = constrain(velocity_deg_s, -max_velocity_deg_s, max_velocity_deg_s);
 
     if (DEBUG_MOTOR) {
         Serial.print("Velocity set to: ");
-        Serial.println(target_velocity);
+        Serial.print(target_velocity_deg_s, 2);
+        Serial.println("°/s");
     }
 }
 
-void MotorController::setAcceleration(float accel_rad_s2) {
-    max_acceleration = constrain(accel_rad_s2, 0, MAX_ACCELERATION);
+void MotorController::setAcceleration(float accel_deg_s2) {
+    max_acceleration_deg_s2 = constrain(accel_deg_s2, 0, MAX_ACCELERATION_DEG);
 
-    // Update PID ramp limits
-    motor.PID_velocity.output_ramp = max_acceleration;
-    motor.P_angle.output_ramp = max_acceleration;
+    // SIMPLEFOC BOUNDARY: Update PID ramp limits (convert to rad/s)
+    float accel_rad_s2 = degreesToRadians(max_acceleration_deg_s2);
+    motor.PID_velocity.output_ramp = accel_rad_s2;
+    motor.P_angle.output_ramp = accel_rad_s2;
 
     if (DEBUG_MOTOR) {
         Serial.print("Acceleration set to: ");
-        Serial.println(max_acceleration);
+        Serial.print(max_acceleration_deg_s2, 2);
+        Serial.println("°/s²");
     }
 }
 
-void MotorController::setCurrentLimit(float current_limit_a) {
-    current_limit = constrain(current_limit_a, 0, CURRENT_LIMIT);
-    motor.current_limit = current_limit;
+void MotorController::setCurrentLimit(float new_current_limit_a) {
+    current_limit_a = constrain(new_current_limit_a, 0, CURRENT_LIMIT);
+    motor.current_limit = current_limit_a;
 
     if (DEBUG_MOTOR) {
         Serial.print("Current limit set to: ");
-        Serial.println(current_limit);
+        Serial.print(current_limit_a, 2);
+        Serial.println(" A");
     }
 }
 
@@ -658,25 +709,43 @@ uint8_t MotorController::getControlMode() {
     return control_mode;
 }
 
-void MotorController::setPositionPID(float p, float i, float d, float ramp) {
+void MotorController::setPositionPID(float p, float i, float d, float ramp_deg_s) {
     motor.P_angle.P = p;
     motor.P_angle.I = i;
     motor.P_angle.D = d;
-    motor.P_angle.output_ramp = ramp;
+    // SIMPLEFOC BOUNDARY: Convert ramp from deg/s to rad/s
+    motor.P_angle.output_ramp = degreesToRadians(ramp_deg_s);
 
     if (DEBUG_MOTOR) {
-        Serial.println("Position PID updated");
+        Serial.print("Position PID updated: P=");
+        Serial.print(p, 2);
+        Serial.print(", I=");
+        Serial.print(i, 2);
+        Serial.print(", D=");
+        Serial.print(d, 3);
+        Serial.print(", Ramp=");
+        Serial.print(ramp_deg_s, 1);
+        Serial.println("°/s");
     }
 }
 
-void MotorController::setVelocityPID(float p, float i, float d, float ramp) {
+void MotorController::setVelocityPID(float p, float i, float d, float ramp_deg_s) {
     motor.PID_velocity.P = p;
     motor.PID_velocity.I = i;
     motor.PID_velocity.D = d;
-    motor.PID_velocity.output_ramp = ramp;
+    // SIMPLEFOC BOUNDARY: Convert ramp from deg/s to rad/s
+    motor.PID_velocity.output_ramp = degreesToRadians(ramp_deg_s);
 
     if (DEBUG_MOTOR) {
-        Serial.println("Velocity PID updated");
+        Serial.print("Velocity PID updated: P=");
+        Serial.print(p, 2);
+        Serial.print(", I=");
+        Serial.print(i, 2);
+        Serial.print(", D=");
+        Serial.print(d, 3);
+        Serial.print(", Ramp=");
+        Serial.print(ramp_deg_s, 1);
+        Serial.println("°/s");
     }
 }
 
@@ -727,11 +796,11 @@ bool MotorController::autoTunePID(bool verbose) {
     bool success = tuner.runTuning(verbose);
 
     if (success) {
-        // Apply optimal PID parameters
-        float p, i, d, ramp;
-        tuner.getOptimalPID(p, i, d, ramp);
+        // Apply optimal PID parameters (tuner uses degrees)
+        float p, i, d, ramp_deg_s;
+        tuner.getOptimalPID(p, i, d, ramp_deg_s);
 
-        setPositionPID(p, i, d, ramp);
+        setPositionPID(p, i, d, ramp_deg_s);
 
         if (verbose) {
             Serial.println("[TUNE] Optimal PID parameters applied!");
@@ -742,6 +811,8 @@ bool MotorController::autoTunePID(bool verbose) {
             Serial.println(i, 2);
             Serial.print("  #define PID_D_POSITION ");
             Serial.println(d, 3);
+            Serial.print("  #define PID_RAMP_POSITION_DEG ");
+            Serial.println(ramp_deg_s, 1);
         }
     } else {
         if (verbose) {
@@ -757,20 +828,22 @@ bool MotorController::autoTunePID(bool verbose) {
     return success;
 }
 
-float MotorController::getCurrentPosition() {
-    return motor.shaft_angle;
+float MotorController::getCurrentPositionDeg() {
+    // SIMPLEFOC BOUNDARY: Read radians, return degrees
+    return radiansToDegrees(motor.shaft_angle);
 }
 
-float MotorController::getCurrentVelocity() {
-    return motor.shaft_velocity;
+float MotorController::getCurrentVelocityDegPerSec() {
+    // SIMPLEFOC BOUNDARY: Read rad/s, return deg/s
+    return radiansToDegrees(motor.shaft_velocity);
 }
 
-float MotorController::getTargetPosition() {
-    return target_position;
+float MotorController::getTargetPositionDeg() {
+    return target_position_deg;
 }
 
-float MotorController::getTargetVelocity() {
-    return target_velocity;
+float MotorController::getTargetVelocityDegPerSec() {
+    return target_velocity_deg_s;
 }
 
 float MotorController::getCurrent() {
@@ -794,20 +867,25 @@ bool MotorController::isAtTarget() {
         return false;
     }
 
-    float position_error = abs(getCurrentPosition() - target_position);
-    float velocity = abs(getCurrentVelocity());
+    float position_error_deg = abs(getCurrentPositionDeg() - target_position_deg);
+    float velocity_deg_s = abs(getCurrentVelocityDegPerSec());
 
     // Consider target reached if position error is small and velocity is near zero
-    return (position_error < position_tolerance) && (velocity < VELOCITY_THRESHOLD);
+    return (position_error_deg < position_tolerance_deg) && (velocity_deg_s < VELOCITY_THRESHOLD_DEG);
 }
 
 uint8_t MotorController::getState() {
     return system_state;
 }
 
-float MotorController::getDirectEncoderAngle() {
-    // Read encoder directly, bypassing SimpleFOC
-    return encoder.getSensorAngle();
+uint16_t MotorController::getRawEncoderCount() {
+    // Read raw encoder count (MINIMAL ABSTRACTION)
+    return encoder.getRawCount();
+}
+
+float MotorController::getEncoderDegrees() {
+    // Read encoder directly in degrees (bypassing SimpleFOC)
+    return encoder.getDegrees();
 }
 
 void MotorController::update() {
@@ -815,13 +893,15 @@ void MotorController::update() {
         return;
     }
 
-    // Update FOC algorithm
+    // SIMPLEFOC: Run FOC algorithm (current control)
     motor.loopFOC();
 
-    // Update motion control
+    // SIMPLEFOC: Run motion control (position/velocity control)
+    // BOUNDARY: Convert degrees to radians for SimpleFOC
     switch (control_mode) {
         case MODE_POSITION:
-            motor.move(target_position);
+            // Convert target from degrees to radians
+            motor.move(degreesToRadians(target_position_deg));
 
             // Check if target reached
             if (system_state == STATE_MOVING && isAtTarget()) {
@@ -830,19 +910,22 @@ void MotorController::update() {
                     system_state = STATE_IDLE;
 
                     if (DEBUG_MOTOR) {
-                        Serial.println("Target position reached");
+                        Serial.print("Target position reached: ");
+                        Serial.print(target_position_deg, 2);
+                        Serial.println("°");
                     }
                 }
             }
             break;
 
         case MODE_VELOCITY:
-            motor.move(target_velocity);
+            // Convert velocity from degrees/s to radians/s
+            motor.move(degreesToRadians(target_velocity_deg_s));
             break;
 
         case MODE_TORQUE:
-            // For torque mode, target is in current/torque units
-            motor.move(target_velocity);  // Reuse target_velocity for torque
+            // For torque mode, target is in current/torque units (no conversion)
+            motor.move(target_velocity_deg_s);  // Reuse variable for torque
             break;
     }
 }

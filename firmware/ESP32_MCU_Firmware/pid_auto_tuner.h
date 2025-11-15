@@ -34,38 +34,37 @@
  */
 class PIDAutoTuner {
 public:
-    // Tuning parameters - OPTIMIZED FOR GIMBAL APPLICATION (±22.5° range)
-    // Test positions chosen to stay within ±25° for 45° total range application
-    static constexpr float TEST_POSITIONS[] = {0.0, 0.3, -0.3, 0.15, 0.0};  // rad (~0°, 17°, -17°, 9°, 0°)
+    // Tuning parameters - OPTIMIZED FOR GIMBAL MOTORS (using DEGREES)
+    // Test positions chosen to stay within ±20° for 45° total range application
+    static constexpr float TEST_POSITIONS_DEG[] = {0.0, 10.0, -10.0, 5.0, 0.0};  // degrees - smaller movements
     static constexpr int NUM_TEST_POSITIONS = 5;
-    static constexpr float TUNING_POSITION_TOLERANCE = 0.05;      // rad (~2.9°)
-    static constexpr float TUNING_SETTLING_TOLERANCE = 0.02;      // rad (~1.1°)
-    static constexpr unsigned long TUNING_MOVEMENT_TIMEOUT = 20000;  // ms - longer for slow conservative movements
+    static constexpr float TUNING_POSITION_TOLERANCE_DEG = 3.0;      // degrees
+    static constexpr float TUNING_SETTLING_TOLERANCE_DEG = 1.0;      // degrees
+    static constexpr unsigned long TUNING_MOVEMENT_TIMEOUT = 15000;  // ms - increased from 20s for more responsive tuning
     static constexpr unsigned long TUNING_SETTLING_WINDOW = 500;     // ms
 
-    // Initial CONSERVATIVE PID values for GIMBAL MOTORS
-    // Gimbal motors (2804, etc.) require MUCH lower gains than regular BLDC motors
-    // Starting at 0.1 instead of 0.05 - must be strong enough to overcome friction
-    static constexpr float TUNING_INITIAL_P = 0.1;   // Conservative but functional starting point
+    // Initial PID values for GIMBAL MOTORS - Based on research (P=0.5-2.0 typical)
+    // Starting at 1.0 based on SimpleFOC gimbal motor examples and research
+    static constexpr float TUNING_INITIAL_P = 1.0;   // Higher starting point based on research
     static constexpr float TUNING_INITIAL_I = 0.0;
     static constexpr float TUNING_INITIAL_D = 0.0;
-    static constexpr float TUNING_INITIAL_RAMP = 100.0;
+    static constexpr float TUNING_INITIAL_RAMP_DEG = 1000.0;  // deg/s
 
-    // PID increment steps - VERY small increments for gimbal motors
-    static constexpr float TUNING_P_STEP = 0.2;      // Very small steps for gentle ramping
-    static constexpr float TUNING_D_STEP = 0.01;     // Fine D adjustment
-    static constexpr float TUNING_I_STEP = 0.02;     // Fine I adjustment
+    // PID increment steps - tuned for gimbal motors
+    static constexpr float TUNING_P_STEP = 0.5;      // Larger steps since we're starting higher
+    static constexpr float TUNING_D_STEP = 0.02;     // Fine D adjustment
+    static constexpr float TUNING_I_STEP = 0.05;     // Fine I adjustment
 
-    // Tuning limits - lower max for gimbal motors
+    // Tuning limits - based on gimbal motor research
     static constexpr float TUNING_MAX_P = 20.0;      // Typically won't exceed 10-12 for gimbal
     static constexpr float TUNING_MAX_I = 2.0;       // Lower I limit for gimbal motors
     static constexpr float TUNING_MAX_D = 1.0;       // Lower D limit
 
-    // Performance thresholds - tuned for small gimbal movements
-    static constexpr float TUNING_MAX_OVERSHOOT = 0.05;             // rad (2.9°) - lower for small movements
-    static constexpr float TUNING_MAX_SETTLING_TIME = 5.0;          // seconds - longer for conservative gains
-    static constexpr float TUNING_TARGET_STEADY_STATE_ERROR = 0.01; // rad (0.57°)
-    static constexpr float TUNING_STABILITY_MARGIN = 0.8;           // Use 80% of best P
+    // Performance thresholds - in DEGREES
+    static constexpr float TUNING_MAX_OVERSHOOT_DEG = 3.0;           // degrees - reasonable for gimbal
+    static constexpr float TUNING_MAX_SETTLING_TIME = 3.0;           // seconds - faster response expected
+    static constexpr float TUNING_TARGET_STEADY_STATE_ERROR_DEG = 0.5; // degrees
+    static constexpr float TUNING_STABILITY_MARGIN = 0.8;            // Use 80% of best P
 
     // Performance metrics
     struct TuningMetrics {
@@ -81,8 +80,11 @@ public:
     /**
      * Constructor.
      *
-     * @param motor Reference to SimpleFOC BLDCMotor
+     * @param motor Reference to SimpleFOC BLDCMotor (works in RADIANS)
      * @param encoder Reference to encoder sensor
+     *
+     * NOTE: This tuner works in DEGREES internally but communicates with
+     * SimpleFOC (which uses radians) through conversion functions.
      */
     PIDAutoTuner(BLDCMotor& motor, Sensor& encoder);
 
@@ -100,9 +102,9 @@ public:
      * @param p Output: Proportional gain
      * @param i Output: Integral gain
      * @param d Output: Derivative gain
-     * @param ramp Output: Ramp limit
+     * @param ramp_deg_s Output: Ramp limit (degrees/second)
      */
-    void getOptimalPID(float& p, float& i, float& d, float& ramp);
+    void getOptimalPID(float& p, float& i, float& d, float& ramp_deg_s);
 
     /**
      * Get tuning performance metrics.
