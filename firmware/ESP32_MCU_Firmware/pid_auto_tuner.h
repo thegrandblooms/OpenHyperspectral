@@ -37,32 +37,32 @@ public:
     // Tuning parameters
     static constexpr float TEST_POSITIONS[] = {0.0, 1.57, 3.14, 4.71, 0.0};  // rad
     static constexpr int NUM_TEST_POSITIONS = 5;
-    static constexpr float POSITION_TOLERANCE = 0.05;      // rad (~2.9°)
-    static constexpr float SETTLING_TOLERANCE = 0.02;      // rad (~1.1°)
-    static constexpr unsigned long MOVEMENT_TIMEOUT = 10000;  // ms
-    static constexpr unsigned long SETTLING_WINDOW = 500;     // ms
+    static constexpr float TUNING_POSITION_TOLERANCE = 0.05;      // rad (~2.9°)
+    static constexpr float TUNING_SETTLING_TOLERANCE = 0.02;      // rad (~1.1°)
+    static constexpr unsigned long TUNING_MOVEMENT_TIMEOUT = 10000;  // ms
+    static constexpr unsigned long TUNING_SETTLING_WINDOW = 500;     // ms
 
     // Initial conservative PID values
-    static constexpr float INITIAL_P = 2.0;
-    static constexpr float INITIAL_I = 0.0;
-    static constexpr float INITIAL_D = 0.0;
-    static constexpr float INITIAL_RAMP = 1000.0;
+    static constexpr float TUNING_INITIAL_P = 2.0;
+    static constexpr float TUNING_INITIAL_I = 0.0;
+    static constexpr float TUNING_INITIAL_D = 0.0;
+    static constexpr float TUNING_INITIAL_RAMP = 1000.0;
 
     // PID increment steps
-    static constexpr float P_STEP = 2.0;
-    static constexpr float D_STEP = 0.05;
-    static constexpr float I_STEP = 0.1;
+    static constexpr float TUNING_P_STEP = 2.0;
+    static constexpr float TUNING_D_STEP = 0.05;
+    static constexpr float TUNING_I_STEP = 0.1;
 
     // Tuning limits
-    static constexpr float MAX_P = 50.0;
-    static constexpr float MAX_I = 5.0;
-    static constexpr float MAX_D = 2.0;
+    static constexpr float TUNING_MAX_P = 50.0;
+    static constexpr float TUNING_MAX_I = 5.0;
+    static constexpr float TUNING_MAX_D = 2.0;
 
     // Performance thresholds
-    static constexpr float MAX_OVERSHOOT = 0.1;              // rad (5.7°)
-    static constexpr float MAX_SETTLING_TIME = 3.0;          // seconds
-    static constexpr float TARGET_STEADY_STATE_ERROR = 0.01; // rad (0.57°)
-    static constexpr float STABILITY_MARGIN = 0.8;           // Use 80% of best P
+    static constexpr float TUNING_MAX_OVERSHOOT = 0.1;              // rad (5.7°)
+    static constexpr float TUNING_MAX_SETTLING_TIME = 3.0;          // seconds
+    static constexpr float TUNING_TARGET_STEADY_STATE_ERROR = 0.01; // rad (0.57°)
+    static constexpr float TUNING_STABILITY_MARGIN = 0.8;           // Use 80% of best P
 
     // Performance metrics
     struct TuningMetrics {

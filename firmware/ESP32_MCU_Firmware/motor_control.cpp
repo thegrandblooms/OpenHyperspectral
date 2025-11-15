@@ -714,11 +714,11 @@ bool MotorController::autoTunePID(bool verbose) {
 
     // Save current control mode and switch to position control
     uint8_t saved_mode = control_mode;
-    if (control_mode != CONTROL_MODE_POSITION) {
+    if (control_mode != MODE_POSITION) {
         if (verbose) {
             Serial.println("[TUNE] Switching to position control mode...");
         }
-        setControlMode(CONTROL_MODE_POSITION);
+        setControlMode(MODE_POSITION);
     }
 
     // Create tuner and run tuning
