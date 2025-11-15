@@ -24,7 +24,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <SimpleFOC.h>
-#include "../../ESP32_MCU_Firmware/pid_auto_tuner.h"
+#include "pid_auto_tuner.h"
 
 // Hardware configuration (from motor_firmware config.h)
 #define MOTOR_ENABLE     15
@@ -485,6 +485,13 @@ void processCommand() {
     command_buffer.toLowerCase();
 
     if (command_buffer.length() == 0) return;
+
+    // Debug: Show what command was received
+    Serial.print("[CMD] Received: '");
+    Serial.print(command_buffer);
+    Serial.print("' (length: ");
+    Serial.print(command_buffer.length());
+    Serial.println(")");
 
     if (command_buffer == "h" || command_buffer == "help") {
         printHelp();
