@@ -5,10 +5,10 @@ constexpr float PIDAutoTuner::TEST_POSITIONS[];
 
 PIDAutoTuner::PIDAutoTuner(BLDCMotor& motor, Sensor& encoder)
     : motor(motor), encoder(encoder),
-      current_p(INITIAL_P), current_i(INITIAL_I),
-      current_d(INITIAL_D), current_ramp(INITIAL_RAMP),
-      optimal_p(INITIAL_P), optimal_i(INITIAL_I),
-      optimal_d(INITIAL_D), optimal_ramp(INITIAL_RAMP),
+      current_p(TUNING_INITIAL_P), current_i(TUNING_INITIAL_I),
+      current_d(TUNING_INITIAL_D), current_ramp(TUNING_INITIAL_RAMP),
+      optimal_p(TUNING_INITIAL_P), optimal_i(TUNING_INITIAL_I),
+      optimal_d(TUNING_INITIAL_D), optimal_ramp(TUNING_INITIAL_RAMP),
       verbose_output(true) {
 
     final_metrics.valid = false;
@@ -50,7 +50,7 @@ bool PIDAutoTuner::moveAndAnalyze(float target, TuningMetrics& metrics) {
     metrics.score = 0;
     metrics.valid = false;
 
-    float initial_pos = encoder.getSensorAngle();
+    float initial_pos = motor.shaft_angle;
     float position_change = target - initial_pos;
 
     // Command movement
@@ -66,12 +66,12 @@ bool PIDAutoTuner::moveAndAnalyze(float target, TuningMetrics& metrics) {
     float target_90 = initial_pos + 0.9 * position_change;
 
     // Track movement
-    while (millis() - start_time < MOVEMENT_TIMEOUT) {
+    while (millis() - start_time < TUNING_MOVEMENT_TIMEOUT) {
         // Run FOC loop
         motor.loopFOC();
         motor.move();
 
-        float current_pos = encoder.getSensorAngle();
+        float current_pos = motor.shaft_angle;
         float error = abs(target - current_pos);
 
         // Calculate overshoot
@@ -101,21 +101,21 @@ bool PIDAutoTuner::moveAndAnalyze(float target, TuningMetrics& metrics) {
         }
 
         // Check if settled
-        if (error < SETTLING_TOLERANCE) {
+        if (error < TUNING_SETTLING_TOLERANCE) {
             if (!is_settled) {
                 settling_time_ms = millis() - start_time;
                 is_settled = true;
 
                 // Wait for settling confirmation
-                delay(SETTLING_WINDOW);
+                delay(TUNING_SETTLING_WINDOW);
 
                 // Verify still settled
                 motor.loopFOC();
                 motor.move();
-                current_pos = encoder.getSensorAngle();
+                current_pos = motor.shaft_angle;
                 error = abs(target - current_pos);
 
-                if (error < SETTLING_TOLERANCE) {
+                if (error < TUNING_SETTLING_TOLERANCE) {
                     // Movement complete
                     metrics.final_position = current_pos;
                     break;
@@ -139,7 +139,7 @@ bool PIDAutoTuner::moveAndAnalyze(float target, TuningMetrics& metrics) {
     // Get final position
     motor.loopFOC();
     motor.move();
-    float final_pos = encoder.getSensorAngle();
+    float final_pos = motor.shaft_angle;
     metrics.final_position = final_pos;
     metrics.steady_state_error = abs(target - final_pos);
 
@@ -152,7 +152,7 @@ bool PIDAutoTuner::moveAndAnalyze(float target, TuningMetrics& metrics) {
     );
 
     // Check if movement timed out
-    if (millis() - start_time >= MOVEMENT_TIMEOUT) {
+    if (millis() - start_time >= TUNING_MOVEMENT_TIMEOUT) {
         if (verbose_output) {
             Serial.println("[TUNE] Movement timeout");
         }
@@ -198,7 +198,7 @@ bool PIDAutoTuner::evaluatePID(float p, float i, float d, float ramp, float& avg
         }
 
         // Check for excessive overshoot (safety threshold)
-        if (metrics.overshoot > MAX_OVERSHOOT) {
+        if (metrics.overshoot > TUNING_MAX_OVERSHOOT) {
             if (verbose_output) {
                 Serial.print("[TUNE] Excessive overshoot: ");
                 Serial.print(metrics.overshoot, 4);
@@ -239,11 +239,11 @@ float PIDAutoTuner::tunePGain() {
         printSeparator();
     }
 
-    float p = INITIAL_P;
+    float p = TUNING_INITIAL_P;
     float best_p = p;
     float best_score = 999999.0;
 
-    while (p <= MAX_P) {
+    while (p <= TUNING_MAX_P) {
         float score;
         if (!evaluatePID(p, 0, 0, current_ramp, score)) {
             // Hit overshoot limit or other issue, back off
@@ -275,15 +275,15 @@ float PIDAutoTuner::tunePGain() {
             break;
         }
 
-        p += P_STEP;
+        p += TUNING_P_STEP;
     }
 
     // Apply stability margin
-    float optimal_p = best_p * STABILITY_MARGIN;
+    float optimal_p = best_p * TUNING_STABILITY_MARGIN;
 
     if (verbose_output) {
         Serial.print("[TUNE] Optimal P (with ");
-        Serial.print((1.0 - STABILITY_MARGIN) * 100, 0);
+        Serial.print((1.0 - TUNING_STABILITY_MARGIN) * 100, 0);
         Serial.print("% margin): ");
         Serial.println(optimal_p, 2);
     }
@@ -311,9 +311,9 @@ float PIDAutoTuner::tuneDGain(float p) {
     float best_d = d;
     float best_score = baseline_score;
 
-    while (d <= MAX_D) {
+    while (d <= TUNING_MAX_D) {
         if (d == 0.0) {
-            d += D_STEP;
+            d += TUNING_D_STEP;
             continue;  // Already tested D=0
         }
 
@@ -347,7 +347,7 @@ float PIDAutoTuner::tuneDGain(float p) {
             break;
         }
 
-        d += D_STEP;
+        d += TUNING_D_STEP;
     }
 
     if (verbose_output) {
@@ -378,9 +378,9 @@ float PIDAutoTuner::tuneIGain(float p, float d) {
     float best_i = i;
     float best_score = baseline_score;
 
-    while (i <= MAX_I) {
+    while (i <= TUNING_MAX_I) {
         if (i == 0.0) {
-            i += I_STEP;
+            i += TUNING_I_STEP;
             continue;  // Already tested I=0
         }
 
@@ -413,7 +413,7 @@ float PIDAutoTuner::tuneIGain(float p, float d) {
             break;
         }
 
-        i += I_STEP;
+        i += TUNING_I_STEP;
     }
 
     if (verbose_output) {
@@ -438,7 +438,7 @@ bool PIDAutoTuner::runTuning(bool verbose) {
         }
         Serial.println(" rad");
         Serial.print("[TUNER] Max overshoot: ");
-        Serial.print(MAX_OVERSHOOT, 4);
+        Serial.print(TUNING_MAX_OVERSHOOT, 4);
         Serial.println(" rad");
         Serial.println();
     }

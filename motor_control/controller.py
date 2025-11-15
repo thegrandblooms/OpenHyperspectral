@@ -688,63 +688,6 @@ class MotorController:
             logger.error("Calibration failed")
             return False
 
-    def auto_tune_pid(self, apply_results=True):
-        """
-        Run PID auto-tuning to find optimal position control parameters.
-
-        This will test motor response at various positions and incrementally
-        adjust PID gains to minimize overshoot while maintaining good tracking.
-
-        Args:
-            apply_results: If True, automatically apply the tuned PID values
-
-        Returns:
-            Dictionary with optimal PID parameters and performance metrics,
-            or None if tuning failed
-        """
-        # Import here to avoid circular dependency
-        from pid_tuner import PIDTuner
-
-        logger.info("Starting PID auto-tuning...")
-
-        # Ensure motor is enabled
-        status = self.get_status()
-        if status is None:
-            logger.error("Failed to get motor status")
-            return None
-
-        if not status['calibrated']:
-            logger.error("Motor must be calibrated before PID tuning")
-            return None
-
-        if not status['motor_enabled']:
-            logger.info("Enabling motor for tuning...")
-            self.enable()
-            time.sleep(0.5)
-
-        try:
-            # Run tuning
-            tuner = PIDTuner(self)
-            results = tuner.run_tuning()
-
-            # Optionally apply results
-            if apply_results and results:
-                logger.info("Applying tuned PID parameters...")
-                self.set_pid(
-                    0,  # position controller
-                    results['optimal_p'],
-                    results['optimal_i'],
-                    results['optimal_d'],
-                    results['ramp']
-                )
-                logger.info("PID parameters updated")
-
-            return results
-
-        except Exception as e:
-            logger.error(f"PID tuning failed: {e}", exc_info=True)
-            return None
-
     def set_pid(self, controller_type, p, i, d, ramp):
         """
         Set PID parameters for a control loop.
