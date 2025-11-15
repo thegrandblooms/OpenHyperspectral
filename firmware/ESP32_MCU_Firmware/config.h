@@ -53,9 +53,11 @@
 #define DEFAULT_ACCELERATION 10.0       // Default acceleration
 
 // Position control PID parameters
-#define PID_P_POSITION   20.0           // Proportional gain for position control
+// NOTE: These are CONSERVATIVE defaults to prevent oscillation on first power-up
+// Run PID auto-tuning ('p' or 'pidtune' command) to find optimal values for your motor
+#define PID_P_POSITION   2.0            // Proportional gain (conservative, prevents oscillation)
 #define PID_I_POSITION   0.0            // Integral gain for position control
-#define PID_D_POSITION   0.1            // Derivative gain for position control
+#define PID_D_POSITION   0.0            // Derivative gain for position control
 #define PID_RAMP_POSITION 1000.0        // Output ramp for position control
 
 // Velocity control PID parameters
