@@ -34,17 +34,19 @@
  */
 class PIDAutoTuner {
 public:
-    // Tuning parameters
-    static constexpr float TEST_POSITIONS[] = {0.0, 1.57, 3.14, 4.71, 0.0};  // rad
+    // Tuning parameters - OPTIMIZED FOR GIMBAL APPLICATION (±22.5° range)
+    // Test positions chosen to stay within ±25° for 45° total range application
+    static constexpr float TEST_POSITIONS[] = {0.0, 0.3, -0.3, 0.15, 0.0};  // rad (~0°, 17°, -17°, 9°, 0°)
     static constexpr int NUM_TEST_POSITIONS = 5;
     static constexpr float TUNING_POSITION_TOLERANCE = 0.05;      // rad (~2.9°)
     static constexpr float TUNING_SETTLING_TOLERANCE = 0.02;      // rad (~1.1°)
-    static constexpr unsigned long TUNING_MOVEMENT_TIMEOUT = 10000;  // ms
+    static constexpr unsigned long TUNING_MOVEMENT_TIMEOUT = 20000;  // ms - longer for slow conservative movements
     static constexpr unsigned long TUNING_SETTLING_WINDOW = 500;     // ms
 
-    // Initial ULTRA CONSERVATIVE PID values for GIMBAL MOTORS
+    // Initial CONSERVATIVE PID values for GIMBAL MOTORS
     // Gimbal motors (2804, etc.) require MUCH lower gains than regular BLDC motors
-    static constexpr float TUNING_INITIAL_P = 0.05;  // Ultra conservative starting point
+    // Starting at 0.1 instead of 0.05 - must be strong enough to overcome friction
+    static constexpr float TUNING_INITIAL_P = 0.1;   // Conservative but functional starting point
     static constexpr float TUNING_INITIAL_I = 0.0;
     static constexpr float TUNING_INITIAL_D = 0.0;
     static constexpr float TUNING_INITIAL_RAMP = 100.0;
@@ -59,9 +61,9 @@ public:
     static constexpr float TUNING_MAX_I = 2.0;       // Lower I limit for gimbal motors
     static constexpr float TUNING_MAX_D = 1.0;       // Lower D limit
 
-    // Performance thresholds
-    static constexpr float TUNING_MAX_OVERSHOOT = 0.1;              // rad (5.7°)
-    static constexpr float TUNING_MAX_SETTLING_TIME = 3.0;          // seconds
+    // Performance thresholds - tuned for small gimbal movements
+    static constexpr float TUNING_MAX_OVERSHOOT = 0.05;             // rad (2.9°) - lower for small movements
+    static constexpr float TUNING_MAX_SETTLING_TIME = 5.0;          // seconds - longer for conservative gains
     static constexpr float TUNING_TARGET_STEADY_STATE_ERROR = 0.01; // rad (0.57°)
     static constexpr float TUNING_STABILITY_MARGIN = 0.8;           // Use 80% of best P
 
