@@ -482,153 +482,75 @@ bool MotorController::runCalibration() {
         Serial.println("V for calibration");
     }
 
-    // Run SimpleFOC calibration (aligns motor and encoder)
+    // Show pre-calibration position
     if (DEBUG_MOTOR) {
-        Serial.println("[FOC] Running motor alignment (initFOC)...");
-        Serial.print("[DEBUG] Pre-initFOC encoder read: ");
+        encoder.update();
         float pre_angle = encoder.getSensorAngle();
-        Serial.print(pre_angle, 4);
-        Serial.print(" rad (");
+        Serial.println("[FOC] Pre-calibration status:");
+        Serial.print("  Encoder position: ");
         Serial.print(radiansToDegrees(pre_angle), 2);
-        Serial.print("°) Raw: ");
-        Serial.println(encoder.getRawCount());
-        Serial.print("[DEBUG] Pre-initFOC shaft_angle: ");
-        Serial.print(motor.shaft_angle, 4);
-        Serial.println(" rad");
-        Serial.print("[DEBUG] Sensor needs search: ");
-        Serial.println(encoder.needsSearch());
-
-        // Test: manually read sensor multiple times to check for consistency
-        Serial.println("[DEBUG] Testing sensor consistency (5 reads):");
-        for (int i = 0; i < 5; i++) {
-            encoder.update();  // Explicitly update before each read
-            float test_angle = encoder.getSensorAngle();
-            uint16_t test_raw = encoder.getRawCount();
-            Serial.print("  Read ");
-            Serial.print(i+1);
-            Serial.print(": ");
-            Serial.print(test_angle, 4);
-            Serial.print(" rad (");
-            Serial.print(radiansToDegrees(test_angle), 2);
-            Serial.print("°) Raw: ");
-            Serial.print(test_raw);
-            Serial.print(" (diff: ");
-            Serial.print((test_angle - pre_angle) * 180.0 / PI, 2);
-            Serial.println("°)");
-            delay(50);
-        }
-    }
-
-    // Note: initFOC() returns 1 on success, 0 on failure
-    // For absolute encoders like MT6701, SimpleFOC can auto-detect alignment
-    if (DEBUG_MOTOR) {
-        Serial.println("[FOC] Calling initFOC() with automatic sensor alignment...");
-        encoder.update();  // Fresh read before initFOC
-        float pre_angle = encoder.getSensorAngle();
-        uint16_t pre_raw = encoder.getRawCount();
-        Serial.print("[FOC] Pre-initFOC sensor angle: ");
+        Serial.print("° (");
         Serial.print(pre_angle, 4);
-        Serial.print(" rad (");
-        Serial.print(radiansToDegrees(pre_angle), 2);
-        Serial.print("°) Raw: ");
-        Serial.println(pre_raw);
+        Serial.println(" rad)");
+        Serial.print("  Encoder absolute: ");
+        Serial.println(encoder.needsSearch() == 0 ? "YES" : "NO");
     }
 
-    // SimpleFOC's automatic initFOC() doesn't work reliably with absolute encoders
-    // that return needsSearch() = 0. Even though the motor moves (we can see 21°
-    // of movement in the logs), SimpleFOC says "Failed to notice movement".
+    // Let SimpleFOC run automatic alignment
+    // SimpleFOC will:
+    // 1. Apply voltage at known electrical angle (3π/2)
+    // 2. Wait for motor to physically align (~700ms)
+    // 3. Read encoder position at that electrical position
+    // 4. Calculate zero_electric_angle = offset between mechanical and electrical
     //
-    // SOLUTION: Manual calibration for absolute encoders
-    // Since MT6701 is absolute, we can directly calculate the electrical offset
-    // without motor movement:
-    //   electrical_angle = (mechanical_angle × pole_pairs) mod 2π
-    //   zero_electric_angle = electrical_angle at current position
-    //
-    // This is BETTER than SimpleFOC's initFOC() because:
-    // - No motor movement needed (safer)
-    // - Works immediately
-    // - Absolute encoder knows position already!
+    // The encoder REMAINS ABSOLUTE - this just calibrates the mechanical→electrical mapping
+    // After calibration, encoder still gives true mechanical position!
 
     if (DEBUG_MOTOR) {
-        Serial.println("[FOC] Using MANUAL calibration for absolute encoder (MT6701)...");
+        Serial.println("[FOC] Running SimpleFOC auto-calibration...");
+        Serial.println("[FOC] Motor will move briefly to find electrical zero");
     }
 
-    // Get current mechanical angle from encoder (in radians)
-    encoder.update();
-    float mechanical_angle = encoder.getSensorAngle();
-
-    // Calculate electrical angle (mechanical × pole_pairs, normalized to 0-2π)
-    float electrical_angle = normalizeRadians(mechanical_angle * (float)POLE_PAIRS);
-
-    // Set zero electric offset - this is where we define electrical zero
-    motor.zero_electric_angle = electrical_angle;
-
-    // Set sensor direction - CW is standard for most encoders
-    // If motor spins wrong direction, change this to CCW
-    motor.sensor_direction = Direction::CW;
-
-    if (DEBUG_MOTOR) {
-        Serial.print("[FOC] Mechanical angle: ");
-        Serial.print(mechanical_angle, 4);
-        Serial.print(" rad (");
-        Serial.print(radiansToDegrees(mechanical_angle), 2);
-        Serial.println("°)");
-
-        Serial.print("[FOC] Electrical angle: ");
-        Serial.print(electrical_angle, 4);
-        Serial.print(" rad (");
-        Serial.print(radiansToDegrees(electrical_angle), 2);
-        Serial.println("°)");
-
-        Serial.print("[FOC] Zero electric offset set to: ");
-        Serial.print(motor.zero_electric_angle, 4);
-        Serial.println(" rad");
-
-        Serial.print("[FOC] Sensor direction: ");
-        Serial.println(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
-
-        Serial.println("[FOC] Calling initFOC() with pre-configured offset...");
-    }
-
-    // CRITICAL: Call initFOC() to complete FOC initialization
-    // Since we've already set zero_electric_angle and sensor_direction,
-    // SimpleFOC will skip the automatic detection and use our pre-configured values
+    // Run SimpleFOC automatic calibration
+    // Motor will move to align with electrical field, then calculate offset
     int foc_result = motor.initFOC();
 
     if (DEBUG_MOTOR) {
-        Serial.println("[FOC] Manual calibration COMPLETE");
+        Serial.println("[FOC] Auto-calibration COMPLETE");
     }
 
     if (DEBUG_MOTOR) {
         Serial.print("[FOC] initFOC() returned: ");
         Serial.println(foc_result);
 
-        // Update encoder and show post-calibration readings
-        encoder.update();
-        float post_angle = encoder.getSensorAngle();
-        uint16_t post_raw = encoder.getRawCount();
-
-        Serial.print("[DEBUG] Post-initFOC encoder read: ");
-        Serial.print(post_angle, 4);
-        Serial.print(" rad (");
-        Serial.print(radiansToDegrees(post_angle), 2);
-        Serial.print("°) Raw: ");
-        Serial.println(post_raw);
-        Serial.print("[DEBUG] Post-initFOC shaft_angle: ");
-        Serial.print(motor.shaft_angle, 4);
-        Serial.print(" rad (");
-        Serial.print(radiansToDegrees(motor.shaft_angle), 2);
-        Serial.println("°)");
-
         if (foc_result == 1) {
-            Serial.println("[FOC] Motor alignment complete - SUCCESS");
-            Serial.print("[FOC] Zero electric angle: ");
+            Serial.println("[FOC] ✓ Motor alignment SUCCESS");
+
+            // Show the calibration constants SimpleFOC calculated
+            Serial.println("[FOC] Calibration constants (mechanical→electrical mapping):");
+            Serial.print("  zero_electric_angle = ");
             Serial.print(motor.zero_electric_angle, 4);
-            Serial.println(" rad");
-            Serial.print("[FOC] Sensor direction: ");
+            Serial.print(" rad (");
+            Serial.print(radiansToDegrees(motor.zero_electric_angle), 2);
+            Serial.println("°)");
+            Serial.print("  sensor_direction = ");
             Serial.println(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
+
+            // Show current absolute encoder position (still accurate!)
+            encoder.update();
+            float post_angle = encoder.getSensorAngle();
+            uint16_t post_raw = encoder.getRawCount();
+            Serial.println("[FOC] Absolute encoder position after calibration:");
+            Serial.print("  Mechanical: ");
+            Serial.print(radiansToDegrees(post_angle), 2);
+            Serial.print("° (Raw: ");
+            Serial.print(post_raw);
+            Serial.println(")");
+
+            // Optional: Save to NVS to skip calibration on future boots
+            Serial.println("[FOC] Tip: You can save these values to NVS to skip alignment on reboot");
         } else {
-            Serial.println("[FOC] Motor alignment FAILED!");
+            Serial.println("[FOC] ✗ Motor alignment FAILED!");
         }
     }
 
