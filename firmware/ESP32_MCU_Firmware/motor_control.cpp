@@ -13,7 +13,8 @@ MT6701Sensor::MT6701Sensor(uint8_t address)
       cached_degrees(0.0f),
       cached_radians(0.0f),
       previous_degrees(0.0f),
-      last_update_time(0) {
+      last_update_time(0),
+      force_needs_search(false) {
 }
 
 void MT6701Sensor::init() {
@@ -172,14 +173,30 @@ void MT6701Sensor::update() {
 }
 
 int MT6701Sensor::needsSearch() {
-    // MT6701 is an absolute encoder - it doesn't need electrical angle search
-    // Return 0 to indicate no search needed
+    // MT6701 is an absolute encoder - normally doesn't need index search
+    // BUT: SimpleFOC's alignment detection works better with needsSearch()=1
+    // So during calibration, we temporarily return 1 to trigger index search logic
 
-    if (DEBUG_MOTOR) {
-        Serial.println("[MT6701] needsSearch() called - returning 0 (no search needed for absolute encoder)");
+    if (force_needs_search) {
+        if (DEBUG_MOTOR) {
+            static bool logged = false;
+            if (!logged) {
+                Serial.println("[MT6701] needsSearch() = 1 (calibration mode - forcing index search)");
+                logged = true;
+            }
+        }
+        return 1;  // Force index search during calibration
     }
 
-    return 0;
+    if (DEBUG_MOTOR) {
+        static unsigned long last_log = 0;
+        if (millis() - last_log > 5000) {
+            Serial.println("[MT6701] needsSearch() = 0 (absolute encoder)");
+            last_log = millis();
+        }
+    }
+
+    return 0;  // Normal operation: absolute encoder, no search needed
 }
 
 bool MT6701Sensor::isFieldGood() {
@@ -503,28 +520,38 @@ bool MotorController::runCalibration() {
         Serial.print("° (");
         Serial.print(pre_angle, 4);
         Serial.println(" rad)");
-        Serial.print("  Encoder absolute: ");
-        Serial.println(encoder.needsSearch() == 0 ? "YES" : "NO");
+    }
+
+    // CRITICAL FIX: Force needsSearch()=1 during calibration
+    // SimpleFOC's alignment detection works better with index search logic
+    // even for absolute encoders. The encoder reads are the same, but SimpleFOC
+    // uses more robust movement detection with needsSearch()=1
+    encoder.setCalibrationMode(true);
+
+    if (DEBUG_MOTOR) {
+        Serial.println("[FOC] Calibration mode enabled (forcing index search logic)");
     }
 
     // Let SimpleFOC run automatic alignment
-    // SimpleFOC will:
-    // 1. Apply voltage at known electrical angle (3π/2)
-    // 2. Wait for motor to physically align (~700ms)
-    // 3. Read encoder position at that electrical position
-    // 4. Calculate zero_electric_angle = offset between mechanical and electrical
+    // With needsSearch()=1, SimpleFOC will:
+    // 1. Rotate motor continuously at velocity_index_search (default 1 rad/s)
+    // 2. Monitor shaft_angle change to detect full rotation
+    // 3. Calculate zero_electric_angle offset from sensor readings
     //
-    // The encoder REMAINS ABSOLUTE - this just calibrates the mechanical→electrical mapping
+    // The encoder REMAINS ABSOLUTE - this just uses better detection logic
     // After calibration, encoder still gives true mechanical position!
 
     if (DEBUG_MOTOR) {
         Serial.println("[FOC] Running SimpleFOC auto-calibration...");
-        Serial.println("[FOC] Motor will move briefly to find electrical zero");
+        Serial.println("[FOC] Motor will rotate to find electrical zero");
     }
 
     // Run SimpleFOC automatic calibration
-    // Motor will move to align with electrical field, then calculate offset
+    // With needsSearch()=1, uses index search logic (more robust detection)
     int foc_result = motor.initFOC();
+
+    // Disable calibration mode - return to normal absolute encoder behavior
+    encoder.setCalibrationMode(false);
 
     if (DEBUG_MOTOR) {
         Serial.println("[FOC] Auto-calibration COMPLETE");
