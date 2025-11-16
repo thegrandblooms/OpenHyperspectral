@@ -613,8 +613,8 @@ bool MotorController::runCalibration() {
 
     // CRITICAL: Call initFOC() to complete FOC initialization
     // Since we've already set zero_electric_angle and sensor_direction,
-    // SimpleFOC should skip the automatic detection and use our values
-    int foc_result = motor.initFOC(motor.zero_electric_angle, motor.sensor_direction);
+    // SimpleFOC will skip the automatic detection and use our pre-configured values
+    int foc_result = motor.initFOC();
 
     if (DEBUG_MOTOR) {
         Serial.println("[FOC] Manual calibration COMPLETE");
