@@ -130,25 +130,8 @@ float MT6701Sensor::getSensorAngle() {
     // SIMPLEFOC BOUNDARY: Return angle in RADIANS (SimpleFOC expects this)
     // NOTE: SimpleFOC SHOULD call update() first, but let's verify
 
-    // CRITICAL DEBUG: Log every call during calibration to trace SimpleFOC's behavior
-    if (DEBUG_MOTOR) {
-        static unsigned long last_print = 0;
-        static int call_count = 0;
-        call_count++;
-
-        // Print every call during first 30 seconds (calibration period)
-        if (millis() < 30000 || millis() - last_print > 1000) {
-            Serial.print("[SENSOR] getSensorAngle() call #");
-            Serial.print(call_count);
-            Serial.print(" = ");
-            Serial.print(cached_radians, 4);
-            Serial.print(" rad (");
-            Serial.print(cached_degrees, 2);
-            Serial.print("°) Raw: ");
-            Serial.println(cached_raw_count);
-            last_print = millis();
-        }
-    }
+    // DEBUG: Throttled logging (disabled - too verbose even with throttling)
+    // SimpleFOC calls this frequently during loopFOC(), use heartbeat instead
 
     return cached_radians;
 }
@@ -172,22 +155,18 @@ void MT6701Sensor::update() {
     // Update timestamp
     last_update_time = micros();
 
-    // CRITICAL DEBUG: Log every update() call during calibration
+    // DEBUG: Throttled update logging (every 1 second max)
     if (DEBUG_MOTOR) {
-        static int update_count = 0;
-        update_count++;
-
-        // Print every call during first 30 seconds (calibration period)
-        if (millis() < 30000) {
-            Serial.print("[SENSOR] update() call #");
-            Serial.print(update_count);
-            Serial.print(" - Raw: ");
+        static unsigned long last_debug_print = 0;
+        if (millis() - last_debug_print > 1000) {
+            Serial.print("[SENSOR] update() - Raw: ");
             Serial.print(cached_raw_count);
             Serial.print(", Deg: ");
             Serial.print(cached_degrees, 2);
             Serial.print("°, Rad: ");
             Serial.print(cached_radians, 4);
             Serial.println(" rad");
+            last_debug_print = millis();
         }
     }
 }
@@ -1060,12 +1039,9 @@ void MotorController::update() {
         return;
     }
 
-    // CRITICAL: Explicitly update encoder before FOC
-    // SimpleFOC *should* call sensor->update() automatically in loopFOC(),
-    // but we're seeing frozen encoder readings, so call it explicitly here
-    encoder.update();
-
     // SIMPLEFOC: Run FOC algorithm (current control)
+    // NOTE: SimpleFOC automatically calls sensor->update() inside loopFOC()
+    // Do NOT call encoder.update() manually here - it breaks the control loop!
     motor.loopFOC();
 
     // SIMPLEFOC: Run motion control (position/velocity control)
