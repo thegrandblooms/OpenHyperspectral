@@ -55,7 +55,7 @@ bool PIDAutoTuner::moveAndAnalyze(float target_deg, TuningMetrics& metrics) {
     // CRITICAL: Use ABSOLUTE ENCODER for position tracking, not motor.shaft_angle!
     // Read initial position from encoder directly (MT6701 absolute encoder)
     encoder.update();  // Force fresh encoder read
-    float initial_pos_rad = encoder.getSensorAngle();  // Direct encoder read (radians)
+    float initial_pos_rad = encoder.getAngle();  // Direct encoder read (radians) - public method
     float initial_pos_deg = initial_pos_rad * (180.0f / PI);
     float position_change_deg = target_deg - initial_pos_deg;
 
@@ -91,7 +91,7 @@ bool PIDAutoTuner::moveAndAnalyze(float target_deg, TuningMetrics& metrics) {
         // CRITICAL: Read ABSOLUTE ENCODER position, not SimpleFOC shaft_angle!
         // This is the fix for PID tuning timeouts - we use the real encoder position
         encoder.update();  // Force fresh encoder read from MT6701
-        float current_pos_rad = encoder.getSensorAngle();  // Direct encoder read
+        float current_pos_rad = encoder.getAngle();  // Direct encoder read - public method
         float current_pos_deg = current_pos_rad * (180.0f / PI);
         float error_deg = abs(target_deg - current_pos_deg);
 
@@ -136,7 +136,7 @@ bool PIDAutoTuner::moveAndAnalyze(float target_deg, TuningMetrics& metrics) {
 
                 // ABSOLUTE ENCODER: Re-read from encoder
                 encoder.update();
-                current_pos_rad = encoder.getSensorAngle();
+                current_pos_rad = encoder.getAngle();  // Public method
                 current_pos_deg = current_pos_rad * (180.0f / PI);
                 error_deg = abs(target_deg - current_pos_deg);
 
@@ -165,7 +165,7 @@ bool PIDAutoTuner::moveAndAnalyze(float target_deg, TuningMetrics& metrics) {
     motor.loopFOC();
     motor.move();
     encoder.update();  // Force final encoder read
-    float final_pos_rad = encoder.getSensorAngle();  // Direct encoder read
+    float final_pos_rad = encoder.getAngle();  // Direct encoder read - public method
     float final_pos_deg = final_pos_rad * (180.0f / PI);
     metrics.final_position = final_pos_deg;
     metrics.steady_state_error = abs(target_deg - final_pos_deg);
