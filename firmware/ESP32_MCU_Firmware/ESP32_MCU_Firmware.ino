@@ -29,10 +29,10 @@
 // GLOBAL DEBUG FLAGS (Runtime toggleable)
 //=============================================================================
 // These can be changed at runtime using the "debug <flag> <0/1>" command
-bool g_debug_serial = g_debug_serial_DEFAULT;
+bool g_debug_serial = DEBUG_SERIAL_DEFAULT;
 bool g_debug_motor = DEBUG_MOTOR_DEFAULT;
 bool g_debug_comm = DEBUG_COMM_DEFAULT;
-bool g_debug_heartbeat = g_debug_heartbeat_DEFAULT;
+bool g_debug_heartbeat = DEBUG_HEARTBEAT_DEFAULT;
 
 //=============================================================================
 // GLOBAL OBJECTS
