@@ -905,18 +905,18 @@ void loop() {
         // This updates cached values so we see REAL-TIME encoder position
         motorControl.updateEncoder();
 
-        // CRITICAL DIAGNOSTIC: Show BOTH raw encoder and SimpleFOC position
+        // Read all values (grouped by source)
         uint16_t raw_enc = motorControl.getRawEncoderCount();
         float enc_deg = motorControl.getEncoderDegrees();
-        float foc_deg = motorControl.getCurrentPositionDeg();  // SimpleFOC's shaft_angle
+        float foc_deg = motorControl.getCurrentPositionDeg();
 
-        Serial.print("[HEARTBEAT] Uptime: ");
+        Serial.print("[HEARTBEAT] ");
         Serial.print(millis() / 1000);
-        Serial.print("s | Raw: ");
+        Serial.print("s | MT6701: Raw=");
         Serial.print(raw_enc);
-        Serial.print(" | Enc: ");
+        Serial.print(" Pos=");
         Serial.print(enc_deg, 1);
-        Serial.print("° | FOC: ");
+        Serial.print("° | SimpleFOC: Pos=");
         Serial.print(foc_deg, 1);
         Serial.print("° | State: ");
         switch (motorControl.getState()) {
@@ -934,25 +934,52 @@ void loop() {
     if (DEBUG_SERIAL && (millis() - last_status_print > 10000)) {
         last_status_print = millis();
 
-        Serial.println("\n[DEBUG] Detailed Status:");
-        Serial.print("  Position: ");
+        // Force fresh encoder read
+        motorControl.updateEncoder();
+
+        Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
+        Serial.println("║                    DETAILED STATUS                             ║");
+        Serial.println("╚════════════════════════════════════════════════════════════════╝");
+
+        // MT6701 MAGNETIC ENCODER (Direct I2C reads)
+        Serial.println("\n[MT6701 ENCODER] (Direct I2C from hardware)");
+        Serial.print("  Raw Count: ");
+        Serial.print(motorControl.getRawEncoderCount());
+        Serial.println(" (0-16383)");
+        Serial.print("  Position:  ");
+        Serial.print(motorControl.getEncoderDegrees(), 2);
+        Serial.println("°");
+
+        // SIMPLEFOC STATE (Motor control library internal state)
+        Serial.println("\n[SimpleFOC STATE] (Motor controller internal)");
+        Serial.print("  Shaft Angle:    ");
         Serial.print(motorControl.getCurrentPositionDeg(), 2);
         Serial.println("°");
-        Serial.print("  Velocity: ");
+        Serial.print("  Shaft Velocity: ");
         Serial.print(motorControl.getCurrentVelocityDegPerSec(), 2);
         Serial.println("°/s");
-        Serial.print("  Current: ");
+        Serial.print("  Q-axis Current: ");
         Serial.print(motorControl.getCurrent(), 3);
         Serial.println(" A");
-        Serial.print("  State: ");
-        Serial.print(motorControl.getState());
-        Serial.print(" | Enabled: ");
-        Serial.print(motorControl.isEnabled() ? "Y" : "N");
-        Serial.print(" | Calibrated: ");
-        Serial.println(motorControl.isCalibrated() ? "Y" : "N");
-        Serial.print("  Free Heap: ");
+
+        // SYSTEM STATE
+        Serial.println("\n[SYSTEM STATE]");
+        Serial.print("  State:      ");
+        switch (motorControl.getState()) {
+            case STATE_IDLE: Serial.println("IDLE"); break;
+            case STATE_MOVING: Serial.println("MOVING"); break;
+            case STATE_ERROR: Serial.println("ERROR"); break;
+            case STATE_CALIBRATING: Serial.println("CALIBRATING"); break;
+            default: Serial.println("UNKNOWN");
+        }
+        Serial.print("  Enabled:    ");
+        Serial.println(motorControl.isEnabled() ? "YES" : "NO");
+        Serial.print("  Calibrated: ");
+        Serial.println(motorControl.isCalibrated() ? "YES" : "NO");
+        Serial.print("  Free Heap:  ");
         Serial.print(ESP.getFreeHeap() / 1024);
-        Serial.println(" KB\n");
+        Serial.println(" KB");
+        Serial.println();
     }
 
     // Maintain loop timing

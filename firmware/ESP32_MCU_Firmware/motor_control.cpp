@@ -128,19 +128,27 @@ void MT6701Sensor::init() {
 
 float MT6701Sensor::getSensorAngle() {
     // SIMPLEFOC BOUNDARY: Return angle in RADIANS (SimpleFOC expects this)
-    // SimpleFOC calls update() first, then getSensorAngle()
+    // NOTE: SimpleFOC SHOULD call update() first, but let's verify
 
-    #ifdef DEBUG_SENSOR_READS
-    static unsigned long last_print = 0;
-    if (millis() - last_print > 100) {  // Limit to 10Hz to avoid spam
-        Serial.print("[SENSOR] getSensorAngle() = ");
-        Serial.print(cached_radians, 4);
-        Serial.print(" rad (");
-        Serial.print(cached_degrees, 2);
-        Serial.println("°)");
-        last_print = millis();
+    // CRITICAL DEBUG: Log every call during calibration to trace SimpleFOC's behavior
+    if (DEBUG_MOTOR) {
+        static unsigned long last_print = 0;
+        static int call_count = 0;
+        call_count++;
+
+        // Print every call during first 30 seconds (calibration period)
+        if (millis() < 30000 || millis() - last_print > 1000) {
+            Serial.print("[SENSOR] getSensorAngle() call #");
+            Serial.print(call_count);
+            Serial.print(" = ");
+            Serial.print(cached_radians, 4);
+            Serial.print(" rad (");
+            Serial.print(cached_degrees, 2);
+            Serial.print("°) Raw: ");
+            Serial.println(cached_raw_count);
+            last_print = millis();
+        }
     }
-    #endif
 
     return cached_radians;
 }
@@ -164,17 +172,24 @@ void MT6701Sensor::update() {
     // Update timestamp
     last_update_time = micros();
 
-    #ifdef DEBUG_MOTOR_VERBOSE
+    // CRITICAL DEBUG: Log every update() call during calibration
     if (DEBUG_MOTOR) {
-        Serial.print("[MT6701] update() - Raw: ");
-        Serial.print(cached_raw_count);
-        Serial.print(", Deg: ");
-        Serial.print(cached_degrees, 2);
-        Serial.print("°, Rad: ");
-        Serial.print(cached_radians, 4);
-        Serial.println(" rad");
+        static int update_count = 0;
+        update_count++;
+
+        // Print every call during first 30 seconds (calibration period)
+        if (millis() < 30000) {
+            Serial.print("[SENSOR] update() call #");
+            Serial.print(update_count);
+            Serial.print(" - Raw: ");
+            Serial.print(cached_raw_count);
+            Serial.print(", Deg: ");
+            Serial.print(cached_degrees, 2);
+            Serial.print("°, Rad: ");
+            Serial.print(cached_radians, 4);
+            Serial.println(" rad");
+        }
     }
-    #endif
 }
 
 int MT6701Sensor::needsSearch() {
