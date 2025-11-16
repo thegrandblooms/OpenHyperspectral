@@ -406,6 +406,17 @@ void MotorController::begin() {
         Serial.println(" rad");
     }
 
+    // Set alignment voltage for sensor calibration
+    // Gimbal motors need higher voltage to overcome friction during alignment
+    // Default is 3V, but gimbal motors with ~10Ω resistance need 5-6V for reliable movement detection
+    motor.voltage_sensor_align = 6.0f;
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[MOTOR] Sensor alignment voltage: ");
+        Serial.print(motor.voltage_sensor_align);
+        Serial.println(" V");
+    }
+
     // Motor starts disabled for safety
     motor.disable();
 }
