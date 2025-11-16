@@ -608,11 +608,17 @@ bool MotorController::runCalibration() {
         Serial.print("[FOC] Sensor direction: ");
         Serial.println(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
 
-        Serial.println("[FOC] Manual calibration COMPLETE");
+        Serial.println("[FOC] Calling initFOC() with pre-configured offset...");
     }
 
-    // Mark as successfully calibrated
-    int foc_result = 1;  // Success!
+    // CRITICAL: Call initFOC() to complete FOC initialization
+    // Since we've already set zero_electric_angle and sensor_direction,
+    // SimpleFOC should skip the automatic detection and use our values
+    int foc_result = motor.initFOC(motor.zero_electric_angle, motor.sensor_direction);
+
+    if (DEBUG_MOTOR) {
+        Serial.println("[FOC] Manual calibration COMPLETE");
+    }
 
     if (DEBUG_MOTOR) {
         Serial.print("[FOC] initFOC() returned: ");
