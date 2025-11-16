@@ -892,10 +892,19 @@ void loop() {
     if (DEBUG_HEARTBEAT && (millis() - last_heartbeat > HEARTBEAT_INTERVAL_MS)) {
         last_heartbeat = millis();
 
+        // CRITICAL DIAGNOSTIC: Show BOTH raw encoder and SimpleFOC position
+        uint16_t raw_enc = motorControl.getRawEncoderCount();
+        float enc_deg = motorControl.getEncoderDegrees();
+        float foc_deg = motorControl.getCurrentPositionDeg();  // SimpleFOC's shaft_angle
+
         Serial.print("[HEARTBEAT] Uptime: ");
         Serial.print(millis() / 1000);
-        Serial.print("s | Pos: ");
-        Serial.print(motorControl.getCurrentPositionDeg(), 2);
+        Serial.print("s | Raw: ");
+        Serial.print(raw_enc);
+        Serial.print(" | Enc: ");
+        Serial.print(enc_deg, 1);
+        Serial.print("° | FOC: ");
+        Serial.print(foc_deg, 1);
         Serial.print("° | State: ");
         switch (motorControl.getState()) {
             case STATE_IDLE: Serial.print("IDLE"); break;
