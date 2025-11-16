@@ -71,6 +71,16 @@ bool PIDAutoTuner::moveAndAnalyze(float target_deg, TuningMetrics& metrics) {
 
     float target_90_deg = initial_pos_deg + 0.9f * position_change_deg;
 
+    if (verbose_output) {
+        Serial.print("[TUNE] Initial encoder: ");
+        Serial.print(initial_pos_deg, 2);
+        Serial.print("°, Target: ");
+        Serial.print(target_deg, 2);
+        Serial.print("°, Change: ");
+        Serial.print(position_change_deg, 2);
+        Serial.println("°");
+    }
+
     // Track movement
     while (millis() - start_time < TUNING_MOVEMENT_TIMEOUT) {
         // Run FOC loop

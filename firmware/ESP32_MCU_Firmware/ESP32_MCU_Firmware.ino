@@ -10,6 +10,11 @@
  * Based on:
  * - HyperMicro serial communication protocol
  * - ESP32 motor control architecture with SimpleFOC
+ *
+ * KEY ARCHITECTURE NOTES:
+ * - Uses MT6701 absolute magnetic encoder as TRUTH SOURCE for position
+ * - SimpleFOC handles motor control (FOC algorithm) but we use encoder for position checks
+ * - All position verification uses getAbsolutePositionDeg() not getCurrentPositionDeg()
  */
 
 #include <Arduino.h>
@@ -54,7 +59,7 @@ void processCommand() {
                 motorControl.moveToPosition(cmd.position);
                 comm.sendOkResponse(cmd_id);
 
-                if (DEBUG_SERIAL) {
+                if (g_debug_serial) {
                     Serial.print("MOVE_TO: position=");
                     Serial.print(cmd.position);
                     Serial.print(", seq=");
@@ -72,7 +77,7 @@ void processCommand() {
                 motorControl.setVelocity(cmd.velocity);
                 comm.sendOkResponse(cmd_id);
 
-                if (DEBUG_SERIAL) {
+                if (g_debug_serial) {
                     Serial.print("SET_SPEED: ");
                     Serial.println(cmd.velocity);
                 }
@@ -88,7 +93,7 @@ void processCommand() {
                 motorControl.setAcceleration(cmd.acceleration);
                 comm.sendOkResponse(cmd_id);
 
-                if (DEBUG_SERIAL) {
+                if (g_debug_serial) {
                     Serial.print("SET_ACCEL: ");
                     Serial.println(cmd.acceleration);
                 }
@@ -102,7 +107,7 @@ void processCommand() {
             motorControl.stop();
             comm.sendOkResponse(cmd_id);
 
-            if (DEBUG_SERIAL) {
+            if (g_debug_serial) {
                 Serial.println("STOP");
             }
             break;
@@ -112,7 +117,7 @@ void processCommand() {
             motorControl.setHome();
             comm.sendOkResponse(cmd_id);
 
-            if (DEBUG_SERIAL) {
+            if (g_debug_serial) {
                 Serial.println("HOME");
             }
             break;
@@ -122,7 +127,7 @@ void processCommand() {
             motorControl.enable();
             comm.sendOkResponse(cmd_id);
 
-            if (DEBUG_SERIAL) {
+            if (g_debug_serial) {
                 Serial.println("ENABLE");
             }
             break;
@@ -132,14 +137,16 @@ void processCommand() {
             motorControl.disable();
             comm.sendOkResponse(cmd_id);
 
-            if (DEBUG_SERIAL) {
+            if (g_debug_serial) {
                 Serial.println("DISABLE");
             }
             break;
         }
 
         case CMD_GET_STATUS: {
-            float position = motorControl.getCurrentPositionDeg();
+            // CRITICAL: Use ABSOLUTE ENCODER for position reporting
+            motorControl.updateEncoder();  // Force fresh encoder read
+            float position = motorControl.getAbsolutePositionDeg();  // ABSOLUTE ENCODER (TRUTH)
             float velocity = motorControl.getCurrentVelocityDegPerSec();
             float current = motorControl.getCurrent();
             float voltage = motorControl.getVoltage();
@@ -151,8 +158,10 @@ void processCommand() {
             comm.sendStatus(state, control_mode, position, velocity,
                           current, voltage, enabled, calibrated);
 
-            if (DEBUG_SERIAL) {
-                Serial.println("STATUS");
+            if (g_debug_serial) {
+                Serial.print("STATUS - Encoder pos: ");
+                Serial.print(position, 2);
+                Serial.println("°");
             }
             break;
         }
@@ -162,7 +171,7 @@ void processCommand() {
             if (comm.getCommandData(&cmd)) {
                 comm.sendPingResponse(cmd.echo_value);
 
-                if (DEBUG_SERIAL) {
+                if (g_debug_serial) {
                     Serial.print("PING: 0x");
                     Serial.println(cmd.echo_value, HEX);
                 }
@@ -179,7 +188,7 @@ void processCommand() {
                     motorControl.setControlMode(mode);
                     comm.sendOkResponse(cmd_id);
 
-                    if (DEBUG_SERIAL) {
+                    if (g_debug_serial) {
                         Serial.print("SET_MODE: ");
                         Serial.println(mode);
                     }
@@ -198,7 +207,7 @@ void processCommand() {
                 motorControl.setCurrentLimit(cmd.current_limit);
                 comm.sendOkResponse(cmd_id);
 
-                if (DEBUG_SERIAL) {
+                if (g_debug_serial) {
                     Serial.print("SET_CURRENT_LIMIT: ");
                     Serial.println(cmd.current_limit);
                 }
@@ -209,7 +218,7 @@ void processCommand() {
         }
 
         case CMD_CALIBRATE: {
-            if (DEBUG_SERIAL) {
+            if (g_debug_serial) {
                 Serial.println("CALIBRATE");
             }
 
@@ -244,7 +253,7 @@ void processCommand() {
 
                 comm.sendOkResponse(cmd_id);
 
-                if (DEBUG_SERIAL) {
+                if (g_debug_serial) {
                     Serial.print("SET_PID: type=");
                     Serial.println(cmd.controller_type);
                 }
@@ -257,7 +266,7 @@ void processCommand() {
         default:
             comm.sendErrorResponse(cmd_id, ERR_INVALID_COMMAND);
 
-            if (DEBUG_SERIAL) {
+            if (g_debug_serial) {
                 Serial.print("Unknown command: 0x");
                 Serial.println(cmd_id, HEX);
             }
@@ -271,18 +280,21 @@ void processCommand() {
 
 void checkPositionReached() {
     static bool last_at_target = false;
-    bool at_target = motorControl.isAtTarget();
+    bool at_target = motorControl.isAtTarget();  // Uses ABSOLUTE ENCODER internally
 
     // Detect transition to target reached
     if (at_target && !last_at_target) {
-        float position = motorControl.getCurrentPositionDeg();
+        // Report ABSOLUTE ENCODER position (truth)
+        motorControl.updateEncoder();
+        float position = motorControl.getAbsolutePositionDeg();  // ABSOLUTE ENCODER
         comm.sendPositionReached(current_sequence_id, position);
 
-        if (DEBUG_SERIAL) {
+        if (g_debug_serial) {
             Serial.print("Position reached notification sent: seq=");
             Serial.print(current_sequence_id);
-            Serial.print(", pos=");
-            Serial.println(position);
+            Serial.print(", encoder pos=");
+            Serial.print(position, 2);
+            Serial.println("°");
         }
     }
 
@@ -482,7 +494,7 @@ void checkSerialInput() {
 
 void setup() {
     // Initialize debug serial if enabled
-    if (DEBUG_SERIAL) {
+    if (g_debug_serial) {
         Serial.begin(SERIAL_BAUD);
         while (!Serial && millis() < 3000) {
             delay(10);
@@ -558,7 +570,7 @@ void setup() {
 
 void loop() {
     // Check for interactive serial commands (typed by user)
-    if (DEBUG_SERIAL) {
+    if (g_debug_serial) {
         checkSerialInput();
     }
 
@@ -580,23 +592,25 @@ void loop() {
         last_heartbeat = millis();
 
         // CRITICAL: Force fresh encoder read from MT6701 via I2C
-        // This updates cached values so we see REAL-TIME encoder position
+        // This reads the ABSOLUTE ENCODER - the truth source for position
         motorControl.updateEncoder();
 
         // Read all values (grouped by source)
-        uint16_t raw_enc = motorControl.getRawEncoderCount();
-        float enc_deg = motorControl.getEncoderDegrees();
-        float foc_deg = motorControl.getCurrentPositionDeg();
+        uint16_t raw_enc = motorControl.getRawEncoderCount();           // ABSOLUTE ENCODER raw
+        float enc_deg = motorControl.getAbsolutePositionDeg();          // ABSOLUTE ENCODER (TRUTH)
+        float foc_deg = motorControl.getCurrentPositionDeg();           // SimpleFOC internal state
 
         Serial.print("[HEARTBEAT] ");
         Serial.print(millis() / 1000);
-        Serial.print("s | MT6701: Raw=");
+        Serial.print("s | MT6701 Encoder: Raw=");
         Serial.print(raw_enc);
         Serial.print(" Pos=");
         Serial.print(enc_deg, 1);
         Serial.print("° | SimpleFOC: Pos=");
         Serial.print(foc_deg, 1);
-        Serial.print("° | State: ");
+        Serial.print("° (diff=");
+        Serial.print(enc_deg - foc_deg, 1);
+        Serial.print("°) | State: ");
         switch (motorControl.getState()) {
             case STATE_IDLE: Serial.print("IDLE"); break;
             case STATE_MOVING: Serial.print("MOVING"); break;
@@ -612,27 +626,29 @@ void loop() {
     if (debug_detailed_status_enabled && (millis() - last_status_print > 10000)) {
         last_status_print = millis();
 
-        // Force fresh encoder read
+        // CRITICAL: Force fresh encoder read from ABSOLUTE ENCODER
         motorControl.updateEncoder();
 
         Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
         Serial.println("║                    DETAILED STATUS                             ║");
         Serial.println("╚════════════════════════════════════════════════════════════════╝");
 
-        // MT6701 MAGNETIC ENCODER (Direct I2C reads)
-        Serial.println("\n[MT6701 ENCODER] (Direct I2C from hardware)");
+        // MT6701 MAGNETIC ENCODER (Direct I2C reads - TRUTH SOURCE)
+        Serial.println("\n[MT6701 ABSOLUTE ENCODER] (Direct I2C - TRUTH SOURCE)");
         Serial.print("  Raw Count: ");
         Serial.print(motorControl.getRawEncoderCount());
         Serial.println(" (0-16383)");
         Serial.print("  Position:  ");
-        Serial.print(motorControl.getEncoderDegrees(), 2);
-        Serial.println("°");
+        Serial.print(motorControl.getAbsolutePositionDeg(), 2);
+        Serial.println("° ← USE THIS FOR POSITION CHECKS");
 
-        // SIMPLEFOC STATE (Motor control library internal state)
-        Serial.println("\n[SimpleFOC STATE] (Motor controller internal)");
+        // SIMPLEFOC STATE (Motor control library internal state - may lag/drift)
+        Serial.println("\n[SimpleFOC STATE] (Motor controller internal - may lag)");
         Serial.print("  Shaft Angle:    ");
         Serial.print(motorControl.getCurrentPositionDeg(), 2);
-        Serial.println("°");
+        Serial.print("° (diff from encoder: ");
+        Serial.print(motorControl.getAbsolutePositionDeg() - motorControl.getCurrentPositionDeg(), 2);
+        Serial.println("°)");
         Serial.print("  Shaft Velocity: ");
         Serial.print(motorControl.getCurrentVelocityDegPerSec(), 2);
         Serial.println("°/s");
