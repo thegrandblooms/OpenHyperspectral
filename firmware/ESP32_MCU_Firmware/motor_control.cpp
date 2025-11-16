@@ -987,8 +987,17 @@ bool MotorController::isAtTarget() {
         return false;
     }
 
-    float position_error_deg = abs(getCurrentPositionDeg() - target_position_deg);
-    float velocity_deg_s = abs(getCurrentVelocityDegPerSec());
+    // CRITICAL: Use ENCODER position, not SimpleFOC shaft_angle!
+    // SimpleFOC's shaft_angle may not update correctly, but the MT6701 absolute
+    // encoder is the source of truth for actual motor position.
+
+    // Update encoder to get fresh reading
+    encoder.update();
+    float current_position_deg = encoder.getDegrees();
+    float current_velocity_deg_s = encoder.getDegreesPerSecond();
+
+    float position_error_deg = abs(current_position_deg - target_position_deg);
+    float velocity_deg_s = abs(current_velocity_deg_s);
 
     // Consider target reached if position error is small and velocity is near zero
     return (position_error_deg < position_tolerance_deg) && (velocity_deg_s < VELOCITY_THRESHOLD_DEG);

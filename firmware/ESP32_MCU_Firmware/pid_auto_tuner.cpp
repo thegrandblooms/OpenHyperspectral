@@ -52,9 +52,10 @@ bool PIDAutoTuner::moveAndAnalyze(float target_deg, TuningMetrics& metrics) {
     metrics.score = 0;
     metrics.valid = false;
 
-    // SIMPLEFOC BOUNDARY: Read radians, convert to degrees
-    float initial_pos_rad = motor.shaft_angle;
-    float initial_pos_deg = initial_pos_rad * (180.0f / PI);
+    // CRITICAL: Use ENCODER position, not SimpleFOC shaft_angle!
+    // MT6701 absolute encoder is the source of truth for position
+    sensor.update();
+    float initial_pos_deg = sensor.getDegrees();
     float position_change_deg = target_deg - initial_pos_deg;
 
     // SIMPLEFOC BOUNDARY: Command movement in radians
@@ -76,9 +77,10 @@ bool PIDAutoTuner::moveAndAnalyze(float target_deg, TuningMetrics& metrics) {
         motor.loopFOC();
         motor.move();
 
-        // SIMPLEFOC BOUNDARY: Read radians, convert to degrees
-        float current_pos_rad = motor.shaft_angle;
-        float current_pos_deg = current_pos_rad * (180.0f / PI);
+        // CRITICAL: Use ENCODER position, not SimpleFOC shaft_angle!
+        // MT6701 absolute encoder is the source of truth for position
+        sensor.update();
+        float current_pos_deg = sensor.getDegrees();
         float error_deg = abs(target_deg - current_pos_deg);
 
         // Calculate overshoot (in degrees)
@@ -119,8 +121,8 @@ bool PIDAutoTuner::moveAndAnalyze(float target_deg, TuningMetrics& metrics) {
                 // Verify still settled
                 motor.loopFOC();
                 motor.move();
-                current_pos_rad = motor.shaft_angle;
-                current_pos_deg = current_pos_rad * (180.0f / PI);
+                sensor.update();
+                current_pos_deg = sensor.getDegrees();
                 error_deg = abs(target_deg - current_pos_deg);
 
                 if (error_deg < TUNING_SETTLING_TOLERANCE_DEG) {
@@ -144,11 +146,11 @@ bool PIDAutoTuner::moveAndAnalyze(float target_deg, TuningMetrics& metrics) {
     metrics.settling_time = settling_time_ms / 1000.0f;  // Convert to seconds
     metrics.rise_time = rise_time_ms / 1000.0f;
 
-    // Get final position (SIMPLEFOC BOUNDARY: convert to degrees)
+    // Get final position from ENCODER (source of truth)
     motor.loopFOC();
     motor.move();
-    float final_pos_rad = motor.shaft_angle;
-    float final_pos_deg = final_pos_rad * (180.0f / PI);
+    sensor.update();
+    float final_pos_deg = sensor.getDegrees();
     metrics.final_position = final_pos_deg;
     metrics.steady_state_error = abs(target_deg - final_pos_deg);
 
