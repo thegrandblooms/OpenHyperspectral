@@ -22,17 +22,7 @@
 #include "commands.h"
 #include "communication.h"
 #include "motor_control.h"
-#include "debug_globals.h"
-#include "motor_tests.h"
-
-//=============================================================================
-// GLOBAL DEBUG FLAGS (Runtime toggleable)
-//=============================================================================
-// These can be changed at runtime using the "debug <flag> <0/1>" command
-bool g_debug_serial = DEBUG_SERIAL_DEFAULT;
-bool g_debug_motor = DEBUG_MOTOR_DEFAULT;
-bool g_debug_comm = DEBUG_COMM_DEFAULT;
-bool g_debug_heartbeat = DEBUG_HEARTBEAT_DEFAULT;
+#include "tests.h"  // Test and diagnostic functions
 
 //=============================================================================
 // GLOBAL OBJECTS
@@ -46,6 +36,10 @@ uint16_t current_sequence_id = 0;
 unsigned long last_update_time = 0;
 unsigned long last_status_print = 0;
 unsigned long last_heartbeat = 0;
+
+// Debug control (runtime toggleable)
+bool debug_heartbeat_enabled = DEBUG_HEARTBEAT;
+bool debug_detailed_status_enabled = DEBUG_SERIAL;
 
 // Serial command buffer for interactive testing
 String serialCommandBuffer = "";
@@ -308,222 +302,9 @@ void checkPositionReached() {
 }
 
 //=============================================================================
-// I2C SCANNER UTILITY
+// SERIAL COMMAND PROCESSING (Test functions moved to tests.cpp)
 //=============================================================================
 
-void scanI2C() {
-    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
-    Serial.println("║                      I2C Scanner                               ║");
-    Serial.println("╚════════════════════════════════════════════════════════════════╝");
-    Serial.print("Scanning I2C bus (SDA=GPIO");
-    Serial.print(ENCODER_SDA);
-    Serial.print(", SCL=GPIO");
-    Serial.print(ENCODER_SCL);
-    Serial.println(")...\n");
-
-    byte count = 0;
-    for (byte i = 1; i < 127; i++) {
-        Wire.beginTransmission(i);
-        byte error = Wire.endTransmission();
-
-        if (error == 0) {
-            Serial.print("Found I2C device at 0x");
-            if (i < 16) Serial.print("0");
-            Serial.print(i, HEX);
-
-            // Identify known devices
-            if (i == 0x06) {
-                Serial.print(" (MT6701 encoder - DETECTED!)");
-            } else if (i == 0x15) {
-                Serial.print(" (CST816D touch controller)");
-            } else if (i == 0x6B) {
-                Serial.print(" (QMI8658 IMU)");
-            }
-            Serial.println();
-            count++;
-        }
-    }
-
-    if (count == 0) {
-        Serial.println("⚠ WARNING: No I2C devices found!");
-        Serial.println("Check wiring:");
-        Serial.print("  - 3V3 → MT6701 VDD\n");
-        Serial.print("  - GND → MT6701 GND\n");
-        Serial.print("  - GPIO47 → MT6701 SDA\n");
-        Serial.print("  - GPIO48 → MT6701 SCL\n");
-    } else {
-        Serial.print("\nTotal devices found: ");
-        Serial.println(count);
-    }
-    Serial.println();
-}
-
-//=============================================================================
-// INTERACTIVE SERIAL COMMANDS (for testing)
-//=============================================================================
-
-void printHelp() {
-    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
-    Serial.println("║          OpenHyperspectral Motor Controller - Help            ║");
-    Serial.println("╚════════════════════════════════════════════════════════════════╝");
-    Serial.println("\nInteractive Test Commands (type and press Enter):");
-    Serial.println("  h, help        - Show this help menu");
-    Serial.println("  s, status      - Print current motor status");
-    Serial.println("  i, info        - Show system information");
-    Serial.println("  scan           - Scan I2C bus for encoder (MT6701)");
-    Serial.println("");
-    Serial.println("Motor Control:");
-    Serial.println("  e, enable      - Enable motor");
-    Serial.println("  d, disable     - Disable motor");
-    Serial.println("  c, calibrate   - Run motor calibration");
-    Serial.println("  p, pidtune     - Run PID auto-tuning (after calibration)");
-    Serial.println("  home           - Set current position as home");
-    Serial.println("  stop           - Stop motor movement");
-    Serial.println("  m <angle>      - Move to angle (e.g., 'm 3.14' for π radians)");
-    Serial.println("  v <velocity>   - Set velocity (e.g., 'v 10.0' rad/s)");
-    Serial.println("  a <accel>      - Set acceleration (e.g., 'a 5.0' rad/s²)");
-    Serial.println("  mode <0-2>     - Set control mode (0=position, 1=velocity, 2=torque)");
-    Serial.println("");
-    Serial.println("Testing:");
-    Serial.println("  test           - Run full test (calibration + PID tuning + motor test)");
-    Serial.println("  motor_test     - Run motor movement test (auto-enables motor)");
-    Serial.println("  encoder_test   - Test encoder readings (press any key to stop)");
-    Serial.println("");
-    Serial.println("Debug Control:");
-    Serial.println("  debug              - Show current debug settings");
-    Serial.println("  debug all <0/1>    - Toggle all debug output (0=off, 1=on)");
-    Serial.println("  debug serial <0/1> - Toggle serial debug");
-    Serial.println("  debug motor <0/1>  - Toggle motor debug");
-    Serial.println("  debug comm <0/1>   - Toggle communication debug");
-    Serial.println("  debug heart <0/1>  - Toggle heartbeat messages");
-    Serial.println("\nBinary Protocol Commands:");
-    Serial.println("  The controller also accepts binary commands via SerialTransfer");
-    Serial.println("  Use the Python/PC software for full protocol communication");
-    Serial.println("\n");
-}
-
-void printSystemInfo() {
-    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
-    Serial.println("║                    System Information                          ║");
-    Serial.println("╚════════════════════════════════════════════════════════════════╝");
-    Serial.print("Firmware Version: 1.0.0\n");
-    Serial.print("Board: ESP32-S3-Touch-LCD-2 (Waveshare)\n");
-    Serial.print("Chip Model: ");
-    Serial.println(ESP.getChipModel());
-    Serial.print("CPU Frequency: ");
-    Serial.print(ESP.getCpuFreqMHz());
-    Serial.println(" MHz");
-    Serial.print("Flash Size: ");
-    Serial.print(ESP.getFlashChipSize() / 1024 / 1024);
-    Serial.println(" MB");
-    Serial.print("Free Heap: ");
-    Serial.print(ESP.getFreeHeap() / 1024);
-    Serial.println(" KB");
-    Serial.print("Uptime: ");
-    Serial.print(millis() / 1000);
-    Serial.println(" seconds");
-
-    Serial.println("\n--- Motor Configuration ---");
-    Serial.print("Pole Pairs: ");
-    Serial.println(POLE_PAIRS);
-    Serial.print("Encoder PPR: ");
-    Serial.println(ENCODER_PPR);
-    Serial.print("Power Supply: ");
-    Serial.print(VOLTAGE_PSU);
-    Serial.println(" V");
-    Serial.print("Current Limit: ");
-    Serial.print(CURRENT_LIMIT);
-    Serial.println(" A");
-    Serial.print("Max Velocity: ");
-    Serial.print(MAX_VELOCITY);
-    Serial.println(" rad/s");
-
-    Serial.println("\n--- Pin Configuration ---");
-    Serial.print("Motor Driver (SimpleFOC Mini):\n");
-    Serial.print("  EN=GPIO");
-    Serial.print(MOTOR_ENABLE);
-    Serial.print(", IN1=GPIO");
-    Serial.print(MOTOR_PWM_A);
-    Serial.print(", IN2=GPIO");
-    Serial.print(MOTOR_PWM_B);
-    Serial.print(", IN3=GPIO");
-    Serial.println(MOTOR_PWM_C);
-    Serial.print("  nFT=GPIO");
-    Serial.print(MOTOR_FAULT);
-    Serial.print(", nRT=GPIO");
-    Serial.println(MOTOR_RESET);
-    Serial.print("Encoder (MT6701 I2C):\n");
-    Serial.print("  SDA=GPIO");
-    Serial.print(ENCODER_SDA);
-    Serial.print(", SCL=GPIO");
-    Serial.print(ENCODER_SCL);
-    Serial.print(", Addr=0x");
-    Serial.println(ENCODER_I2C_ADDR, HEX);
-    Serial.println();
-}
-
-void printStatus() {
-    Serial.println("\n--- Motor Status ---");
-
-    // CRITICAL: Force fresh encoder read for accurate position
-    motorControl.updateEncoder();
-
-    // Show BOTH absolute encoder and SimpleFOC positions for comparison
-    float abs_pos = motorControl.getAbsolutePositionDeg();     // ABSOLUTE ENCODER (MT6701 - TRUTH)
-    float foc_pos = motorControl.getCurrentPositionDeg();      // SimpleFOC internal state
-
-    Serial.print("Position (Absolute Encoder): ");
-    Serial.print(abs_pos, 2);
-    Serial.println("° ← TRUTH from MT6701");
-
-    Serial.print("Position (SimpleFOC):        ");
-    Serial.print(foc_pos, 2);
-    Serial.print("° (diff: ");
-    Serial.print(abs_pos - foc_pos, 2);
-    Serial.println("°)");
-
-    Serial.print("Velocity: ");
-    Serial.print(motorControl.getCurrentVelocityDegPerSec(), 2);
-    Serial.println("°/s");
-    Serial.print("Current: ");
-    Serial.print(motorControl.getCurrent(), 3);
-    Serial.println(" A");
-    Serial.print("Voltage: ");
-    Serial.print(motorControl.getVoltage(), 2);
-    Serial.println(" V");
-    Serial.print("State: ");
-    switch (motorControl.getState()) {
-        case STATE_IDLE: Serial.println("IDLE"); break;
-        case STATE_MOVING: Serial.println("MOVING"); break;
-        case STATE_ERROR: Serial.println("ERROR"); break;
-        case STATE_CALIBRATING: Serial.println("CALIBRATING"); break;
-        default: Serial.println("UNKNOWN");
-    }
-    Serial.print("Control Mode: ");
-    switch (motorControl.getControlMode()) {
-        case MODE_POSITION: Serial.println("POSITION"); break;
-        case MODE_VELOCITY: Serial.println("VELOCITY"); break;
-        case MODE_TORQUE: Serial.println("TORQUE"); break;
-        default: Serial.println("UNKNOWN");
-    }
-    Serial.print("Motor Enabled: ");
-    Serial.println(motorControl.isEnabled() ? "YES" : "NO");
-    Serial.print("Calibrated: ");
-    Serial.println(motorControl.isCalibrated() ? "YES" : "NO");
-    Serial.print("At Target: ");
-    Serial.println(motorControl.isAtTarget() ? "YES" : "NO");
-
-    // Raw encoder data
-    Serial.print("Raw Encoder: ");
-    Serial.print(motorControl.getRawEncoderCount());
-    Serial.println(" (0-16383)");
-    Serial.println();
-}
-
-// Test functions moved to motor_tests.h
-// - runEncoderTest()
-// - runMotorTest()
-// - runFullTest()
 
 void processSerialCommand(String cmd) {
     cmd.trim();
@@ -539,12 +320,12 @@ void processSerialCommand(String cmd) {
     String command = (spaceIndex > 0) ? cmd.substring(0, spaceIndex) : cmd;
     String args = (spaceIndex > 0) ? cmd.substring(spaceIndex + 1) : "";
 
-    // Process commands
+    // Process commands (test functions in tests.cpp)
     if (command == "h" || command == "help") {
         printHelp();
     }
     else if (command == "s" || command == "status") {
-        printStatus();
+        printStatus(motorControl);
     }
     else if (command == "i" || command == "info") {
         printSystemInfo();
@@ -643,68 +424,45 @@ void processSerialCommand(String cmd) {
         }
     }
     else if (command == "test") {
-        runFullTest();
+        runFullTest(motorControl);
     }
     else if (command == "motor_test") {
-        runMotorTest();
+        runMotorTest(motorControl);
     }
     else if (command == "encoder_test") {
-        runEncoderTest();
+        runEncoderTest(motorControl);
     }
     else if (command == "debug") {
-        // Parse debug subcommand
-        if (args.length() == 0) {
-            // Show current debug settings
-            Serial.println("\n--- Debug Settings (Runtime Toggleable) ---");
-            Serial.print("Serial:    ");
-            Serial.println(g_debug_serial ? "ON" : "OFF");
-            Serial.print("Motor:     ");
-            Serial.println(g_debug_motor ? "ON" : "OFF");
-            Serial.print("Comm:      ");
-            Serial.println(g_debug_comm ? "ON" : "OFF");
-            Serial.print("Heartbeat: ");
-            Serial.println(g_debug_heartbeat ? "ON" : "OFF");
-            Serial.println("\nUsage: debug <flag> <0/1>");
-            Serial.println("  Flags: all, serial, motor, comm, heart");
-        } else {
-            // Parse "debug <flag> <value>"
-            int spaceIndex = args.indexOf(' ');
-            String flag = (spaceIndex > 0) ? args.substring(0, spaceIndex) : args;
-            String value = (spaceIndex > 0) ? args.substring(spaceIndex + 1) : "";
-
-            if (value.length() > 0) {
-                bool enabled = (value == "1" || value == "on" || value == "true");
-
-                if (flag == "all") {
-                    g_debug_serial = enabled;
-                    g_debug_motor = enabled;
-                    g_debug_comm = enabled;
-                    g_debug_heartbeat = enabled;
-                    Serial.print("All debug flags set to: ");
-                    Serial.println(enabled ? "ON" : "OFF");
-                } else if (flag == "serial") {
-                    g_debug_serial = enabled;
-                    Serial.print("Serial debug: ");
-                    Serial.println(enabled ? "ON" : "OFF");
-                } else if (flag == "motor") {
-                    g_debug_motor = enabled;
-                    Serial.print("Motor debug: ");
-                    Serial.println(enabled ? "ON" : "OFF");
-                } else if (flag == "comm") {
-                    g_debug_comm = enabled;
-                    Serial.print("Comm debug: ");
-                    Serial.println(enabled ? "ON" : "OFF");
-                } else if (flag == "heart" || flag == "heartbeat") {
-                    g_debug_heartbeat = enabled;
-                    Serial.print("Heartbeat: ");
-                    Serial.println(enabled ? "ON" : "OFF");
-                } else {
-                    Serial.println("Unknown debug flag. Use: all, serial, motor, comm, heart");
-                }
+        if (args.length() > 0) {
+            int level = args.toInt();
+            if (level == 0) {
+                // Quiet mode - disable heartbeat and detailed status
+                debug_heartbeat_enabled = false;
+                debug_detailed_status_enabled = false;
+                Serial.println("Debug mode: QUIET (heartbeat and detailed status disabled)");
+            } else if (level == 1) {
+                // Verbose mode - enable heartbeat and detailed status
+                debug_heartbeat_enabled = true;
+                debug_detailed_status_enabled = true;
+                Serial.println("Debug mode: VERBOSE (heartbeat and detailed status enabled)");
+            } else if (level == 2) {
+                // Heartbeat only
+                debug_heartbeat_enabled = true;
+                debug_detailed_status_enabled = false;
+                Serial.println("Debug mode: HEARTBEAT ONLY");
             } else {
-                Serial.println("Error: Please specify value (0/1 or on/off)");
-                Serial.println("Example: debug serial 0");
+                Serial.println("Error: Debug level must be 0 (quiet), 1 (verbose), or 2 (heartbeat only)");
             }
+        } else {
+            Serial.println("\n=== Debug Status ===");
+            Serial.print("Heartbeat (every 1s):         ");
+            Serial.println(debug_heartbeat_enabled ? "ENABLED" : "DISABLED");
+            Serial.print("Detailed Status (every 10s):  ");
+            Serial.println(debug_detailed_status_enabled ? "ENABLED" : "DISABLED");
+            Serial.println("\nUsage: debug <level>");
+            Serial.println("  0 = Quiet (all debug output off)");
+            Serial.println("  1 = Verbose (all debug output on)");
+            Serial.println("  2 = Heartbeat only");
         }
     }
     else {
@@ -829,8 +587,8 @@ void loop() {
         checkPositionReached();
     }
 
-    // Periodic heartbeat message
-    if (g_debug_heartbeat && (millis() - last_heartbeat > HEARTBEAT_INTERVAL_MS)) {
+    // Periodic heartbeat message (toggle with 'debug' command)
+    if (debug_heartbeat_enabled && (millis() - last_heartbeat > HEARTBEAT_INTERVAL_MS)) {
         last_heartbeat = millis();
 
         // CRITICAL: Force fresh encoder read from MT6701 via I2C
@@ -864,8 +622,8 @@ void loop() {
         Serial.println(motorControl.isEnabled() ? "Y" : "N");
     }
 
-    // Periodic detailed status printing for debugging
-    if (g_debug_serial && (millis() - last_status_print > 10000)) {
+    // Periodic detailed status printing (toggle with 'debug' command)
+    if (debug_detailed_status_enabled && (millis() - last_status_print > 10000)) {
         last_status_print = millis();
 
         // CRITICAL: Force fresh encoder read from ABSOLUTE ENCODER
