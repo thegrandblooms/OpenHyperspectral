@@ -59,7 +59,7 @@ void processCommand() {
                 motorControl.moveToPosition(cmd.position);
                 comm.sendOkResponse(cmd_id);
 
-                if (g_debug_serial) {
+                if (DEBUG_SERIAL) {
                     Serial.print("MOVE_TO: position=");
                     Serial.print(cmd.position);
                     Serial.print(", seq=");
@@ -77,7 +77,7 @@ void processCommand() {
                 motorControl.setVelocity(cmd.velocity);
                 comm.sendOkResponse(cmd_id);
 
-                if (g_debug_serial) {
+                if (DEBUG_SERIAL) {
                     Serial.print("SET_SPEED: ");
                     Serial.println(cmd.velocity);
                 }
@@ -93,7 +93,7 @@ void processCommand() {
                 motorControl.setAcceleration(cmd.acceleration);
                 comm.sendOkResponse(cmd_id);
 
-                if (g_debug_serial) {
+                if (DEBUG_SERIAL) {
                     Serial.print("SET_ACCEL: ");
                     Serial.println(cmd.acceleration);
                 }
@@ -107,7 +107,7 @@ void processCommand() {
             motorControl.stop();
             comm.sendOkResponse(cmd_id);
 
-            if (g_debug_serial) {
+            if (DEBUG_SERIAL) {
                 Serial.println("STOP");
             }
             break;
@@ -117,7 +117,7 @@ void processCommand() {
             motorControl.setHome();
             comm.sendOkResponse(cmd_id);
 
-            if (g_debug_serial) {
+            if (DEBUG_SERIAL) {
                 Serial.println("HOME");
             }
             break;
@@ -127,7 +127,7 @@ void processCommand() {
             motorControl.enable();
             comm.sendOkResponse(cmd_id);
 
-            if (g_debug_serial) {
+            if (DEBUG_SERIAL) {
                 Serial.println("ENABLE");
             }
             break;
@@ -137,7 +137,7 @@ void processCommand() {
             motorControl.disable();
             comm.sendOkResponse(cmd_id);
 
-            if (g_debug_serial) {
+            if (DEBUG_SERIAL) {
                 Serial.println("DISABLE");
             }
             break;
@@ -158,7 +158,7 @@ void processCommand() {
             comm.sendStatus(state, control_mode, position, velocity,
                           current, voltage, enabled, calibrated);
 
-            if (g_debug_serial) {
+            if (DEBUG_SERIAL) {
                 Serial.print("STATUS - Encoder pos: ");
                 Serial.print(position, 2);
                 Serial.println("°");
@@ -171,7 +171,7 @@ void processCommand() {
             if (comm.getCommandData(&cmd)) {
                 comm.sendPingResponse(cmd.echo_value);
 
-                if (g_debug_serial) {
+                if (DEBUG_SERIAL) {
                     Serial.print("PING: 0x");
                     Serial.println(cmd.echo_value, HEX);
                 }
@@ -188,7 +188,7 @@ void processCommand() {
                     motorControl.setControlMode(mode);
                     comm.sendOkResponse(cmd_id);
 
-                    if (g_debug_serial) {
+                    if (DEBUG_SERIAL) {
                         Serial.print("SET_MODE: ");
                         Serial.println(mode);
                     }
@@ -207,7 +207,7 @@ void processCommand() {
                 motorControl.setCurrentLimit(cmd.current_limit);
                 comm.sendOkResponse(cmd_id);
 
-                if (g_debug_serial) {
+                if (DEBUG_SERIAL) {
                     Serial.print("SET_CURRENT_LIMIT: ");
                     Serial.println(cmd.current_limit);
                 }
@@ -218,7 +218,7 @@ void processCommand() {
         }
 
         case CMD_CALIBRATE: {
-            if (g_debug_serial) {
+            if (DEBUG_SERIAL) {
                 Serial.println("CALIBRATE");
             }
 
@@ -253,7 +253,7 @@ void processCommand() {
 
                 comm.sendOkResponse(cmd_id);
 
-                if (g_debug_serial) {
+                if (DEBUG_SERIAL) {
                     Serial.print("SET_PID: type=");
                     Serial.println(cmd.controller_type);
                 }
@@ -266,7 +266,7 @@ void processCommand() {
         default:
             comm.sendErrorResponse(cmd_id, ERR_INVALID_COMMAND);
 
-            if (g_debug_serial) {
+            if (DEBUG_SERIAL) {
                 Serial.print("Unknown command: 0x");
                 Serial.println(cmd_id, HEX);
             }
@@ -289,7 +289,7 @@ void checkPositionReached() {
         float position = motorControl.getAbsolutePositionDeg();  // ABSOLUTE ENCODER
         comm.sendPositionReached(current_sequence_id, position);
 
-        if (g_debug_serial) {
+        if (DEBUG_SERIAL) {
             Serial.print("Position reached notification sent: seq=");
             Serial.print(current_sequence_id);
             Serial.print(", encoder pos=");
@@ -494,7 +494,7 @@ void checkSerialInput() {
 
 void setup() {
     // Initialize debug serial if enabled
-    if (g_debug_serial) {
+    if (DEBUG_SERIAL) {
         Serial.begin(SERIAL_BAUD);
         while (!Serial && millis() < 3000) {
             delay(10);
@@ -570,7 +570,7 @@ void setup() {
 
 void loop() {
     // Check for interactive serial commands (typed by user)
-    if (g_debug_serial) {
+    if (DEBUG_SERIAL) {
         checkSerialInput();
     }
 
