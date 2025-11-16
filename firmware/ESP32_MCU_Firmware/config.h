@@ -161,10 +161,18 @@
 //=============================================================================
 // DEBUGGING
 //=============================================================================
-#define DEBUG_SERIAL     true           // Enable debug output on serial
-#define DEBUG_MOTOR      true           // Enable detailed motor debug output
-#define DEBUG_COMM       true           // Enable communication debug output
-#define DEBUG_HEARTBEAT  true           // Enable heartbeat messages
-#define HEARTBEAT_INTERVAL_MS 10000     // Heartbeat message interval (10 seconds)
+// NOTE: Debug flags can be toggled at runtime using the "debug" command
+// These are just the default startup values
+#define DEBUG_SERIAL_DEFAULT     true           // Enable debug output on serial (default)
+#define DEBUG_MOTOR_DEFAULT      true           // Enable detailed motor debug output (default)
+#define DEBUG_COMM_DEFAULT       true           // Enable communication debug output (default)
+#define DEBUG_HEARTBEAT_DEFAULT  true           // Enable heartbeat messages (default)
+#define HEARTBEAT_INTERVAL_MS    10000          // Heartbeat message interval (10 seconds)
+
+// Legacy defines for backward compatibility during transition
+#define DEBUG_SERIAL     DEBUG_SERIAL_DEFAULT
+#define DEBUG_MOTOR      DEBUG_MOTOR_DEFAULT
+#define DEBUG_COMM       DEBUG_COMM_DEFAULT
+#define DEBUG_HEARTBEAT  DEBUG_HEARTBEAT_DEFAULT
 
 #endif // CONFIG_H

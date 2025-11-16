@@ -948,8 +948,17 @@ bool MotorController::autoTunePID(bool verbose) {
     return success;
 }
 
+float MotorController::getAbsolutePositionDeg() {
+    // ABSOLUTE ENCODER (MT6701): Direct hardware read - THIS IS TRUTH
+    // This bypasses SimpleFOC and reads the encoder directly via I2C
+    // Use this for position checking, not SimpleFOC's shaft_angle
+    return encoder.getDegrees();
+}
+
 float MotorController::getCurrentPositionDeg() {
     // SIMPLEFOC BOUNDARY: Read radians, return degrees
+    // WARNING: This is SimpleFOC's internal state, which may lag or drift!
+    // For accurate position, use getAbsolutePositionDeg() instead
     return radiansToDegrees(motor.shaft_angle);
 }
 
@@ -987,11 +996,34 @@ bool MotorController::isAtTarget() {
         return false;
     }
 
-    float position_error_deg = abs(getCurrentPositionDeg() - target_position_deg);
+    // CRITICAL: Use ABSOLUTE ENCODER for position checking, not SimpleFOC shaft_angle!
+    // SimpleFOC's shaft_angle may not update correctly, causing false "not at target" results
+    float absolute_position_deg = getAbsolutePositionDeg();  // Direct MT6701 encoder read
+    float position_error_deg = abs(absolute_position_deg - target_position_deg);
+
+    // Still use SimpleFOC velocity for motion detection (it's good at velocity estimation)
     float velocity_deg_s = abs(getCurrentVelocityDegPerSec());
 
     // Consider target reached if position error is small and velocity is near zero
-    return (position_error_deg < position_tolerance_deg) && (velocity_deg_s < VELOCITY_THRESHOLD_DEG);
+    bool at_target = (position_error_deg < position_tolerance_deg) && (velocity_deg_s < VELOCITY_THRESHOLD_DEG);
+
+    if (DEBUG_MOTOR && at_target) {
+        static unsigned long last_debug = 0;
+        if (millis() - last_debug > 1000) {  // Debug once per second
+            Serial.print("[AT_TARGET] Encoder: ");
+            Serial.print(absolute_position_deg, 2);
+            Serial.print("°, Target: ");
+            Serial.print(target_position_deg, 2);
+            Serial.print("°, Error: ");
+            Serial.print(position_error_deg, 2);
+            Serial.print("°, Vel: ");
+            Serial.print(velocity_deg_s, 2);
+            Serial.println("°/s");
+            last_debug = millis();
+        }
+    }
+
+    return at_target;
 }
 
 uint8_t MotorController::getState() {
