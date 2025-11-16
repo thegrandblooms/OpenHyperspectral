@@ -505,39 +505,23 @@ bool MotorController::runCalibration() {
     }
 
     // Note: initFOC() returns 1 on success, 0 on failure
-    // For absolute encoders, SimpleFOC's automatic detection sometimes fails
-    // Try manual alignment: provide zero offset and let initFOC determine direction
+    // For absolute encoders like MT6701, SimpleFOC can auto-detect alignment
     if (DEBUG_MOTOR) {
-        Serial.println("[FOC] Manual approach: Align sensor to electrical zero...");
-    }
-
-    // Get current sensor angle (SimpleFOC boundary - returns radians)
-    float sensor_angle_rad = encoder.getSensorAngle();
-
-    // Calculate electrical angle (mechanical angle * pole_pairs)
-    float electrical_angle_rad = normalizeRadians(sensor_angle_rad * POLE_PAIRS);
-
-    // Set zero electrical offset to current position
-    motor.zero_electric_angle = electrical_angle_rad;
-    motor.sensor_direction = Direction::CW;  // Try CW first (can be reversed if motor spins wrong way)
-
-    if (DEBUG_MOTOR) {
-        Serial.print("[FOC] Sensor angle: ");
-        Serial.print(sensor_angle_rad, 4);
+        Serial.println("[FOC] Calling initFOC() with automatic sensor alignment...");
+        Serial.print("[FOC] Pre-initFOC sensor angle: ");
+        float pre_angle = encoder.getSensorAngle();
+        Serial.print(pre_angle, 4);
         Serial.print(" rad (");
-        Serial.print(radiansToDegrees(sensor_angle_rad), 2);
+        Serial.print(radiansToDegrees(pre_angle), 2);
         Serial.println("°)");
-        Serial.print("[FOC] Electrical angle: ");
-        Serial.print(electrical_angle_rad, 4);
-        Serial.println(" rad");
-        Serial.print("[FOC] Zero electric offset set to: ");
-        Serial.print(motor.zero_electric_angle, 4);
-        Serial.println(" rad");
-        Serial.println("[FOC] Sensor direction set to: CW");
-        Serial.println("[FOC] Calling initFOC() - should skip direction detection...");
     }
 
-    // Now call initFOC() - it should just verify and not do direction detection
+    // Let SimpleFOC automatically align sensor to electrical zero
+    // For absolute encoders, this should:
+    // 1. Read current sensor position
+    // 2. Apply motor movement to find electrical zero
+    // 3. Calculate zero_electric_angle offset
+    // 4. Determine sensor_direction (CW/CCW)
     int foc_result = motor.initFOC();
 
     if (DEBUG_MOTOR) {
@@ -913,6 +897,11 @@ void MotorController::update() {
     if (!motor_calibrated) {
         return;
     }
+
+    // CRITICAL: Explicitly update encoder before FOC
+    // SimpleFOC *should* call sensor->update() automatically in loopFOC(),
+    // but we're seeing frozen encoder readings, so call it explicitly here
+    encoder.update();
 
     // SIMPLEFOC: Run FOC algorithm (current control)
     motor.loopFOC();
