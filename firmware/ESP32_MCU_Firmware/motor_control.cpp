@@ -476,13 +476,28 @@ bool MotorController::runCalibration() {
     }
     motor.enable();
 
+    // CRITICAL: Temporarily increase voltage for calibration
+    // Gimbal motors need higher voltage to overcome static friction during alignment
+    // Normal operation uses 6V, but calibration needs ~8-10V
+    float normal_voltage_limit = motor.voltage_limit;
+    motor.voltage_limit = 10.0f;  // Temporarily increase for calibration movement
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[FOC] Temporarily increasing voltage limit to ");
+        Serial.print(motor.voltage_limit);
+        Serial.println("V for calibration");
+    }
+
     // Run SimpleFOC calibration (aligns motor and encoder)
     if (DEBUG_MOTOR) {
         Serial.println("[FOC] Running motor alignment (initFOC)...");
         Serial.print("[DEBUG] Pre-initFOC encoder read: ");
         float pre_angle = encoder.getSensorAngle();
         Serial.print(pre_angle, 4);
-        Serial.println(" rad");
+        Serial.print(" rad (");
+        Serial.print(radiansToDegrees(pre_angle), 2);
+        Serial.print("°) Raw: ");
+        Serial.println(encoder.getRawCount());
         Serial.print("[DEBUG] Pre-initFOC shaft_angle: ");
         Serial.print(motor.shaft_angle, 4);
         Serial.println(" rad");
@@ -492,14 +507,20 @@ bool MotorController::runCalibration() {
         // Test: manually read sensor multiple times to check for consistency
         Serial.println("[DEBUG] Testing sensor consistency (5 reads):");
         for (int i = 0; i < 5; i++) {
+            encoder.update();  // Explicitly update before each read
             float test_angle = encoder.getSensorAngle();
+            uint16_t test_raw = encoder.getRawCount();
             Serial.print("  Read ");
             Serial.print(i+1);
             Serial.print(": ");
             Serial.print(test_angle, 4);
-            Serial.print(" rad (diff: ");
+            Serial.print(" rad (");
+            Serial.print(radiansToDegrees(test_angle), 2);
+            Serial.print("°) Raw: ");
+            Serial.print(test_raw);
+            Serial.print(" (diff: ");
             Serial.print((test_angle - pre_angle) * 180.0 / PI, 2);
-            Serial.println(" deg)");
+            Serial.println("°)");
             delay(50);
         }
     }
@@ -508,12 +529,15 @@ bool MotorController::runCalibration() {
     // For absolute encoders like MT6701, SimpleFOC can auto-detect alignment
     if (DEBUG_MOTOR) {
         Serial.println("[FOC] Calling initFOC() with automatic sensor alignment...");
-        Serial.print("[FOC] Pre-initFOC sensor angle: ");
+        encoder.update();  // Fresh read before initFOC
         float pre_angle = encoder.getSensorAngle();
+        uint16_t pre_raw = encoder.getRawCount();
+        Serial.print("[FOC] Pre-initFOC sensor angle: ");
         Serial.print(pre_angle, 4);
         Serial.print(" rad (");
         Serial.print(radiansToDegrees(pre_angle), 2);
-        Serial.println("°)");
+        Serial.print("°) Raw: ");
+        Serial.println(pre_raw);
     }
 
     // Let SimpleFOC automatically align sensor to electrical zero
@@ -527,18 +551,43 @@ bool MotorController::runCalibration() {
     if (DEBUG_MOTOR) {
         Serial.print("[FOC] initFOC() returned: ");
         Serial.println(foc_result);
+
+        // Update encoder and show post-calibration readings
+        encoder.update();
+        float post_angle = encoder.getSensorAngle();
+        uint16_t post_raw = encoder.getRawCount();
+
         Serial.print("[DEBUG] Post-initFOC encoder read: ");
-        Serial.print(encoder.getSensorAngle(), 4);
-        Serial.println(" rad");
+        Serial.print(post_angle, 4);
+        Serial.print(" rad (");
+        Serial.print(radiansToDegrees(post_angle), 2);
+        Serial.print("°) Raw: ");
+        Serial.println(post_raw);
         Serial.print("[DEBUG] Post-initFOC shaft_angle: ");
         Serial.print(motor.shaft_angle, 4);
-        Serial.println(" rad");
+        Serial.print(" rad (");
+        Serial.print(radiansToDegrees(motor.shaft_angle), 2);
+        Serial.println("°)");
 
         if (foc_result == 1) {
             Serial.println("[FOC] Motor alignment complete - SUCCESS");
+            Serial.print("[FOC] Zero electric angle: ");
+            Serial.print(motor.zero_electric_angle, 4);
+            Serial.println(" rad");
+            Serial.print("[FOC] Sensor direction: ");
+            Serial.println(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
         } else {
             Serial.println("[FOC] Motor alignment FAILED!");
         }
+    }
+
+    // Restore normal voltage limit for gimbal operation
+    motor.voltage_limit = normal_voltage_limit;
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[FOC] Restored voltage limit to ");
+        Serial.print(motor.voltage_limit);
+        Serial.println("V for normal operation");
     }
 
     // Disable motor after initFOC (will be re-enabled when user calls enable())
