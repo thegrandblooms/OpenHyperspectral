@@ -1015,7 +1015,7 @@ bool MotorController::isAtTarget() {
         static unsigned long last_debug = 0;
         if (millis() - last_debug > 1000) {  // Debug once per second
             Serial.print("[AT_TARGET] Encoder: ");
-            Serial.print(absolute_position_deg, 2);
+            Serial.print(current_position_deg, 2);
             Serial.print("°, Target: ");
             Serial.print(target_position_deg, 2);
             Serial.print("°, Error: ");
