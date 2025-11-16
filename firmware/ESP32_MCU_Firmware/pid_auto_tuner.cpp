@@ -84,16 +84,14 @@ bool PIDAutoTuner::moveAndAnalyze(float target_deg, TuningMetrics& metrics) {
 
     // Track movement
     while (millis() - start_time < TUNING_MOVEMENT_TIMEOUT) {
-        // CRITICAL: Update encoder BEFORE FOC loop
-        // This ensures SimpleFOC has fresh sensor data for control decisions
-        encoder.update();
-
-        // Run FOC loop
+        // Run FOC loop (SimpleFOC automatically calls sensor.update() inside loopFOC)
         motor.loopFOC();
         motor.move();
 
         // CRITICAL: Use ENCODER position, not SimpleFOC shaft_angle!
         // MT6701 absolute encoder is the source of truth for position
+        // Update encoder for OUR reading (SimpleFOC already updated it in loopFOC)
+        encoder.update();
         float current_pos_deg = ((MT6701Sensor&)encoder).getDegrees();
         float error_deg = abs(target_deg - current_pos_deg);
 
@@ -133,10 +131,10 @@ bool PIDAutoTuner::moveAndAnalyze(float target_deg, TuningMetrics& metrics) {
                 delay(TUNING_SETTLING_WINDOW);
 
                 // Verify still settled
-                // CRITICAL: Update encoder BEFORE FOC loop
-                encoder.update();
                 motor.loopFOC();
                 motor.move();
+                // Update encoder for OUR reading
+                encoder.update();
                 current_pos_deg = ((MT6701Sensor&)encoder).getDegrees();
                 error_deg = abs(target_deg - current_pos_deg);
 
@@ -162,10 +160,10 @@ bool PIDAutoTuner::moveAndAnalyze(float target_deg, TuningMetrics& metrics) {
     metrics.rise_time = rise_time_ms / 1000.0f;
 
     // Get final position from ENCODER (source of truth)
-    // CRITICAL: Update encoder BEFORE FOC loop
-    encoder.update();
     motor.loopFOC();
     motor.move();
+    // Update encoder for OUR reading
+    encoder.update();
     float final_pos_deg = ((MT6701Sensor&)encoder).getDegrees();
     metrics.final_position = final_pos_deg;
     metrics.steady_state_error = abs(target_deg - final_pos_deg);
