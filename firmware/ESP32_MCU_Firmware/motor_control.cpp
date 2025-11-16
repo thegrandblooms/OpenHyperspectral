@@ -932,6 +932,11 @@ uint8_t MotorController::getState() {
     return system_state;
 }
 
+void MotorController::updateEncoder() {
+    // Force fresh encoder read from I2C (updates cached values)
+    encoder.update();
+}
+
 uint16_t MotorController::getRawEncoderCount() {
     // Read raw encoder count (MINIMAL ABSTRACTION)
     return encoder.getRawCount();

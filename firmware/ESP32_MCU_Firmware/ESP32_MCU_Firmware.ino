@@ -471,7 +471,10 @@ void printStatus() {
     Serial.println(motorControl.isAtTarget() ? "YES" : "NO");
 
     // Debug: show direct encoder read vs SimpleFOC position
-    Serial.print("DEBUG - Direct encoder angle: ");
+    motorControl.updateEncoder();  // Force fresh read
+    Serial.print("DEBUG - Direct encoder: Raw=");
+    Serial.print(motorControl.getRawEncoderCount());
+    Serial.print(", Angle=");
     Serial.print(motorControl.getEncoderDegrees(), 2);
     Serial.println("°");
     Serial.println();
@@ -509,17 +512,23 @@ void runEncoderTest() {
         if (current_time - last_sample >= sample_interval) {
             last_sample = current_time;
 
+            // Force fresh encoder read from I2C
+            motorControl.updateEncoder();
+
+            uint16_t raw_count = motorControl.getRawEncoderCount();
             float encoder_angle = motorControl.getEncoderDegrees();
             float simplefoc_angle = motorControl.getCurrentPositionDeg();
             float time_sec = (current_time - start_time) / 1000.0;
 
             Serial.print("[");
             Serial.print(time_sec, 2);
-            Serial.print("s] Encoder: ");
-            Serial.print(encoder_angle, 4);
-            Serial.print(" rad | SimpleFOC: ");
-            Serial.print(simplefoc_angle, 4);
-            Serial.println(" rad");
+            Serial.print("s] Raw: ");
+            Serial.print(raw_count);
+            Serial.print(" | Encoder: ");
+            Serial.print(encoder_angle, 2);
+            Serial.print("° | SimpleFOC: ");
+            Serial.print(simplefoc_angle, 2);
+            Serial.println("°");
         }
 
         delay(1);
@@ -891,6 +900,10 @@ void loop() {
     // Periodic heartbeat message
     if (DEBUG_HEARTBEAT && (millis() - last_heartbeat > HEARTBEAT_INTERVAL_MS)) {
         last_heartbeat = millis();
+
+        // CRITICAL: Force fresh encoder read from MT6701 via I2C
+        // This updates cached values so we see REAL-TIME encoder position
+        motorControl.updateEncoder();
 
         // CRITICAL DIAGNOSTIC: Show BOTH raw encoder and SimpleFOC position
         uint16_t raw_enc = motorControl.getRawEncoderCount();

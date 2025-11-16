@@ -203,6 +203,7 @@ public:
     //=========================================================================
     // DIRECT ENCODER ACCESS (Bypass SimpleFOC - for debugging)
     //=========================================================================
+    void updateEncoder();                       // Force fresh encoder read from I2C
     uint16_t getRawEncoderCount();              // Raw encoder (0-16383)
     float getEncoderDegrees();                  // Direct encoder read (degrees)
 
