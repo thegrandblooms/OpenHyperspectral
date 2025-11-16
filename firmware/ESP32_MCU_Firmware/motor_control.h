@@ -189,15 +189,21 @@ public:
     //=========================================================================
     // STATE QUERIES (All in DEGREES unless otherwise noted)
     //=========================================================================
-    float getCurrentPositionDeg();              // Current position (degrees)
-    float getCurrentVelocityDegPerSec();        // Current velocity (deg/s)
+    // ABSOLUTE ENCODER POSITION (Direct hardware read - TRUTH SOURCE)
+    float getAbsolutePositionDeg();             // Absolute encoder position (degrees) - REAL position from MT6701
+
+    // SIMPLEFOC CONTROLLER STATE (Internal motor controller state)
+    float getCurrentPositionDeg();              // SimpleFOC shaft_angle (degrees) - may lag or drift
+    float getCurrentVelocityDegPerSec();        // SimpleFOC velocity (deg/s)
+
+    // OTHER STATE
     float getTargetPositionDeg();               // Target position (degrees)
     float getTargetVelocityDegPerSec();         // Target velocity (deg/s)
     float getCurrent();                         // Q-axis current (amps)
     float getVoltage();                         // Q-axis voltage (volts)
     bool isEnabled();
     bool isCalibrated();
-    bool isAtTarget();
+    bool isAtTarget();                          // Uses ABSOLUTE ENCODER position
     uint8_t getState();
 
     //=========================================================================
