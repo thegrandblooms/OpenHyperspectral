@@ -93,9 +93,12 @@ public:
     void init() override;
     float getSensorAngle() override;       // Returns RADIANS (SimpleFOC expects this)
     void update() override;                // Update cached values
-    int needsSearch() override;            // Return 0 (absolute encoder)
+    int needsSearch() override;            // Return 0 normally, 1 during calibration
     float getVelocity() override;          // Returns rad/s
     int32_t getFullRotations() { return 0; }  // Single-turn encoder
+
+    // Calibration mode control
+    void setCalibrationMode(bool enabled) { force_needs_search = enabled; }
 
     //=========================================================================
     // DIRECT ENCODER ACCESS (Our preferred interface - minimal abstraction)
@@ -121,6 +124,9 @@ private:
     // Previous values for velocity calculation
     float previous_degrees;
     unsigned long last_update_time;
+
+    // Calibration mode flag
+    bool force_needs_search;               // Force needsSearch()=1 during calibration
 };
 
 //=============================================================================
