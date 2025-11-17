@@ -13,6 +13,7 @@
 //
 // Available tests:
 // - runEncoderTest() - Test encoder readings in real-time
+// - runAlignmentTest() - Test motor alignment at known electrical angles (DIAGNOSTIC)
 // - runMotorTest() - Run basic motor movement sequence
 // - runFullTest() - Full system test (calibration + PID tuning + movement)
 //=============================================================================
@@ -88,6 +89,60 @@ void runEncoderTest() {
         }
 
         delay(1);
+    }
+
+    Serial.println();
+}
+
+//=============================================================================
+// MOTOR ALIGNMENT DIAGNOSTIC TEST
+//=============================================================================
+/**
+ * Test motor alignment by applying voltages at known electrical angles.
+ *
+ * This diagnostic test verifies that:
+ * 1. Motor responds to setPhaseVoltage() commands
+ * 2. Motor settles into stable positions (not oscillating)
+ * 3. Motor holds positions firmly (strong holding torque)
+ * 4. Encoder readings are consistent
+ *
+ * This should be run BEFORE manual calibration to verify hardware is working.
+ *
+ * Expected behavior:
+ * - Motor moves quickly when voltage changes
+ * - Motor settles into stable position within 500ms
+ * - Motor holds position firmly (try to rotate by hand - should resist)
+ * - No continuous oscillation
+ *
+ * If motor oscillates continuously, check:
+ * - Driver fault state
+ * - Power supply voltage
+ * - Common ground connection
+ * - Pole pairs setting (should be 7 for Mitoot 2804)
+ */
+void runAlignmentTest() {
+    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
+    Serial.println("║              Motor Alignment Diagnostic Test                   ║");
+    Serial.println("╚════════════════════════════════════════════════════════════════╝");
+    Serial.println("\nThis test applies voltage at known electrical angles.");
+    Serial.println("Motor should move quickly then HOLD each position FIRMLY.");
+    Serial.println("\nExpected behavior:");
+    Serial.println("  • Motor moves and settles within 500ms");
+    Serial.println("  • Strong holding torque (resists manual rotation)");
+    Serial.println("  • NO continuous oscillation");
+    Serial.println("\nIf motor oscillates, check hardware connections and settings.");
+    Serial.println("─────────────────────────────────────────────────────────────────\n");
+
+    // Run the test function from MotorController
+    bool success = motorControl.testMotorAlignment();
+
+    if (success) {
+        Serial.println("✓ Alignment test complete!");
+        Serial.println("\nIf motor held positions firmly, hardware is working correctly.");
+        Serial.println("You can now run calibration (type 'c' or 'calibrate').");
+    } else {
+        Serial.println("✗ Alignment test failed!");
+        Serial.println("\nCheck encoder connection and try again.");
     }
 
     Serial.println();
