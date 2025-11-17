@@ -152,9 +152,9 @@ Main Computer
 
 ```cpp
 // Motor and sensor objects
-BLDCMotor motor = BLDCMotor(pole_pairs);
+BLDCMotor motor = BLDCMotor(7);  // 7 pole pairs (Mitoot 2804)
 BLDCDriver3PWM driver = BLDCDriver3PWM(pwmA, pwmB, pwmC, enable);
-Encoder encoder = Encoder(encoderA, encoderB, ppr);
+MT6701Sensor encoder = MT6701Sensor(0x06);  // Custom I2C wrapper
 
 // Control modes
 - Position control: For precise 1D linear scanning
@@ -162,13 +162,37 @@ Encoder encoder = Encoder(encoderA, encoderB, ppr);
 - Torque control: For force-limited applications
 ```
 
+### MT6701 I2C Calibration
+
+**Problem**: SimpleFOC's automatic `initFOC()` calibration fails with MT6701 I2C sensors due to I2C timing (too slow for SimpleFOC's movement detection algorithm).
+
+**Solution**: Manual calibration using `setPhaseVoltage()` at known electrical angles:
+
+1. Apply voltage at 270° electrical → motor physically aligns
+2. Wait 700ms for settling
+3. Read encoder position (motor is at known electrical angle)
+4. Repeat at 0° electrical
+5. Calculate `zero_electric_angle` and `sensor_direction` from measurements
+6. Set calibration values in SimpleFOC
+7. Call `initFOC()` → skips alignment, returns success
+
+**Why this works**:
+- Uses **static fields** (not rotation) → motor doesn't oscillate
+- Long settling times → motor fully stops before reading
+- No movement detection required → I2C speed irrelevant
+
+**Commands**:
+- `align` - Diagnostic test (verifies motor holds positions before calibration)
+- `calibrate` - Run manual calibration
+
 ### Control Flow
 
 1. **Initialization**: Setup SimpleFOC motor, driver, encoder
-2. **Command Reception**: Parse SerialTransfer packets
-3. **Motion Execution**: Use SimpleFOC position/velocity control
-4. **Position Monitoring**: Check if target reached
-5. **Notification**: Send position reached message to PC
+2. **Manual Calibration**: Calculate FOC calibration constants
+3. **Command Reception**: Parse SerialTransfer packets
+4. **Motion Execution**: Use SimpleFOC position/velocity control
+5. **Position Monitoring**: Check if target reached (using absolute encoder)
+6. **Notification**: Send position reached message to PC
 
 ## Directory Structure
 
@@ -239,8 +263,8 @@ OpenHyperspectral/
 - ✅ Serial communication protocol
 - ✅ Python motor controller
 - ✅ Basic position control
-- ⏳ Fix compilation issues
-- ⏳ MT6701 encoder integration
+- ✅ MT6701 I2C encoder integration
+- ✅ Manual calibration for MT6701 (bypasses SimpleFOC auto-calibration issues)
 
 ### Phase 2: Camera Synchronization
 - [ ] Position callbacks in Python
@@ -283,44 +307,62 @@ OpenHyperspectral/
 
 ## Configuration
 
-### Hardware Pin Mapping (ESP32-S3)
+### Hardware Pin Mapping (ESP32-S3-Touch-LCD-2)
 ```cpp
-// Motor driver pins (3-phase PWM) - Arduino framework style
-#define MOTOR_PWM_A  10         // GPIO10 - Phase A PWM
-#define MOTOR_PWM_B  11         // GPIO11 - Phase B PWM
-#define MOTOR_PWM_C  12         // GPIO12 - Phase C PWM
-#define MOTOR_ENABLE 13         // GPIO13 - Enable pin
+// MT6701 Encoder (I2C interface - ABSOLUTE POSITION)
+#define ENCODER_SDA  47         // GPIO47 - I2C data
+#define ENCODER_SCL  48         // GPIO48 - I2C clock
+// I2C address: 0x06 (MT6701 default)
 
-// MT6701 Encoder pins
-// Option 1: ABZ interface (incremental)
-#define ENCODER_A    14         // GPIO14 - Channel A
-#define ENCODER_B    15         // GPIO15 - Channel B
-#define ENCODER_I    -1         // Index not used
+// SimpleFOC Motor Driver (DRV8313)
+#define MOTOR_EN     15         // GPIO15 - Enable
+#define MOTOR_IN1    13         // GPIO13 - Phase 1 PWM
+#define MOTOR_IN2    11         // GPIO11 - Phase 2 PWM
+#define MOTOR_IN3    12         // GPIO12 - Phase 3 PWM
 
-// Option 2: I2C interface (absolute position)
-// #define ENCODER_SDA  21      // I2C data
-// #define ENCODER_SCL  22      // I2C clock
+// Optional monitoring/control
+#define MOTOR_FAULT  14         // GPIO14 - nFT (fault detection)
+#define MOTOR_RESET  9          // GPIO9  - nRT (driver reset)
 
-// Display pins (built-in on Waveshare board)
-// Already configured by board support package
+// Display (built-in on Waveshare board)
+// ST7789 LCD 240×320 via SPI (managed by board support package)
+// Touch: CST816D via I2C
 
-// Serial communication
+// Serial communication (USB CDC)
 #define SERIAL_BAUD  115200
 ```
 
+**Pin Clustering**: Pins are physically grouped for clean wiring:
+- **Encoder cluster** (top right): GPIO47/48 + 3V3 + GND
+- **Motor driver cluster** (middle right): GPIO15,13,11,12,14,9 + GND
+
 ### Motor Configuration
 ```cpp
-// BLDC motor parameters
-#define POLE_PAIRS   7          // Motor pole pairs (count magnets / 2)
-#define ENCODER_PPR  2048       // Encoder pulses per revolution
+// BLDC motor parameters (Mitoot 2804 100kv Gimbal Motor)
+#define POLE_PAIRS   7          // Motor pole pairs (Mitoot 2804: 7 pole pairs)
+#define ENCODER_PPR  16384      // MT6701 14-bit resolution (2^14 = 16384 counts/rev)
 #define VOLTAGE_PSU  12.0       // Power supply voltage (V)
-#define CURRENT_LIMIT 1.0       // Current limit (A)
+#define CURRENT_LIMIT 1.0       // Current limit (A) - gimbal motors are low current
 
-// Motion parameters for 1D scanning
-#define MAX_VELOCITY 100.0      // Max velocity (rad/s)
-#define MAX_ACCELERATION 50.0   // Max acceleration (rad/s²)
-#define POSITION_TOLERANCE 0.1  // Position reached tolerance (rad)
+// Motion parameters for hyperspectral scanning
+#define MAX_VELOCITY 100.0      // Max velocity (deg/s) - slow for precision
+#define MAX_ACCELERATION 50.0   // Max acceleration (deg/s²)
+#define POSITION_TOLERANCE 0.5  // Position reached tolerance (degrees)
 ```
+
+**Motor Specifications**:
+- **Type**: Mitoot 2804 100kv Brushless Gimbal Motor
+- **Pole pairs**: 7 (14 magnets)
+- **Resistance**: High (>10Ω) - designed for gimbal applications
+- **KV rating**: 100kv (low speed, high torque)
+- **Driver**: SimpleFOC Mini v1 (DRV8313-based, 2A continuous/phase)
+
+**Encoder Specifications**:
+- **Type**: MT6701 14-bit Absolute Magnetic Encoder
+- **Interface**: I2C (address 0x06)
+- **Resolution**: 14-bit (16384 positions/revolution = 0.022° precision)
+- **Update rate**: ~50-100Hz via I2C (sufficient for gimbal motors)
+- **Features**: Absolute position (no homing required), field strength monitoring
 
 ## Notes
 
