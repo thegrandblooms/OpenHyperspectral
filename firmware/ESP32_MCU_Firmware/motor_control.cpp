@@ -496,7 +496,7 @@ bool MotorController::testMotorAlignment() {
     motor.enable();
 
     // Test angles: 0°, 90°, 180°, 270° electrical
-    float test_angles[] = {0, PI_2, PI, _3PI_2};
+    float test_angles[] = {0, _PI_2, PI, _3PI_2};
     const char* angle_names[] = {"0°", "90°", "180°", "270°"};
 
     for (int i = 0; i < 4; i++) {

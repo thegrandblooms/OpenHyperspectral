@@ -1,7 +1,12 @@
-# Motor Control System - Comprehensive Reset Summary
+# Motor Control System - Development Log
 ## Executive Summary
-**Status: Non-functional** - Motor oscillates between electrical poles instead of smooth FOC control. SimpleFOC's `initFOC()` consistently fails, preventing any motor movement.
-**Root Cause:** SimpleFOC alignment/calibration is failing, so `zero_electric_angle` is never calculated. Without this, FOC cannot work.
+**Status: Manual Calibration Implemented** - Bypassing SimpleFOC auto-calibration issues with MT6701 I2C sensors.
+
+**Root Cause (Identified)**: SimpleFOC's automatic `initFOC()` calibration fails with MT6701 I2C sensors because I2C is too slow (~10-20ms per read) for SimpleFOC's movement detection algorithm. This is a known issue (GitHub #172).
+
+**Solution (Implemented)**: Manual calibration using `setPhaseVoltage()` at known electrical angles to calculate `zero_electric_angle` and `sensor_direction` before calling `initFOC()`.
+
+**Next Steps**: Hardware testing to verify calibration works and motor control is functional.
 
 ---
 
