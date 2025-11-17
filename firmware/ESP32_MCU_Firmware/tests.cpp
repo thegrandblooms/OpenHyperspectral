@@ -88,7 +88,6 @@ void printHelp() {
     Serial.println("  mode <0-2>     - Set control mode (0=position, 1=velocity, 2=torque)");
     Serial.println("");
     Serial.println("Testing:");
-    Serial.println("  align          - Test motor alignment (DIAGNOSTIC - run before calibration)");
     Serial.println("  test           - Run full test (calibration + PID tuning + motor test)");
     Serial.println("  motor_test     - Run motor movement test (auto-enables motor)");
     Serial.println("  encoder_test   - Test encoder readings (press any key to stop)");
