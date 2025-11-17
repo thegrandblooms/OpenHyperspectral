@@ -432,6 +432,9 @@ void processSerialCommand(String cmd) {
     else if (command == "encoder_test") {
         runEncoderTest(motorControl);
     }
+    else if (command == "align" || command == "alignment_test") {
+        runAlignmentTest(motorControl);
+    }
     else if (command == "debug") {
         if (args.length() > 0) {
             int level = args.toInt();

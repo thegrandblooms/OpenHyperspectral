@@ -88,6 +88,7 @@ void printHelp() {
     Serial.println("  mode <0-2>     - Set control mode (0=position, 1=velocity, 2=torque)");
     Serial.println("");
     Serial.println("Testing:");
+    Serial.println("  align          - Test motor alignment (DIAGNOSTIC - run before calibration)");
     Serial.println("  test           - Run full test (calibration + PID tuning + motor test)");
     Serial.println("  motor_test     - Run motor movement test (auto-enables motor)");
     Serial.println("  encoder_test   - Test encoder readings (press any key to stop)");
@@ -275,6 +276,34 @@ void runEncoderTest(MotorController& motorControl) {
         }
 
         delay(1);
+    }
+
+    Serial.println();
+}
+
+void runAlignmentTest(MotorController& motorControl) {
+    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
+    Serial.println("║              Motor Alignment Diagnostic Test                   ║");
+    Serial.println("╚════════════════════════════════════════════════════════════════╝");
+    Serial.println("\nThis test applies voltage at known electrical angles.");
+    Serial.println("Motor should move quickly then HOLD each position FIRMLY.");
+    Serial.println("\nExpected behavior:");
+    Serial.println("  • Motor moves and settles within 500ms");
+    Serial.println("  • Strong holding torque (resists manual rotation)");
+    Serial.println("  • NO continuous oscillation");
+    Serial.println("\nIf motor oscillates, check hardware connections and settings.");
+    Serial.println("─────────────────────────────────────────────────────────────────\n");
+
+    // Run the test function from MotorController
+    bool success = motorControl.testMotorAlignment();
+
+    if (success) {
+        Serial.println("✓ Alignment test complete!");
+        Serial.println("\nIf motor held positions firmly, hardware is working correctly.");
+        Serial.println("You can now run calibration (type 'c' or 'calibrate').");
+    } else {
+        Serial.println("✗ Alignment test failed!");
+        Serial.println("\nCheck encoder connection and try again.");
     }
 
     Serial.println();

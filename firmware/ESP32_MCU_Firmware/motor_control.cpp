@@ -467,161 +467,265 @@ bool MotorController::calibrate() {
     return success;
 }
 
-bool MotorController::runCalibration() {
-    // Check magnetic field strength first (warning only, not fatal)
-    if (!encoder.isFieldGood()) {
-        if (DEBUG_MOTOR) {
-            Serial.print("[MT6701] Field status: 0x");
-            Serial.println(encoder.getFieldStatus(), HEX);
-            Serial.println("[MT6701] WARNING: Magnetic field not optimal");
-        }
+bool MotorController::testMotorAlignment() {
+    if (DEBUG_MOTOR) {
+        Serial.println("=== Motor Alignment Diagnostic Test ===");
+        Serial.println("This test will apply voltage at known electrical angles");
+        Serial.println("Motor should move quickly then HOLD each position firmly");
+        Serial.println("");
     }
 
-    // Verify encoder is readable before calibration
-    float test_angle = encoder.getSensorAngle();
-    if (isnan(test_angle) || isinf(test_angle)) {
+    // Check encoder is working
+    encoder.update();
+    float initial_angle = encoder.getDegrees();
+    if (isnan(initial_angle) || isinf(initial_angle)) {
         if (DEBUG_MOTOR) {
-            Serial.println("[MT6701] ERROR: Cannot read encoder angle");
+            Serial.println("[ERROR] Cannot read encoder!");
         }
         return false;
     }
 
     if (DEBUG_MOTOR) {
-        Serial.print("[MT6701] Encoder reading OK: ");
-        Serial.print(test_angle, 4);
-        Serial.println(" rad");
+        Serial.print("[OK] Encoder reading: ");
+        Serial.print(initial_angle, 2);
+        Serial.println("°");
+        Serial.println("");
     }
 
-    // Motor must be enabled before FOC init for some operations
-    if (DEBUG_MOTOR) {
-        Serial.println("[FOC] Enabling motor for calibration...");
-    }
+    // Enable motor
     motor.enable();
 
-    // CRITICAL: Temporarily increase voltage for calibration
-    // Gimbal motors need higher voltage to overcome static friction during alignment
-    // Normal operation uses 6V, but calibration needs ~8-10V
-    float normal_voltage_limit = motor.voltage_limit;
-    motor.voltage_limit = 10.0f;  // Temporarily increase for calibration movement
+    // Test angles: 0°, 90°, 180°, 270° electrical
+    float test_angles[] = {0, PI_2, PI, _3PI_2};
+    const char* angle_names[] = {"0°", "90°", "180°", "270°"};
 
-    if (DEBUG_MOTOR) {
-        Serial.print("[FOC] Temporarily increasing voltage limit to ");
-        Serial.print(motor.voltage_limit);
-        Serial.println("V for calibration");
-    }
-
-    // Show pre-calibration position
-    if (DEBUG_MOTOR) {
-        encoder.update();
-        float pre_angle = encoder.getSensorAngle();
-        Serial.println("[FOC] Pre-calibration status:");
-        Serial.print("  Encoder position: ");
-        Serial.print(radiansToDegrees(pre_angle), 2);
-        Serial.print("° (");
-        Serial.print(pre_angle, 4);
-        Serial.println(" rad)");
-    }
-
-    // CRITICAL FIX: Force needsSearch()=1 during calibration
-    // SimpleFOC's alignment detection works better with index search logic
-    // even for absolute encoders. The encoder reads are the same, but SimpleFOC
-    // uses more robust movement detection with needsSearch()=1
-    encoder.setCalibrationMode(true);
-
-    if (DEBUG_MOTOR) {
-        Serial.println("[FOC] Calibration mode enabled (forcing index search logic)");
-    }
-
-    // Let SimpleFOC run automatic alignment
-    // With needsSearch()=1, SimpleFOC will:
-    // 1. Rotate motor continuously at velocity_index_search (default 1 rad/s)
-    // 2. Monitor shaft_angle change to detect full rotation
-    // 3. Calculate zero_electric_angle offset from sensor readings
-    //
-    // The encoder REMAINS ABSOLUTE - this just uses better detection logic
-    // After calibration, encoder still gives true mechanical position!
-
-    if (DEBUG_MOTOR) {
-        Serial.println("[FOC] Running SimpleFOC auto-calibration...");
-        Serial.println("[FOC] Motor will rotate to find electrical zero");
-    }
-
-    // Run SimpleFOC automatic calibration
-    // With needsSearch()=1, uses index search logic (more robust detection)
-    int foc_result = motor.initFOC();
-
-    // Disable calibration mode - return to normal absolute encoder behavior
-    encoder.setCalibrationMode(false);
-
-    if (DEBUG_MOTOR) {
-        Serial.println("[FOC] Auto-calibration COMPLETE");
-    }
-
-    if (DEBUG_MOTOR) {
-        Serial.print("[FOC] initFOC() returned: ");
-        Serial.println(foc_result);
-
-        if (foc_result == 1) {
-            Serial.println("[FOC] ✓ Motor alignment SUCCESS");
-
-            // Show the calibration constants SimpleFOC calculated
-            Serial.println("[FOC] Calibration constants (mechanical→electrical mapping):");
-            Serial.print("  zero_electric_angle = ");
-            Serial.print(motor.zero_electric_angle, 4);
-            Serial.print(" rad (");
-            Serial.print(radiansToDegrees(motor.zero_electric_angle), 2);
-            Serial.println("°)");
-            Serial.print("  sensor_direction = ");
-            Serial.println(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
-
-            // Show current absolute encoder position (still accurate!)
-            encoder.update();
-            float post_angle = encoder.getSensorAngle();
-            uint16_t post_raw = encoder.getRawCount();
-            Serial.println("[FOC] Absolute encoder position after calibration:");
-            Serial.print("  Mechanical: ");
-            Serial.print(radiansToDegrees(post_angle), 2);
-            Serial.print("° (Raw: ");
-            Serial.print(post_raw);
-            Serial.println(")");
-
-            // Optional: Save to NVS to skip calibration on future boots
-            Serial.println("[FOC] Tip: You can save these values to NVS to skip alignment on reboot");
-        } else {
-            Serial.println("[FOC] ✗ Motor alignment FAILED!");
+    for (int i = 0; i < 4; i++) {
+        if (DEBUG_MOTOR) {
+            Serial.print("[TEST] Applying voltage at ");
+            Serial.print(angle_names[i]);
+            Serial.println(" electrical...");
         }
+
+        // Apply voltage at known electrical angle
+        motor.setPhaseVoltage(6.0, 0, test_angles[i]);
+
+        // Wait for motor to settle
+        delay(1500);
+
+        // Read encoder position
+        encoder.update();
+        float mech_angle = encoder.getDegrees();
+
+        if (DEBUG_MOTOR) {
+            Serial.print("  → Motor settled at ");
+            Serial.print(mech_angle, 2);
+            Serial.println("° mechanical");
+            Serial.println("  → Motor should be holding position FIRMLY");
+            Serial.println("  → Try to rotate motor by hand - should resist");
+            Serial.println("");
+        }
+
+        // Pause for user observation
+        delay(500);
     }
 
-    // Restore normal voltage limit for gimbal operation
-    motor.voltage_limit = normal_voltage_limit;
-
-    if (DEBUG_MOTOR) {
-        Serial.print("[FOC] Restored voltage limit to ");
-        Serial.print(motor.voltage_limit);
-        Serial.println("V for normal operation");
-    }
-
-    // Disable motor after initFOC (will be re-enabled when user calls enable())
+    // Disable motor
     motor.disable();
 
-    // Check if initFOC actually succeeded
-    if (foc_result != 1) {
-        if (DEBUG_MOTOR) {
-            Serial.println("[ERROR] initFOC failed - calibration unsuccessful");
-            Serial.println("[ERROR] Possible causes:");
-            Serial.println("  - Power supply not connected to motor driver");
-            Serial.println("  - Driver enable pin not working");
-            Serial.println("  - Sensor reading but motor can't align");
-            Serial.println("  - Voltage or current limits too restrictive");
-        }
-        return false;
-    }
-
     if (DEBUG_MOTOR) {
-        Serial.println("[SUCCESS] Motor calibration completed successfully!");
+        Serial.println("[TEST] Motor disabled - should spin freely now");
+        Serial.println("");
+        Serial.println("=== Diagnostic Test Complete ===");
+        Serial.println("If motor oscillated or felt weak:");
+        Serial.println("  - Check driver fault pin");
+        Serial.println("  - Check power supply voltage");
+        Serial.println("  - Verify common ground connection");
+        Serial.println("  - Check pole pairs setting (should be 7)");
+        Serial.println("");
     }
 
     return true;
+}
+
+bool MotorController::runManualCalibration() {
+    if (DEBUG_MOTOR) {
+        Serial.println("=== Manual FOC Calibration ===");
+        Serial.println("This will calculate zero_electric_angle and sensor_direction");
+        Serial.println("");
+    }
+
+    // Check magnetic field strength
+    if (!encoder.isFieldGood()) {
+        if (DEBUG_MOTOR) {
+            Serial.print("[WARNING] Magnetic field not optimal: 0x");
+            Serial.println(encoder.getFieldStatus(), HEX);
+        }
+    }
+
+    // Verify encoder is readable
+    encoder.update();
+    float test_angle = encoder.getSensorAngle();
+    if (isnan(test_angle) || isinf(test_angle)) {
+        if (DEBUG_MOTOR) {
+            Serial.println("[ERROR] Cannot read encoder!");
+        }
+        return false;
+    }
+
+    // Enable motor
+    if (DEBUG_MOTOR) {
+        Serial.println("[CALIBRATION] Enabling motor...");
+    }
+    motor.enable();
+
+    // Increase voltage temporarily for better alignment
+    float normal_voltage_limit = motor.voltage_limit;
+    motor.voltage_limit = 10.0f;
+
+    // Apply voltage at 270° electrical (_3PI_2) and wait for settling
+    if (DEBUG_MOTOR) {
+        Serial.println("[CALIBRATION] Aligning motor to 270° electrical...");
+    }
+
+    motor.setPhaseVoltage(6.0, 0, _3PI_2);
+    delay(700);  // Wait for motor to settle
+
+    // Read encoder position (motor is now at 270° electrical)
+    encoder.update();
+    float angle_at_3pi2 = encoder.getSensorAngle();  // In radians
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[CALIBRATION] At 270° electrical, encoder reads: ");
+        Serial.print(angle_at_3pi2, 4);
+        Serial.print(" rad (");
+        Serial.print(radiansToDegrees(angle_at_3pi2), 2);
+        Serial.println("°)");
+    }
+
+    // Apply voltage at 0° electrical and wait
+    if (DEBUG_MOTOR) {
+        Serial.println("[CALIBRATION] Aligning motor to 0° electrical...");
+    }
+
+    motor.setPhaseVoltage(6.0, 0, 0);
+    delay(700);
+
+    // Read encoder position (motor is now at 0° electrical)
+    encoder.update();
+    float angle_at_0 = encoder.getSensorAngle();  // In radians
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[CALIBRATION] At 0° electrical, encoder reads: ");
+        Serial.print(angle_at_0, 4);
+        Serial.print(" rad (");
+        Serial.print(radiansToDegrees(angle_at_0), 2);
+        Serial.println("°)");
+    }
+
+    // Calculate sensor direction
+    // If sensor increased when rotating from 270° to 0° electrical, it's CW
+    float angle_change = angle_at_0 - angle_at_3pi2;
+
+    // Handle wraparound (crossing 0/2π boundary)
+    if (angle_change > PI) {
+        angle_change -= 2.0 * PI;
+    } else if (angle_change < -PI) {
+        angle_change += 2.0 * PI;
+    }
+
+    Direction sensor_dir = (angle_change > 0) ? Direction::CW : Direction::CCW;
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[CALIBRATION] Sensor direction: ");
+        Serial.println(sensor_dir == Direction::CW ? "CW" : "CCW");
+    }
+
+    // Calculate zero_electric_angle
+    // We know motor is at 0° electrical, encoder reads angle_at_0
+    // zero_electric_angle is the offset between mechanical and electrical coordinates
+    float electrical_from_encoder = angle_at_0 * POLE_PAIRS;
+    electrical_from_encoder = normalizeRadians(electrical_from_encoder);
+
+    float zero_elec_angle = normalizeRadians(electrical_from_encoder - 0);
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[CALIBRATION] Calculated zero_electric_angle: ");
+        Serial.print(zero_elec_angle, 4);
+        Serial.print(" rad (");
+        Serial.print(radiansToDegrees(zero_elec_angle), 2);
+        Serial.println("°)");
+        Serial.println("");
+    }
+
+    // Set calibration values
+    motor.zero_electric_angle = zero_elec_angle;
+    motor.sensor_direction = sensor_dir;
+
+    // Restore voltage limit
+    motor.voltage_limit = normal_voltage_limit;
+
+    // Now call initFOC() which should skip alignment and succeed
+    if (DEBUG_MOTOR) {
+        Serial.println("[CALIBRATION] Calling initFOC() with preset values...");
+    }
+
+    int foc_result = motor.initFOC();
+
+    // Disable motor after calibration
+    motor.disable();
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[CALIBRATION] initFOC() returned: ");
+        Serial.println(foc_result);
+
+        if (foc_result == 1) {
+            Serial.println("");
+            Serial.println("=== ✓ Calibration SUCCESS ===");
+            Serial.println("Calibration values:");
+            Serial.print("  zero_electric_angle = ");
+            Serial.print(motor.zero_electric_angle, 4);
+            Serial.println(" rad");
+            Serial.print("  sensor_direction = ");
+            Serial.println(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
+            Serial.println("");
+            Serial.println("You can save these to NVS to skip calibration on future boots");
+        } else {
+            Serial.println("");
+            Serial.println("=== ✗ Calibration FAILED ===");
+            Serial.println("initFOC() failed even with manual calibration");
+        }
+    }
+
+    return (foc_result == 1);
+}
+
+bool MotorController::runCalibration() {
+    // Use manual calibration instead of SimpleFOC's automatic calibration
+    // This is necessary because SimpleFOC's auto-calibration doesn't work
+    // reliably with MT6701 I2C sensors (too slow for movement detection)
+
+    if (DEBUG_MOTOR) {
+        Serial.println("[MOTOR] Starting calibration...");
+        Serial.println("[MOTOR] Using manual calibration (MT6701 I2C)");
+        Serial.println("");
+    }
+
+    // Run manual calibration
+    bool success = runManualCalibration();
+
+    if (success) {
+        if (DEBUG_MOTOR) {
+            Serial.println("[SUCCESS] Motor calibration completed!");
+            Serial.println("");
+        }
+    } else {
+        if (DEBUG_MOTOR) {
+            Serial.println("[ERROR] Motor calibration failed!");
+            Serial.println("");
+        }
+    }
+
+    return success;
 }
 
 void MotorController::enable() {

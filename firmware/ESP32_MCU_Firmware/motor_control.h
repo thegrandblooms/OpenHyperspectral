@@ -158,6 +158,12 @@ public:
     bool calibrate();
 
     //=========================================================================
+    // MANUAL CALIBRATION (For MT6701 I2C sensors where auto-calibration fails)
+    //=========================================================================
+    bool testMotorAlignment();             // Diagnostic test - verify motor holds positions
+    bool runManualCalibration();           // Manual calibration to find zero_electric_angle
+
+    //=========================================================================
     // CONTROL COMMANDS
     //=========================================================================
     void enable();
