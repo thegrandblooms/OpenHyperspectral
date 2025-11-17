@@ -16,6 +16,52 @@
 
 ---
 
+## Application Requirements: Hyperspectral Line Scanning
+
+This motor control system is designed for **hyperspectral imaging**, which has specific requirements that influence our technical decisions:
+
+### Position Verification Loop
+
+**Requirement**: Before each spectral capture, the system must:
+1. Command motor to target angle
+2. Read encoder to verify position
+3. If position error > tolerance → auto-correct
+4. Re-verify position
+5. Only proceed with image capture when position is confirmed
+
+**Implications**:
+- ✅ **Absolute encoder is critical** - no incremental encoders (lose position on power-off)
+- ✅ **Position accuracy >> speed** - better to be slow and accurate than fast and wrong
+- ✅ **Stop-and-verify operation** - not continuous motion
+- ✅ **I2C speed is acceptable** - position verification happens during settling time
+
+### Scan Pattern
+
+**Requirement**: Hundreds to thousands of position verifications per hyperspectral scan:
+- Move to angle θ₁ → verify → capture → move to θ₂ → verify → capture → ...
+- Each position must be confirmed before sensor readout
+- Feedback system automatically corrects drift
+
+**Implications**:
+- ✅ **Absolute position on every read** - I2C provides this
+- ✅ **Gimbal motor = perfect match** - designed for precise positioning, not speed
+- ✅ **FOC control loop at 50-100Hz is sufficient** - motor settles slowly anyway
+- ⚠️ **If verification is too slow**, consider analog output (100x faster, still absolute)
+
+### Why I2C Works for This Application
+
+Unlike high-speed motor control (robotics, drones, etc.) where 1kHz+ update rates are critical:
+
+**Your application**:
+- Motor moves → **settles for 500ms** → verify position → **capture image (100-1000ms)** → repeat
+- The **settling time >> I2C read time** (500ms vs 10-20ms)
+- Position verification happens during the settling period (essentially "free")
+- Absolute encoder ensures position is never lost between captures
+
+**Conclusion**: I2C's "slowness" is irrelevant for your use case. You're limited by mechanical settling time and image capture time, not sensor read speed.
+
+---
+
 ## Research Findings
 
 ### 1. SimpleFOC MT6701 I2C Support Status
@@ -213,6 +259,134 @@ if (!runManualCalibration()) {
 
 ---
 
+## MT6701 Communication Protocol Comparison
+
+The MT6701 supports **five different output modes**. Here's how they compare for your hyperspectral imaging application:
+
+### Protocol Specifications
+
+| Protocol | Speed | Resolution | Absolute Position? | Wiring | SimpleFOC Support |
+|----------|-------|------------|-------------------|--------|-------------------|
+| **I2C** (current) | 50-100 Hz | 14-bit (0.022°) | ✅ Yes | 2 wires (SDA, SCL) | ⚠️ Incomplete driver |
+| **SSI/SPI** | 5-10 kHz | 14-bit (0.022°) | ✅ Yes | 3 wires (CS, CLK, MISO) | ✅ Working driver |
+| **Analog** | 10-20 kHz | 12-bit* (0.088°) | ✅ Yes | 1 wire (Vout) | ✅ Standard class |
+| **PWM** | Variable | 14-bit | ✅ Yes | 1 wire | ⚠️ No standard driver |
+| **ABZ** | Very fast | Configurable | ❌ **No** (incremental) | 3 wires (A, B, Z) | ✅ Standard class |
+
+\* Analog resolution limited by ESP32 12-bit ADC, not MT6701 output
+
+### Detailed Protocol Analysis
+
+#### I2C (Current Implementation)
+
+**How it works**:
+- ESP32 requests angle via I2C bus → MT6701 responds with 14-bit position
+- Transaction time: ~10-20ms per read
+- Update rate: 50-100 Hz
+
+**For your application**:
+- ✅ **Sufficient for FOC** - gimbal motors + stop-and-verify pattern
+- ✅ **14-bit resolution** - best available precision
+- ✅ **No hardware changes needed**
+- ✅ **Settling time >> read time** - I2C "slowness" is irrelevant
+- ❌ Only blocker: `initFOC()` calibration (solved by manual calibration)
+
+**Verdict**: **Recommended - stick with this + manual calibration**
+
+---
+
+#### SSI/SPI
+
+**How it works**:
+- ESP32 clocks data out via SPI bus
+- Includes 6-bit CRC for error detection
+- Transaction time: ~100-200μs
+- Update rate: 5-10 kHz
+
+**For your application**:
+- ✅ **100x faster than I2C** - but you don't need this speed
+- ✅ **14-bit resolution** - same as I2C
+- ✅ **CRC error checking** - better EMI immunity
+- ✅ **SimpleFOC driver complete**
+- ❌ **Requires rewiring** - 3 pins (major hardware change)
+- ❌ **MT6701 doesn't share SPI bus well** - conflicts with display/SD card
+
+**Verdict**: Overkill for your application. Only consider if you have EMI issues with I2C.
+
+---
+
+#### Analog Output (Pin 3)
+
+**How it works**:
+- MT6701 outputs voltage proportional to angle: 0-360° → 0-VDD
+- ESP32 ADC reads voltage
+- Transaction time: ~10-50μs
+- Update rate: 10-20 kHz
+
+**Key insight**: **STILL ABSOLUTE!** Voltage = angle on power-up.
+
+**For your application**:
+- ✅ **200x faster than I2C** - but you don't need this
+- ✅ **Absolute position** - no homing required
+- ✅ **SimpleFOC `MagneticSensorAnalog` class works**
+- ✅ **Minimal hardware change** - add 1 wire to ADC pin
+- ⚠️ **12-bit resolution** - 0.088° vs I2C's 0.022° (still excellent for your use)
+- ⚠️ **ADC noise** - ±1-2 LSB typical (still sub-degree accuracy)
+
+**Resolution impact**:
+- I2C 14-bit: 16384 counts/360° = **0.022° resolution**
+- ADC 12-bit: 4096 counts/360° = **0.088° resolution**
+- For 1° angular steps in hyperspectral scan: **11 ADC counts per step** (plenty!)
+
+**Verdict**: **Best upgrade path if I2C proves inadequate**. Easy to add, maintains absolute position.
+
+---
+
+#### ABZ (Incremental Encoder)
+
+**How it works**:
+- Quadrature pulses (A/B) count rotations
+- Z pulse marks index (once per revolution)
+- Interrupt-driven counting
+
+**For your application**:
+- ✅ **Very fast**
+- ✅ **SimpleFOC encoder class works**
+- ❌ **NOT ABSOLUTE** - loses position on power-off
+- ❌ **Must home on startup** - rotate to find index
+- ❌ **Defeats purpose of absolute encoder**
+
+**Verdict**: ❌ **Do not use** - your application requires absolute position.
+
+---
+
+### Hardware Accessibility Check
+
+From your hardware setup:
+- ✅ **I2C**: Currently wired (GPIO 47/48) → **Working**
+- ❓ **SSI/SPI**: Would need 3 GPIOs (CS, CLK, MISO) → **Requires rewiring**
+- ❓ **Analog**: MT6701 Pin 3 available? → **Check your module**
+- ❓ **ABZ**: Would need 3 GPIOs (A, B, Z) → **Not recommended anyway**
+
+**Action item**: If you have access to MT6701 Pin 3 (analog output), it's easy to add a jumper wire to any ESP32 ADC-capable GPIO as a backup option.
+
+---
+
+### Protocol Decision for Hyperspectral Imaging
+
+**Your requirements**:
+1. Absolute position (no homing on startup) → ❌ Eliminates ABZ
+2. Position verification before each capture → ✅ I2C is sufficient
+3. Hundreds/thousands of verifications per scan → ✅ Speed not critical (limited by settling time)
+4. Automatic correction for drift → ✅ Absolute encoder required
+
+**Conclusion**:
+- **Use I2C** with manual calibration (Phase 1)
+- **Keep analog as backup** (Phase 2 if needed)
+- **Ignore SSI/ABZ** unless you redesign hardware
+
+---
+
 ## Recommended Approach
 
 **Phase 1 (Immediate)**: Implement manual calibration
@@ -222,15 +396,22 @@ if (!runManualCalibration()) {
 - Test with your hardware
 - Document the calibration values
 
-**Phase 2 (Short-term)**: Add NVS storage
+**Phase 2 (Short-term)**: Position verification loop for hyperspectral imaging
+- Implement `moveToPositionAndVerify()` with automatic correction
+- Confirmed position check before allowing image capture
+- Retry logic if position drifts
+- Return success/failure status
+
+**Phase 3 (Short-term)**: Add NVS storage
 - Save calibration to flash
 - Skip calibration on subsequent boots
 - Add command to force re-calibration
 
-**Phase 3 (Long-term)**: Consider SSI hardware upgrade
-- If I2C proves too slow for your application
-- Only if you see control loop performance issues
-- Requires hardware redesign
+**Phase 4 (Optional)**: Consider analog output upgrade
+- If I2C proves inadequate (unlikely)
+- Add 1 wire from MT6701 Pin 3 to ESP32 ADC pin
+- Still maintains absolute position
+- 200x faster than I2C
 
 ---
 
@@ -266,6 +447,131 @@ motor.sensor_direction = Direction::CW;  // or CCW
 int result = motor.initFOC();
 // result should be 1 (success)
 ```
+
+### Position Verification Loop (For Hyperspectral Imaging)
+
+From application requirements - confirms position before image capture:
+
+```cpp
+/**
+ * Move to target position and verify arrival with automatic correction
+ * @param target_deg Target position in degrees
+ * @param tolerance_deg Position tolerance in degrees (e.g., 0.5°)
+ * @param max_retries Maximum correction attempts (default 5)
+ * @return true if position confirmed within tolerance
+ */
+bool MotorController::moveToPositionAndVerify(float target_deg,
+                                                float tolerance_deg,
+                                                int max_retries) {
+    if (!motor_enabled || !motor_calibrated) {
+        return false;
+    }
+
+    // Initial move command
+    moveToPosition(target_deg);  // Existing SimpleFOC move
+
+    // Wait for settling (tuned for your motor/load)
+    delay(500);  // Adjust based on motor characteristics
+
+    // Verify position with absolute encoder (not SimpleFOC shaft_angle)
+    int retries = 0;
+    while (retries < max_retries) {
+        // Read absolute position from MT6701
+        encoder.update();
+        float actual_deg = encoder.getDegrees();
+        float error = abs(actual_deg - target_deg);
+
+        // Check if within tolerance
+        if (error < tolerance_deg) {
+            // Position confirmed!
+            if (DEBUG_MOTOR) {
+                Serial.print("[VERIFY] Position confirmed: ");
+                Serial.print(actual_deg, 2);
+                Serial.print("° (target: ");
+                Serial.print(target_deg, 2);
+                Serial.print("°, error: ");
+                Serial.print(error, 3);
+                Serial.println("°)");
+            }
+            return true;
+        }
+
+        // Position error detected - apply correction
+        if (DEBUG_MOTOR) {
+            Serial.print("[VERIFY] Position error: ");
+            Serial.print(error, 2);
+            Serial.print("° - retrying (attempt ");
+            Serial.print(retries + 1);
+            Serial.print("/");
+            Serial.print(max_retries);
+            Serial.println(")");
+        }
+
+        // Command correction
+        moveToPosition(target_deg);
+        delay(200);  // Shorter delay for corrections
+        retries++;
+    }
+
+    // Failed to reach position after max retries
+    if (DEBUG_MOTOR) {
+        encoder.update();
+        Serial.print("[VERIFY] FAILED - final position: ");
+        Serial.print(encoder.getDegrees(), 2);
+        Serial.print("° (target: ");
+        Serial.print(target_deg, 2);
+        Serial.println("°)");
+    }
+    return false;
+}
+
+/**
+ * Hyperspectral scan loop example
+ */
+void runHyperspectralScan(float start_deg, float end_deg, float step_deg) {
+    Serial.println("[SCAN] Starting hyperspectral scan...");
+
+    int successful_captures = 0;
+    int failed_positions = 0;
+
+    for (float angle = start_deg; angle <= end_deg; angle += step_deg) {
+        // Move to angle and verify
+        if (moveToPositionAndVerify(angle, 0.5)) {  // 0.5° tolerance
+            // Position confirmed - safe to capture
+            Serial.print("[SCAN] Capturing at ");
+            Serial.print(angle, 1);
+            Serial.println("°...");
+
+            // TODO: Trigger hyperspectral camera capture here
+            // captureSpectralImage();
+
+            successful_captures++;
+        } else {
+            // Position verification failed
+            Serial.print("[SCAN] Skipping ");
+            Serial.print(angle, 1);
+            Serial.println("° - position verification failed");
+            failed_positions++;
+        }
+
+        // Optional: Add delay between captures for sensor processing
+        delay(100);
+    }
+
+    Serial.print("[SCAN] Complete - ");
+    Serial.print(successful_captures);
+    Serial.print(" captures, ");
+    Serial.print(failed_positions);
+    Serial.println(" failures");
+}
+```
+
+**Key features**:
+1. ✅ Uses **absolute encoder** for verification (not SimpleFOC's internal state)
+2. ✅ **Automatic retry** with correction if position drifts
+3. ✅ **Confirmed position** before proceeding with image capture
+4. ✅ **Fail-safe** - returns false if position cannot be achieved
+5. ✅ **Application-aware** - designed for stop-and-verify hyperspectral scanning
 
 ---
 
