@@ -467,6 +467,128 @@ bool MotorController::calibrate() {
     return success;
 }
 
+bool MotorController::testDriverPhases() {
+    if (DEBUG_MOTOR) {
+        Serial.println("");
+        Serial.println("╔════════════════════════════════════════════════════════════════╗");
+        Serial.println("║              Driver Phase Output Test                          ║");
+        Serial.println("╚════════════════════════════════════════════════════════════════╝");
+        Serial.println("");
+        Serial.println("This test directly drives each motor phase to verify all three");
+        Serial.println("driver outputs (IN1, IN2, IN3) are working correctly.");
+        Serial.println("");
+        Serial.println("Expected: Motor should move and hold firmly at each test");
+        Serial.println("If motor doesn't move during a test, that phase has a problem.");
+        Serial.println("─────────────────────────────────────────────────────────────────");
+        Serial.println("");
+    }
+
+    // Check driver fault status
+    pinMode(MOTOR_FAULT, INPUT_PULLUP);  // nFT is active LOW
+    bool fault_status = digitalRead(MOTOR_FAULT);
+    if (DEBUG_MOTOR) {
+        Serial.print("[DRIVER] Fault pin (nFT) before enable: ");
+        Serial.println(fault_status ? "HIGH (OK)" : "LOW (FAULT!)");
+        if (!fault_status) {
+            Serial.println("[WARNING] Driver showing fault before motor enabled!");
+        }
+        Serial.println("");
+    }
+
+    // Enable driver
+    motor.enable();
+    delay(100);
+
+    // Check fault after enable
+    fault_status = digitalRead(MOTOR_FAULT);
+    if (DEBUG_MOTOR) {
+        Serial.print("[DRIVER] Fault pin after enable: ");
+        Serial.println(fault_status ? "HIGH (OK)" : "LOW (FAULT!)");
+        Serial.println("");
+    }
+
+    // Read initial encoder position
+    encoder.update();
+    float start_pos = encoder.getDegrees();
+    if (DEBUG_MOTOR) {
+        Serial.print("[ENCODER] Starting position: ");
+        Serial.print(start_pos, 2);
+        Serial.println("°");
+        Serial.println("");
+    }
+
+    // Test 6 different phase combinations to verify all outputs work
+    // For a 3-phase motor, voltage creates a field vector
+    // We test positions 60° apart in electrical angle
+    struct PhaseTest {
+        float electrical_angle;
+        const char* description;
+    };
+
+    PhaseTest tests[] = {
+        {0.0,          "Phase A positive (0° electrical)"},
+        {_PI_3,        "Phase A→B transition (60° electrical)"},
+        {_PI_2,        "Phase B positive (90° electrical)"},
+        {2.0*_PI_3,    "Phase B→C transition (120° electrical)"},
+        {PI,           "Phase C positive (180° electrical)"},
+        {4.0*_PI_3,    "Phase C→A transition (240° electrical)"}
+    };
+
+    for (int i = 0; i < 6; i++) {
+        if (DEBUG_MOTOR) {
+            Serial.print("[TEST ");
+            Serial.print(i + 1);
+            Serial.print("/6] ");
+            Serial.println(tests[i].description);
+        }
+
+        // Apply voltage at this electrical angle
+        motor.setPhaseVoltage(6.0, 0, tests[i].electrical_angle);
+        delay(1000);
+
+        // Read position
+        encoder.update();
+        float pos = encoder.getDegrees();
+        float movement = abs(pos - start_pos);
+        if (movement > 180.0) movement = 360.0 - movement;  // Handle wraparound
+
+        // Check fault
+        fault_status = digitalRead(MOTOR_FAULT);
+
+        if (DEBUG_MOTOR) {
+            Serial.print("  → Position: ");
+            Serial.print(pos, 2);
+            Serial.print("° (moved ");
+            Serial.print(movement, 2);
+            Serial.print("° from start)");
+            Serial.println();
+            Serial.print("  → Fault: ");
+            Serial.println(fault_status ? "OK" : "FAULT!");
+            Serial.println("");
+        }
+
+        delay(500);
+    }
+
+    // Disable motor
+    motor.disable();
+
+    if (DEBUG_MOTOR) {
+        Serial.println("╔════════════════════════════════════════════════════════════════╗");
+        Serial.println("║                   Phase Test Complete                          ║");
+        Serial.println("╚════════════════════════════════════════════════════════════════╝");
+        Serial.println("");
+        Serial.println("Analysis:");
+        Serial.println("  • If motor moved to 6 different positions → All phases OK");
+        Serial.println("  • If only 2-3 positions → One or more phases not working");
+        Serial.println("  • If no movement → Driver not powered or enable not working");
+        Serial.println("  • If fault pin showed LOW → Check power supply and current");
+        Serial.println("");
+    }
+
+    return true;
+}
+
 bool MotorController::testMotorAlignment() {
     if (DEBUG_MOTOR) {
         Serial.println("=== Motor Alignment Diagnostic Test ===");
@@ -495,6 +617,19 @@ bool MotorController::testMotorAlignment() {
     // Enable motor
     motor.enable();
 
+    // Check driver fault status
+    pinMode(MOTOR_FAULT, INPUT_PULLUP);  // nFT is active LOW
+    bool fault_status = digitalRead(MOTOR_FAULT);
+    if (DEBUG_MOTOR) {
+        Serial.print("[DRIVER] Fault pin (nFT): ");
+        Serial.println(fault_status ? "HIGH (OK)" : "LOW (FAULT!)");
+        if (!fault_status) {
+            Serial.println("[ERROR] Driver is in fault state!");
+            Serial.println("[ERROR] Check power supply, current limit, or thermal shutdown");
+        }
+        Serial.println("");
+    }
+
     // Test angles: 0°, 90°, 180°, 270° electrical
     float test_angles[] = {0, _PI_2, PI, _3PI_2};
     const char* angle_names[] = {"0°", "90°", "180°", "270°"};
@@ -516,10 +651,15 @@ bool MotorController::testMotorAlignment() {
         encoder.update();
         float mech_angle = encoder.getDegrees();
 
+        // Check fault pin after applying voltage
+        fault_status = digitalRead(MOTOR_FAULT);
+
         if (DEBUG_MOTOR) {
             Serial.print("  → Motor settled at ");
             Serial.print(mech_angle, 2);
             Serial.println("° mechanical");
+            Serial.print("  → Fault pin: ");
+            Serial.println(fault_status ? "OK" : "FAULT!");
             Serial.println("  → Motor should be holding position FIRMLY");
             Serial.println("  → Try to rotate motor by hand - should resist");
             Serial.println("");
