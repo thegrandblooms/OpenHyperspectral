@@ -582,6 +582,23 @@ bool MotorController::runManualCalibration() {
     float normal_voltage_limit = motor.voltage_limit;
     motor.voltage_limit = 10.0f;
 
+    // Start by applying voltage at 180° electrical to ensure motor moves
+    // This gives us a known starting position that's different from 0° and 270°
+    if (DEBUG_MOTOR) {
+        Serial.println("[CALIBRATION] Moving to starting position (180° electrical)...");
+    }
+    motor.setPhaseVoltage(6.0, 0, PI);
+    delay(700);
+
+    encoder.update();
+    float start_pos = encoder.getSensorAngle();
+    if (DEBUG_MOTOR) {
+        Serial.print("[CALIBRATION] Starting position: ");
+        Serial.print(radiansToDegrees(start_pos), 2);
+        Serial.println("° mechanical");
+        Serial.println("");
+    }
+
     // Apply voltage at 270° electrical (_3PI_2) and wait for settling
     if (DEBUG_MOTOR) {
         Serial.println("[CALIBRATION] Aligning motor to 270° electrical...");
@@ -622,6 +639,33 @@ bool MotorController::runManualCalibration() {
         Serial.println("°)");
     }
 
+    // Verify motor actually moved
+    float angle_diff = abs(angle_at_0 - angle_at_3pi2);
+    if (angle_diff < 0.1) {  // Less than ~5.7 degrees
+        if (DEBUG_MOTOR) {
+            Serial.println("");
+            Serial.println("[ERROR] Motor didn't move between calibration points!");
+            Serial.print("[ERROR] Both readings are nearly identical: ");
+            Serial.print(radiansToDegrees(angle_diff), 2);
+            Serial.println("° difference");
+            Serial.println("[ERROR] This usually means:");
+            Serial.println("  - Motor driver not powered");
+            Serial.println("  - Driver in fault state");
+            Serial.println("  - Enable pin not working");
+            Serial.println("  - Phase wires disconnected");
+        }
+        motor.disable();
+        motor.voltage_limit = normal_voltage_limit;
+        return false;
+    }
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[CALIBRATION] Motor moved ");
+        Serial.print(radiansToDegrees(angle_diff), 2);
+        Serial.println("° between calibration points (good!)");
+        Serial.println("");
+    }
+
     // Calculate sensor direction
     // If sensor increased when rotating from 270° to 0° electrical, it's CW
     float angle_change = angle_at_0 - angle_at_3pi2;
@@ -636,7 +680,9 @@ bool MotorController::runManualCalibration() {
     Direction sensor_dir = (angle_change > 0) ? Direction::CW : Direction::CCW;
 
     if (DEBUG_MOTOR) {
-        Serial.print("[CALIBRATION] Sensor direction: ");
+        Serial.print("[CALIBRATION] Angle change: ");
+        Serial.print(radiansToDegrees(angle_change), 2);
+        Serial.print("° → Sensor direction: ");
         Serial.println(sensor_dir == Direction::CW ? "CW" : "CCW");
     }
 
@@ -689,6 +735,11 @@ bool MotorController::runManualCalibration() {
             Serial.println(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
             Serial.println("");
             Serial.println("You can save these to NVS to skip calibration on future boots");
+            Serial.println("");
+            Serial.println("Next steps:");
+            Serial.println("  1. Type 'e' to enable motor");
+            Serial.println("  2. Type 'status' to verify shaft_angle tracks encoder");
+            Serial.println("  3. Type 'm 90' to test position control");
         } else {
             Serial.println("");
             Serial.println("=== ✗ Calibration FAILED ===");
