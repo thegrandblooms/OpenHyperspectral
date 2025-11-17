@@ -432,6 +432,9 @@ void processSerialCommand(String cmd) {
     else if (command == "encoder_test") {
         runEncoderTest(motorControl);
     }
+    else if (command == "phase_test" || command == "phasetest") {
+        runPhaseTest(motorControl);
+    }
     else if (command == "align" || command == "alignment_test") {
         runAlignmentTest(motorControl);
     }

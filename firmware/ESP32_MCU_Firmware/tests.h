@@ -27,6 +27,7 @@ void printStatus(MotorController& motorControl);
 // MOTOR TESTS
 //=============================================================================
 void runEncoderTest(MotorController& motorControl);
+void runPhaseTest(MotorController& motorControl);     // Test each driver phase individually
 void runAlignmentTest(MotorController& motorControl);  // Diagnostic test BEFORE calibration
 void runMotorTest(MotorController& motorControl);
 void runFullTest(MotorController& motorControl);

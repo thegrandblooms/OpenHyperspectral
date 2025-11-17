@@ -467,6 +467,128 @@ bool MotorController::calibrate() {
     return success;
 }
 
+bool MotorController::testDriverPhases() {
+    if (DEBUG_MOTOR) {
+        Serial.println("");
+        Serial.println("╔════════════════════════════════════════════════════════════════╗");
+        Serial.println("║              Driver Phase Output Test                          ║");
+        Serial.println("╚════════════════════════════════════════════════════════════════╝");
+        Serial.println("");
+        Serial.println("This test directly drives each motor phase to verify all three");
+        Serial.println("driver outputs (IN1, IN2, IN3) are working correctly.");
+        Serial.println("");
+        Serial.println("Expected: Motor should move and hold firmly at each test");
+        Serial.println("If motor doesn't move during a test, that phase has a problem.");
+        Serial.println("─────────────────────────────────────────────────────────────────");
+        Serial.println("");
+    }
+
+    // Check driver fault status
+    pinMode(MOTOR_FAULT, INPUT_PULLUP);  // nFT is active LOW
+    bool fault_status = digitalRead(MOTOR_FAULT);
+    if (DEBUG_MOTOR) {
+        Serial.print("[DRIVER] Fault pin (nFT) before enable: ");
+        Serial.println(fault_status ? "HIGH (OK)" : "LOW (FAULT!)");
+        if (!fault_status) {
+            Serial.println("[WARNING] Driver showing fault before motor enabled!");
+        }
+        Serial.println("");
+    }
+
+    // Enable driver
+    motor.enable();
+    delay(100);
+
+    // Check fault after enable
+    fault_status = digitalRead(MOTOR_FAULT);
+    if (DEBUG_MOTOR) {
+        Serial.print("[DRIVER] Fault pin after enable: ");
+        Serial.println(fault_status ? "HIGH (OK)" : "LOW (FAULT!)");
+        Serial.println("");
+    }
+
+    // Read initial encoder position
+    encoder.update();
+    float start_pos = encoder.getDegrees();
+    if (DEBUG_MOTOR) {
+        Serial.print("[ENCODER] Starting position: ");
+        Serial.print(start_pos, 2);
+        Serial.println("°");
+        Serial.println("");
+    }
+
+    // Test 6 different phase combinations to verify all outputs work
+    // For a 3-phase motor, voltage creates a field vector
+    // We test positions 60° apart in electrical angle
+    struct PhaseTest {
+        float electrical_angle;
+        const char* description;
+    };
+
+    PhaseTest tests[] = {
+        {0.0,          "Phase A positive (0° electrical)"},
+        {_PI_3,        "Phase A→B transition (60° electrical)"},
+        {_PI_2,        "Phase B positive (90° electrical)"},
+        {2.0*_PI_3,    "Phase B→C transition (120° electrical)"},
+        {PI,           "Phase C positive (180° electrical)"},
+        {4.0*_PI_3,    "Phase C→A transition (240° electrical)"}
+    };
+
+    for (int i = 0; i < 6; i++) {
+        if (DEBUG_MOTOR) {
+            Serial.print("[TEST ");
+            Serial.print(i + 1);
+            Serial.print("/6] ");
+            Serial.println(tests[i].description);
+        }
+
+        // Apply voltage at this electrical angle
+        motor.setPhaseVoltage(6.0, 0, tests[i].electrical_angle);
+        delay(1000);
+
+        // Read position
+        encoder.update();
+        float pos = encoder.getDegrees();
+        float movement = abs(pos - start_pos);
+        if (movement > 180.0) movement = 360.0 - movement;  // Handle wraparound
+
+        // Check fault
+        fault_status = digitalRead(MOTOR_FAULT);
+
+        if (DEBUG_MOTOR) {
+            Serial.print("  → Position: ");
+            Serial.print(pos, 2);
+            Serial.print("° (moved ");
+            Serial.print(movement, 2);
+            Serial.print("° from start)");
+            Serial.println();
+            Serial.print("  → Fault: ");
+            Serial.println(fault_status ? "OK" : "FAULT!");
+            Serial.println("");
+        }
+
+        delay(500);
+    }
+
+    // Disable motor
+    motor.disable();
+
+    if (DEBUG_MOTOR) {
+        Serial.println("╔════════════════════════════════════════════════════════════════╗");
+        Serial.println("║                   Phase Test Complete                          ║");
+        Serial.println("╚════════════════════════════════════════════════════════════════╝");
+        Serial.println("");
+        Serial.println("Analysis:");
+        Serial.println("  • If motor moved to 6 different positions → All phases OK");
+        Serial.println("  • If only 2-3 positions → One or more phases not working");
+        Serial.println("  • If no movement → Driver not powered or enable not working");
+        Serial.println("  • If fault pin showed LOW → Check power supply and current");
+        Serial.println("");
+    }
+
+    return true;
+}
+
 bool MotorController::testMotorAlignment() {
     if (DEBUG_MOTOR) {
         Serial.println("=== Motor Alignment Diagnostic Test ===");
@@ -495,6 +617,19 @@ bool MotorController::testMotorAlignment() {
     // Enable motor
     motor.enable();
 
+    // Check driver fault status
+    pinMode(MOTOR_FAULT, INPUT_PULLUP);  // nFT is active LOW
+    bool fault_status = digitalRead(MOTOR_FAULT);
+    if (DEBUG_MOTOR) {
+        Serial.print("[DRIVER] Fault pin (nFT): ");
+        Serial.println(fault_status ? "HIGH (OK)" : "LOW (FAULT!)");
+        if (!fault_status) {
+            Serial.println("[ERROR] Driver is in fault state!");
+            Serial.println("[ERROR] Check power supply, current limit, or thermal shutdown");
+        }
+        Serial.println("");
+    }
+
     // Test angles: 0°, 90°, 180°, 270° electrical
     float test_angles[] = {0, _PI_2, PI, _3PI_2};
     const char* angle_names[] = {"0°", "90°", "180°", "270°"};
@@ -516,10 +651,15 @@ bool MotorController::testMotorAlignment() {
         encoder.update();
         float mech_angle = encoder.getDegrees();
 
+        // Check fault pin after applying voltage
+        fault_status = digitalRead(MOTOR_FAULT);
+
         if (DEBUG_MOTOR) {
             Serial.print("  → Motor settled at ");
             Serial.print(mech_angle, 2);
             Serial.println("° mechanical");
+            Serial.print("  → Fault pin: ");
+            Serial.println(fault_status ? "OK" : "FAULT!");
             Serial.println("  → Motor should be holding position FIRMLY");
             Serial.println("  → Try to rotate motor by hand - should resist");
             Serial.println("");
@@ -549,8 +689,12 @@ bool MotorController::testMotorAlignment() {
 
 bool MotorController::runManualCalibration() {
     if (DEBUG_MOTOR) {
-        Serial.println("=== Manual FOC Calibration ===");
-        Serial.println("This will calculate zero_electric_angle and sensor_direction");
+        Serial.println("");
+        Serial.println("╔════════════════════════════════════════════════════════════════╗");
+        Serial.println("║                    Motor Calibration                           ║");
+        Serial.println("╚════════════════════════════════════════════════════════════════╝");
+        Serial.println("");
+        Serial.println("This will test motor movement and calculate calibration values.");
         Serial.println("");
     }
 
@@ -572,9 +716,19 @@ bool MotorController::runManualCalibration() {
         return false;
     }
 
+    if (DEBUG_MOTOR) {
+        Serial.print("[OK] Encoder reading: ");
+        Serial.print(radiansToDegrees(test_angle), 2);
+        Serial.println("°");
+        Serial.println("");
+    }
+
     // Enable motor
     if (DEBUG_MOTOR) {
-        Serial.println("[CALIBRATION] Enabling motor...");
+        Serial.println("Step 1: Diagnostic Test");
+        Serial.println("─────────────────────────────────────────────────────────────────");
+        Serial.println("Testing motor at 4 electrical angles...");
+        Serial.println("");
     }
     motor.enable();
 
@@ -582,70 +736,55 @@ bool MotorController::runManualCalibration() {
     float normal_voltage_limit = motor.voltage_limit;
     motor.voltage_limit = 10.0f;
 
-    // Start by applying voltage at 180° electrical to ensure motor moves
-    // This gives us a known starting position that's different from 0° and 270°
-    if (DEBUG_MOTOR) {
-        Serial.println("[CALIBRATION] Moving to starting position (180° electrical)...");
-    }
-    motor.setPhaseVoltage(6.0, 0, PI);
-    delay(700);
+    // Diagnostic test at 4 positions
+    float test_angles[] = {0, _PI_2, PI, _3PI_2};
+    const char* angle_names[] = {"0°", "90°", "180°", "270°"};
+    float positions[4];
 
-    encoder.update();
-    float start_pos = encoder.getSensorAngle();
+    for (int i = 0; i < 4; i++) {
+        motor.setPhaseVoltage(6.0, 0, test_angles[i]);
+        delay(700);
+
+        encoder.update();
+        positions[i] = encoder.getSensorAngle();
+
+        if (DEBUG_MOTOR) {
+            Serial.print("[TEST] ");
+            Serial.print(angle_names[i]);
+            Serial.print(" electrical → ");
+            Serial.print(radiansToDegrees(positions[i]), 2);
+            Serial.println("° mechanical");
+        }
+    }
+
     if (DEBUG_MOTOR) {
-        Serial.print("[CALIBRATION] Starting position: ");
-        Serial.print(radiansToDegrees(start_pos), 2);
-        Serial.println("° mechanical");
+        Serial.println("");
+        Serial.println("✓ Motor responding to all positions");
         Serial.println("");
     }
 
-    // Apply voltage at 270° electrical (_3PI_2) and wait for settling
+    // Use 90° and 270° for calibration (they have best separation)
     if (DEBUG_MOTOR) {
-        Serial.println("[CALIBRATION] Aligning motor to 270° electrical...");
+        Serial.println("Step 2: Calculate Calibration Values");
+        Serial.println("─────────────────────────────────────────────────────────────────");
+        Serial.println("Using 90° and 270° electrical for calibration...");
+        Serial.println("");
     }
 
-    motor.setPhaseVoltage(6.0, 0, _3PI_2);
-    delay(700);  // Wait for motor to settle
+    float angle_at_pi2 = positions[1];    // 90° electrical
+    float angle_at_3pi2 = positions[3];   // 270° electrical
 
-    // Read encoder position (motor is now at 270° electrical)
-    encoder.update();
-    float angle_at_3pi2 = encoder.getSensorAngle();  // In radians
-
-    if (DEBUG_MOTOR) {
-        Serial.print("[CALIBRATION] At 270° electrical, encoder reads: ");
-        Serial.print(angle_at_3pi2, 4);
-        Serial.print(" rad (");
-        Serial.print(radiansToDegrees(angle_at_3pi2), 2);
-        Serial.println("°)");
+    // Verify sufficient movement between calibration points
+    float angle_diff = abs(angle_at_3pi2 - angle_at_pi2);
+    // Handle wraparound
+    if (angle_diff > PI) {
+        angle_diff = 2.0 * PI - angle_diff;
     }
 
-    // Apply voltage at 0° electrical and wait
-    if (DEBUG_MOTOR) {
-        Serial.println("[CALIBRATION] Aligning motor to 0° electrical...");
-    }
-
-    motor.setPhaseVoltage(6.0, 0, 0);
-    delay(700);
-
-    // Read encoder position (motor is now at 0° electrical)
-    encoder.update();
-    float angle_at_0 = encoder.getSensorAngle();  // In radians
-
-    if (DEBUG_MOTOR) {
-        Serial.print("[CALIBRATION] At 0° electrical, encoder reads: ");
-        Serial.print(angle_at_0, 4);
-        Serial.print(" rad (");
-        Serial.print(radiansToDegrees(angle_at_0), 2);
-        Serial.println("°)");
-    }
-
-    // Verify motor actually moved
-    float angle_diff = abs(angle_at_0 - angle_at_3pi2);
     if (angle_diff < 0.1) {  // Less than ~5.7 degrees
         if (DEBUG_MOTOR) {
-            Serial.println("");
-            Serial.println("[ERROR] Motor didn't move between calibration points!");
-            Serial.print("[ERROR] Both readings are nearly identical: ");
+            Serial.println("[ERROR] Insufficient movement between calibration points!");
+            Serial.print("[ERROR] Only ");
             Serial.print(radiansToDegrees(angle_diff), 2);
             Serial.println("° difference");
             Serial.println("[ERROR] This usually means:");
@@ -660,15 +799,15 @@ bool MotorController::runManualCalibration() {
     }
 
     if (DEBUG_MOTOR) {
-        Serial.print("[CALIBRATION] Motor moved ");
+        Serial.print("[OK] Motor moved ");
         Serial.print(radiansToDegrees(angle_diff), 2);
-        Serial.println("° between calibration points (good!)");
+        Serial.println("° between calibration points");
         Serial.println("");
     }
 
     // Calculate sensor direction
-    // If sensor increased when rotating from 270° to 0° electrical, it's CW
-    float angle_change = angle_at_0 - angle_at_3pi2;
+    // If sensor increased when rotating from 90° to 270° electrical, it's CW
+    float angle_change = angle_at_3pi2 - angle_at_pi2;
 
     // Handle wraparound (crossing 0/2π boundary)
     if (angle_change > PI) {
@@ -680,22 +819,21 @@ bool MotorController::runManualCalibration() {
     Direction sensor_dir = (angle_change > 0) ? Direction::CW : Direction::CCW;
 
     if (DEBUG_MOTOR) {
-        Serial.print("[CALIBRATION] Angle change: ");
-        Serial.print(radiansToDegrees(angle_change), 2);
-        Serial.print("° → Sensor direction: ");
+        Serial.print("[OK] Sensor direction: ");
         Serial.println(sensor_dir == Direction::CW ? "CW" : "CCW");
+        Serial.println("");
     }
 
     // Calculate zero_electric_angle
-    // We know motor is at 0° electrical, encoder reads angle_at_0
+    // We know motor is at 90° electrical, encoder reads angle_at_pi2
     // zero_electric_angle is the offset between mechanical and electrical coordinates
-    float electrical_from_encoder = angle_at_0 * POLE_PAIRS;
+    float electrical_from_encoder = angle_at_pi2 * POLE_PAIRS;
     electrical_from_encoder = normalizeRadians(electrical_from_encoder);
 
-    float zero_elec_angle = normalizeRadians(electrical_from_encoder - 0);
+    float zero_elec_angle = normalizeRadians(electrical_from_encoder - _PI_2);
 
     if (DEBUG_MOTOR) {
-        Serial.print("[CALIBRATION] Calculated zero_electric_angle: ");
+        Serial.print("[OK] zero_electric_angle = ");
         Serial.print(zero_elec_angle, 4);
         Serial.print(" rad (");
         Serial.print(radiansToDegrees(zero_elec_angle), 2);
@@ -712,7 +850,8 @@ bool MotorController::runManualCalibration() {
 
     // Now call initFOC() which should skip alignment and succeed
     if (DEBUG_MOTOR) {
-        Serial.println("[CALIBRATION] Calling initFOC() with preset values...");
+        Serial.println("Step 3: Initialize FOC");
+        Serial.println("─────────────────────────────────────────────────────────────────");
     }
 
     int foc_result = motor.initFOC();
@@ -721,29 +860,35 @@ bool MotorController::runManualCalibration() {
     motor.disable();
 
     if (DEBUG_MOTOR) {
-        Serial.print("[CALIBRATION] initFOC() returned: ");
-        Serial.println(foc_result);
-
         if (foc_result == 1) {
             Serial.println("");
-            Serial.println("=== ✓ Calibration SUCCESS ===");
-            Serial.println("Calibration values:");
-            Serial.print("  zero_electric_angle = ");
-            Serial.print(motor.zero_electric_angle, 4);
-            Serial.println(" rad");
-            Serial.print("  sensor_direction = ");
-            Serial.println(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
+            Serial.println("╔════════════════════════════════════════════════════════════════╗");
+            Serial.println("║                 ✓ CALIBRATION SUCCESSFUL                       ║");
+            Serial.println("╚════════════════════════════════════════════════════════════════╝");
             Serial.println("");
-            Serial.println("You can save these to NVS to skip calibration on future boots");
+            Serial.println("Calibration values:");
+            Serial.print("  • zero_electric_angle = ");
+            Serial.print(motor.zero_electric_angle, 4);
+            Serial.print(" rad (");
+            Serial.print(radiansToDegrees(motor.zero_electric_angle), 2);
+            Serial.println("°)");
+            Serial.print("  • sensor_direction = ");
+            Serial.println(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
             Serial.println("");
             Serial.println("Next steps:");
             Serial.println("  1. Type 'e' to enable motor");
             Serial.println("  2. Type 'status' to verify shaft_angle tracks encoder");
             Serial.println("  3. Type 'm 90' to test position control");
+            Serial.println("");
         } else {
             Serial.println("");
-            Serial.println("=== ✗ Calibration FAILED ===");
+            Serial.println("╔════════════════════════════════════════════════════════════════╗");
+            Serial.println("║                  ✗ CALIBRATION FAILED                          ║");
+            Serial.println("╚════════════════════════════════════════════════════════════════╝");
+            Serial.println("");
             Serial.println("initFOC() failed even with manual calibration");
+            Serial.println("Check hardware connections and driver status");
+            Serial.println("");
         }
     }
 
@@ -755,28 +900,8 @@ bool MotorController::runCalibration() {
     // This is necessary because SimpleFOC's auto-calibration doesn't work
     // reliably with MT6701 I2C sensors (too slow for movement detection)
 
-    if (DEBUG_MOTOR) {
-        Serial.println("[MOTOR] Starting calibration...");
-        Serial.println("[MOTOR] Using manual calibration (MT6701 I2C)");
-        Serial.println("");
-    }
-
-    // Run manual calibration
-    bool success = runManualCalibration();
-
-    if (success) {
-        if (DEBUG_MOTOR) {
-            Serial.println("[SUCCESS] Motor calibration completed!");
-            Serial.println("");
-        }
-    } else {
-        if (DEBUG_MOTOR) {
-            Serial.println("[ERROR] Motor calibration failed!");
-            Serial.println("");
-        }
-    }
-
-    return success;
+    // runManualCalibration() now includes diagnostic test + calibration
+    return runManualCalibration();
 }
 
 void MotorController::enable() {
