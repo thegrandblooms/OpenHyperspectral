@@ -325,9 +325,9 @@ void runMotorTest(MotorController& motorControl) {
         Serial.print("\nEnabling motor... ");
         motorControl.enable();
         if (motorControl.isEnabled()) {
-            Serial.println("Motor enabled");
+            Serial.println("✓ Motor enabled");
         } else {
-            Serial.println("FAILED - motor not calibrated!");
+            Serial.println("✗ FAILED - motor not calibrated!");
             Serial.println("Please run calibration first (type 'c' or 'calibrate')");
             return;
         }
@@ -337,40 +337,62 @@ void runMotorTest(MotorController& motorControl) {
 
     delay(500);
 
+    // Set home position
     Serial.print("Setting home position... ");
     motorControl.setHome();
 
     // Get encoder position (source of truth)
     motorControl.updateEncoder();
-    Serial.print("Home set at angle: ");
-    Serial.print(motorControl.getEncoderDegrees(), 2);
+    float home_deg = motorControl.getEncoderDegrees();
+    Serial.print("Home set at ");
+    Serial.print(home_deg, 2);
     Serial.println("°");
     delay(500);
 
-    Serial.print("Moving to 90°... ");
-    motorControl.moveToPosition(90.0);
-    Serial.print("Target: ");
-    Serial.print(motorControl.getTargetPositionDeg(), 2);
-    Serial.println("°");
-    delay(3000);
-    printStatus(motorControl);
+    // Test positions (relative to home)
+    float test_positions[] = {30.0, 60.0, 0.0};  // Smaller range for cable safety
+    const char* position_names[] = {"+30°", "+60°", "home (0°)"};
 
-    Serial.print("Moving to 180°... ");
-    motorControl.moveToPosition(180.0);
-    Serial.print("Target: ");
-    Serial.print(motorControl.getTargetPositionDeg(), 2);
-    Serial.println("°");
-    delay(3000);
-    printStatus(motorControl);
+    for (int i = 0; i < 3; i++) {
+        float target_deg = test_positions[i];
 
-    Serial.print("Moving back to home (0°)... ");
-    motorControl.moveToPosition(0.0);
-    Serial.print("Target: ");
-    Serial.print(motorControl.getTargetPositionDeg(), 2);
-    Serial.println("°");
-    delay(3000);
+        Serial.print("\nMoving to ");
+        Serial.print(position_names[i]);
+        Serial.print("... ");
+        motorControl.moveToPosition(target_deg);
 
-    Serial.println("\nMotor test sequence complete!\n");
+        // Run control loop until target reached or timeout
+        unsigned long start_time = millis();
+        const unsigned long timeout_ms = 5000;
+
+        while (millis() - start_time < timeout_ms) {
+            motorControl.update();  // ✅ Run FOC control loop!
+            delay(10);  // 100 Hz update rate
+
+            if (motorControl.isAtTarget()) {
+                break;
+            }
+        }
+
+        // Read final position from encoder (source of truth)
+        motorControl.updateEncoder();
+        float actual_deg = motorControl.getEncoderDegrees();
+        float error_deg = actual_deg - target_deg;
+
+        // Handle angle wrapping
+        if (error_deg > 180.0) error_deg -= 360.0;
+        if (error_deg < -180.0) error_deg += 360.0;
+
+        Serial.print("Reached ");
+        Serial.print(actual_deg, 2);
+        Serial.print("° (error: ");
+        Serial.print(error_deg, 2);
+        Serial.println("°)");
+
+        delay(1000);
+    }
+
+    Serial.println("\n✓ Motor test sequence complete!\n");
     printStatus(motorControl);
 }
 
@@ -379,8 +401,8 @@ void runPositionSweepTest(MotorController& motorControl) {
     Serial.println("║            5-Position Motor Control Sweep Test                 ║");
     Serial.println("╚════════════════════════════════════════════════════════════════╝");
     Serial.println("\nThis test verifies precise motor position control by moving");
-    Serial.println("through 5 positions and comparing commanded vs actual position.");
-    Serial.println("Goal: Confirm motor control and encoder are properly synchronized.\n");
+    Serial.println("through 5 positions within ±30° (safe for cables).");
+    Serial.println("Compares commanded position vs encoder reading (source of truth).\n");
 
     // Auto-enable motor for this test
     if (!motorControl.isEnabled()) {
@@ -406,11 +428,11 @@ void runPositionSweepTest(MotorController& motorControl) {
     float home_angle = motorControl.getEncoderDegrees();
     Serial.print("Home set at ");
     Serial.print(home_angle, 2);
-    Serial.println("°");
+    Serial.println("° (absolute encoder reading)");
     delay(1000);
 
-    // Define 5 test positions (degrees)
-    const float test_positions[] = {0.0, 45.0, 90.0, 180.0, 270.0};
+    // Define 5 test positions within ±30° range (safe for cables)
+    const float test_positions[] = {0.0, -15.0, -30.0, 15.0, 30.0};
     const int num_positions = 5;
     const float position_tolerance = 2.0;  // ±2° tolerance for success
 
@@ -441,8 +463,8 @@ void runPositionSweepTest(MotorController& motorControl) {
         bool settled = false;
 
         while (millis() - start_time < timeout_ms) {
-            motorControl.update();  // Run control loop
-            delay(50);  // 20 Hz update rate
+            motorControl.update();  // ✅ Run FOC control loop!
+            delay(10);  // 100 Hz update rate
 
             // Check if settled at target
             if (motorControl.isAtTarget()) {
@@ -451,7 +473,7 @@ void runPositionSweepTest(MotorController& motorControl) {
             }
         }
 
-        // Read actual position from encoder (source of truth)
+        // Read actual position from encoder (source of truth!)
         motorControl.updateEncoder();
         float actual_deg = motorControl.getEncoderDegrees();
         float error_deg = actual_deg - target_deg;
@@ -461,32 +483,42 @@ void runPositionSweepTest(MotorController& motorControl) {
         if (error_deg < -180.0) error_deg += 360.0;
         float abs_error_deg = abs(error_deg);
 
-        // Print results
-        Serial.print("  Target:   ");
+        // Calculate time taken
+        unsigned long time_taken_ms = millis() - start_time;
+
+        // Print results with clear pass/fail indication
+        Serial.print("  Commanded: ");
         Serial.print(target_deg, 2);
         Serial.println("°");
-        Serial.print("  Actual:   ");
+        Serial.print("  Encoder:   ");
         Serial.print(actual_deg, 2);
-        Serial.print("° (encoder)");
-        Serial.println();
-        Serial.print("  Error:    ");
-        if (abs_error_deg < position_tolerance) {
-            Serial.print("✓ ");
-        } else {
-            Serial.print("✗ ");
-        }
+        Serial.println("° (source of truth)");
+        Serial.print("  Error:     ");
+        Serial.print(error_deg >= 0 ? "+" : "");
         Serial.print(error_deg, 2);
-        Serial.println("°");
+        Serial.print("° (");
+        if (abs_error_deg < position_tolerance) {
+            Serial.print("✓ within ±");
+            Serial.print(position_tolerance, 1);
+            Serial.println("°)");
+        } else {
+            Serial.print("✗ exceeds ±");
+            Serial.print(position_tolerance, 1);
+            Serial.println("°)");
+        }
+        Serial.print("  Time:      ");
+        Serial.print(time_taken_ms);
+        Serial.println(" ms");
 
         // Check result
         if (!settled) {
-            Serial.println("  Status:   ✗ TIMEOUT - Motor did not settle within 5s");
+            Serial.println("  Result:    ✗ TIMEOUT - Motor did not settle");
             positions_failed++;
         } else if (abs_error_deg < position_tolerance) {
-            Serial.println("  Status:   ✓ PASS - Within tolerance");
+            Serial.println("  Result:    ✓ PASS");
             positions_passed++;
         } else {
-            Serial.println("  Status:   ✗ FAIL - Excessive position error");
+            Serial.println("  Result:    ✗ FAIL - Position error too large");
             positions_failed++;
         }
 
@@ -496,27 +528,38 @@ void runPositionSweepTest(MotorController& motorControl) {
 
     // Print summary
     Serial.println("───────────────────────────────────────────────────────────────");
-    Serial.println("Test Summary:");
+    Serial.println("                        TEST SUMMARY");
     Serial.println("───────────────────────────────────────────────────────────────");
-    Serial.print("Positions tested: ");
+    Serial.print("Positions tested:  ");
     Serial.println(num_positions);
-    Serial.print("✓ Passed:         ");
-    Serial.println(positions_passed);
-    Serial.print("✗ Failed:         ");
-    Serial.println(positions_failed);
-    Serial.print("Success rate:     ");
+    Serial.print("✓ Passed:          ");
+    Serial.print(positions_passed);
+    Serial.print(" (");
     Serial.print((positions_passed * 100) / num_positions);
-    Serial.println("%");
+    Serial.println("%)");
+    Serial.print("✗ Failed:          ");
+    Serial.print(positions_failed);
+    Serial.print(" (");
+    Serial.print((positions_failed * 100) / num_positions);
+    Serial.println("%)");
+    Serial.print("Position tolerance: ±");
+    Serial.print(position_tolerance, 1);
+    Serial.println("°");
     Serial.println();
 
     if (positions_passed == num_positions) {
         Serial.println("╔════════════════════════════════════════════════════════════════╗");
-        Serial.println("║  ✓ ALL POSITIONS PASSED - Motor control is working correctly! ║");
+        Serial.println("║  ✓ ALL TESTS PASSED - Motor control & encoder synchronized!   ║");
         Serial.println("╚════════════════════════════════════════════════════════════════╝");
+        Serial.println("\nMotor is ready for operation!");
     } else {
         Serial.println("╔════════════════════════════════════════════════════════════════╗");
-        Serial.println("║  ✗ SOME POSITIONS FAILED - Check motor tuning and hardware    ║");
+        Serial.println("║  ✗ SOME TESTS FAILED - Check PID tuning and calibration       ║");
         Serial.println("╚════════════════════════════════════════════════════════════════╝");
+        Serial.println("\nRecommended actions:");
+        Serial.println("  1. Check encoder wiring (should see movement during test)");
+        Serial.println("  2. Verify calibration is correct (run 'c' command)");
+        Serial.println("  3. Adjust PID values in config.h if motor oscillates");
     }
     Serial.println();
 }
