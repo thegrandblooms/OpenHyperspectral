@@ -30,6 +30,7 @@ void runEncoderTest(MotorController& motorControl);
 void runPhaseTest(MotorController& motorControl);     // Test each driver phase individually
 void runAlignmentTest(MotorController& motorControl);  // Diagnostic test BEFORE calibration
 void runMotorTest(MotorController& motorControl);
+void runPositionSweepTest(MotorController& motorControl);  // 5-position precision test
 void runFullTest(MotorController& motorControl);
 
 #endif // TESTS_H
