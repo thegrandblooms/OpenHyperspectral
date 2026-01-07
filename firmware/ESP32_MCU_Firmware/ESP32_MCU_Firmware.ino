@@ -429,6 +429,9 @@ void processSerialCommand(String cmd) {
     else if (command == "motor_test") {
         runMotorTest(motorControl);
     }
+    else if (command == "position_sweep" || command == "sweep") {
+        runPositionSweepTest(motorControl);
+    }
     else if (command == "encoder_test") {
         runEncoderTest(motorControl);
     }
