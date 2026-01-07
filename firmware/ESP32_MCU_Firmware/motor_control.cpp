@@ -856,6 +856,23 @@ bool MotorController::runManualCalibration() {
 
     int foc_result = motor.initFOC();
 
+    // CRITICAL FIX: When using absolute encoders with pre-set zero_electric_angle,
+    // SimpleFOC skips alignment and doesn't initialize shaft_angle from the sensor.
+    // We must manually sync shaft_angle to the current sensor reading.
+    // This is a known SimpleFOC issue with absolute encoders.
+    // See: https://community.simplefoc.com/t/sensor-getangle-works-correctly-but-motor-shaft-angle-is-always-zero-mot-init-foc-failed-as-a-result/5357
+    if (foc_result == 1) {
+        encoder.update();  // Update sensor
+        motor.shaft_angle = encoder.getSensorAngle();  // Force sync!
+
+        if (DEBUG_MOTOR) {
+            Serial.println("[FIX] Initialized shaft_angle from sensor");
+            Serial.print("  shaft_angle = ");
+            Serial.print(radiansToDegrees(motor.shaft_angle), 2);
+            Serial.println("°");
+        }
+    }
+
     // Disable motor after calibration
     motor.disable();
 
@@ -915,8 +932,16 @@ void MotorController::enable() {
     motor.enable();
     motor_enabled = true;
 
+    // CRITICAL FIX: Sync shaft_angle with sensor when enabling
+    // This ensures SimpleFOC knows the current position before starting control
+    encoder.update();
+    motor.shaft_angle = encoder.getSensorAngle();
+
     if (DEBUG_MOTOR) {
         Serial.println("Motor enabled");
+        Serial.print("[FIX] Synced shaft_angle to sensor: ");
+        Serial.print(radiansToDegrees(motor.shaft_angle), 2);
+        Serial.println("°");
     }
 }
 
@@ -942,15 +967,22 @@ void MotorController::stop() {
 
 void MotorController::setHome() {
     // Set current position as home (zero)
-    // SIMPLEFOC BOUNDARY: Read radians, display in degrees
-    float current_angle_rad = motor.shaft_angle;
-    motor.sensor_offset = current_angle_rad;
+    // IMPORTANT: For absolute encoders, we must read the actual sensor position,
+    // not rely on shaft_angle which may be stale or unsynced.
+    encoder.update();
+    float current_sensor_angle = encoder.getSensorAngle();
+
+    // Update shaft_angle to match sensor (in case it drifted)
+    motor.shaft_angle = current_sensor_angle;
+
+    // Set sensor offset so this position becomes "zero"
+    motor.sensor_offset = current_sensor_angle;
 
     if (DEBUG_MOTOR) {
         Serial.print("Home set at angle: ");
-        Serial.print(radiansToDegrees(current_angle_rad), 2);
+        Serial.print(radiansToDegrees(current_sensor_angle), 2);
         Serial.print("° (");
-        Serial.print(current_angle_rad, 4);
+        Serial.print(current_sensor_angle, 4);
         Serial.println(" rad)");
     }
 }
