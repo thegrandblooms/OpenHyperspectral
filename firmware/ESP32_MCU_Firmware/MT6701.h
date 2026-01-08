@@ -139,6 +139,7 @@ private:
     TwoWire *_wire;
     uint8_t _address;
     bool _initialized;
+    uint16_t _last_valid_angle;  // Cache for I2C failure recovery
 
     /**
      * Read a single byte from register
