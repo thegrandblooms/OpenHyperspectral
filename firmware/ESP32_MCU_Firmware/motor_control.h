@@ -158,19 +158,52 @@ public:
     // Control
     void enable();
     void disable();
+    void stop();  // Emergency stop
     void moveToPosition(float absolute_deg);  // Move to absolute position (0-360°)
     void update();  // Call in loop - runs motor.loopFOC() + motor.move()
 
-    // Status (for diagnostics only)
-    float getPosition();  // Encoder position (absolute 0-360°)
+    // Home positioning
+    void setHome();  // Log current position (absolute encoders don't need homing)
+
+    // Configuration (legacy compatibility)
+    void setVelocity(float velocity_deg_s);
+    void setAcceleration(float accel_deg_s2);
+    void setCurrentLimit(float new_current_limit_a);
+    void setControlMode(uint8_t mode);
+
+    // PID tuning
+    void setPositionPID(float p, float i, float d, float ramp_deg_s);
+    void setVelocityPID(float p, float i, float d, float ramp_deg_s);
+    void setCurrentPID(float p, float i, float d, float ramp);
+    bool autoTunePID(bool verbose = false);
+
+    // Status getters
+    float getPosition();  // Current position (absolute 0-360°)
+    float getAbsolutePositionDeg();  // Alias for getPosition()
+    float getCurrentPositionDeg();  // Alias for getPosition()
+    float getCurrentVelocityDegPerSec();
+    float getTargetPositionDeg();
+    float getTargetVelocityDegPerSec();
+    float getCurrent();
+    float getVoltage();
     bool isEnabled();
     bool isCalibrated();
+    bool isAtTarget();
+    uint8_t getState();
+    uint8_t getControlMode();
 
-    // Direct access for tests
+    // Direct encoder access (for diagnostics)
+    void updateEncoder();  // Force encoder read
+    uint16_t getRawEncoderCount();
+    float getEncoderDegrees();  // Direct encoder read
+
+    // Testing functions
+    bool testDriverPhases();
+    bool testMotorAlignment();
+
+    // Direct motor access for tests
     BLDCMotor& getMotor() { return motor; }
     MT6701Sensor& getEncoder() { return encoder; }
-    void updateEncoder();  // Force encoder read
-    float getEncoderDegrees();  // Direct encoder read
 
 private:
     // SimpleFOC objects
@@ -182,6 +215,10 @@ private:
     bool motor_enabled;
     bool motor_calibrated;
     float target_position_deg;  // Absolute position (0-360°)
+
+    // Calibration helpers
+    bool runCalibration();
+    bool runManualCalibration();
 };
 
 #endif // MOTOR_CONTROL_H
