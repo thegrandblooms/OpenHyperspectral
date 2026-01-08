@@ -413,9 +413,9 @@ void runMotorTest(MotorController& motorControl) {
     }
     Serial.println("✓ SimpleFOC tracking encoder correctly\n");
 
-    // Step 3: Test small movement
-    Serial.println("=== Step 3: Test 15° Movement ===");
-    float test_target = 15.0;
+    // Step 3: Test movement (30° to ensure visible motion)
+    Serial.println("=== Step 3: Test 30° Movement ===");
+    float test_target = 30.0;  // Larger movement to overcome static friction
     motorControl.updateEncoder();
     float start_position = motorControl.getEncoderDegrees();
 
@@ -476,22 +476,28 @@ void runMotorTest(MotorController& motorControl) {
     Serial.println();
 
     // FAILURE DETECTION
-    if (movement < 1.0) {
-        Serial.println("✗✗✗ TEST FAILED: Motor didn't move!");
-        Serial.println("Encoder position barely changed during commanded movement.");
+    if (movement < 5.0) {
+        Serial.println("✗✗✗ TEST FAILED: Motor didn't move significantly!");
+        Serial.print("Commanded 30° movement but encoder only changed by ");
+        Serial.print(movement, 2);
+        Serial.println("°");
         Serial.println("\nThis suggests:");
         Serial.println("  1. Motor isn't receiving power");
         Serial.println("  2. FOC control loop isn't running");
         Serial.println("  3. PID gains too low to generate motion");
+        Serial.println("  4. Static friction too high (mechanical issue)");
         logMotorState(motorControl, "Final state");
         return;
     }
 
-    if (error > 5.0) {
+    if (error > 3.0) {
         Serial.println("✗✗✗ TEST FAILED: Large position error");
-        Serial.print("Motor moved but missed target by ");
+        Serial.print("Motor moved ");
+        Serial.print(movement, 2);
+        Serial.print("° but missed target by ");
         Serial.print(error, 2);
         Serial.println("°");
+        Serial.println("\nMotor CAN move but accuracy is poor - check PID tuning.");
         logMotorState(motorControl, "Final state");
         return;
     }
