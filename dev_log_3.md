@@ -214,27 +214,37 @@ motor.LPF_angle.Tf = 0.0f;  // ← THE FIX (didn't work yet)
 
 ---
 
-## Next Steps
+## Session End Status
 
-1. **Verify what's actually running**
-   - Check if old setHome() code with sensor_offset is still active
-   - Confirm LPF_angle.Tf initialization is in uploaded code
+**Confirmed:**
+- ✅ Motor physically moves (encoder shows 44° movement)
+- ✅ Encoder reads correctly (absolute position tracking works)
+- ✅ `motor.LPF_angle.Tf = 0.0f` is initialized in code
+- ❌ shaft_angle still resets to 0.00° during movement
+- ⚠️  home_offset code still active (merge conflict brought it back)
 
-2. **Add more diagnostics**
-   - Log motor.LPF_angle.Tf value at runtime
-   - Log sensor_offset value (should be 0)
-   - Check if sensor_direction is correct
+**The fix didn't work.** Initializing LPF_angle.Tf alone was not sufficient.
 
-3. **Try SimpleFOC forum search**
-   - Search for "shaft_angle resets to zero"
-   - Look for absolute encoder position tracking issues
-   - Check if this is a known bug
+## Next Steps for Future Session
 
-4. **Nuclear option: Minimal reproduction**
-   - Strip everything down to bare SimpleFOC example
-   - Just: init, calibrate, enable, move
-   - No home, no tests, no complexity
-   - See if basic position control works
+1. **Remove home_offset layer completely**
+   - This is masking the real issue
+   - SimpleFOC examples don't use home offsets
+   - Work directly in absolute positions only
+
+2. **Check SimpleFOC source code**
+   - Where does shaft_angle get reset?
+   - Look at loopFOC() and move() implementations
+   - Check if there's a known issue with I2C sensors
+
+3. **Try minimal SimpleFOC example**
+   - Strip to bare bones: sensor.init(), motor.initFOC(), motor.move()
+   - Remove all our custom code
+   - See if basic example works
+
+4. **Consider asking SimpleFOC community**
+   - Post on SimpleFOC forum with test results
+   - This specific symptom (shaft_angle → 0° during movement) might be known
 
 ---
 
