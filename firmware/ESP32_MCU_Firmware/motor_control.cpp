@@ -260,18 +260,7 @@ MotorController::MotorController()
       encoder(ENCODER_I2C_ADDR),
       motor_enabled(false),
       motor_calibrated(false),
-<<<<<<< HEAD
       target_position_deg(0.0f) {
-=======
-      target_position_deg(0.0f),
-      target_velocity_deg_s(0.0f),
-      max_velocity_deg_s(MAX_VELOCITY_DEG),
-      max_acceleration_deg_s2(DEFAULT_ACCELERATION_DEG),
-      current_limit_a(CURRENT_LIMIT),
-      target_reached(false),
-      position_tolerance_deg(POSITION_TOLERANCE_DEG),
-      home_offset_rad(0.0f) {
->>>>>>> parent of 4b2e193 (Strip out coordinate system complexity - use SimpleFOC standard approach)
 }
 
 void MotorController::begin() {
@@ -326,8 +315,8 @@ void MotorController::begin() {
     // SIMPLEFOC BOUNDARY: convert degrees to radians
     // Voltage limit: Research shows 6V is optimal for gimbal motors (prevents overshoot/cogging)
     motor.voltage_limit = VOLTAGE_LIMIT_GIMBAL;  // 6V for smooth gimbal operation (was 9.6V)
-    motor.current_limit = current_limit_a;
-    motor.velocity_limit = degreesToRadians(max_velocity_deg_s);
+    motor.current_limit = CURRENT_LIMIT;
+    motor.velocity_limit = degreesToRadians(MAX_VELOCITY_DEG);
 
     if (DEBUG_MOTOR) {
         Serial.print("[MOTOR] Voltage limit set to: ");
@@ -337,7 +326,7 @@ void MotorController::begin() {
         Serial.print(motor.current_limit);
         Serial.println(" A");
         Serial.print("[MOTOR] Velocity limit: ");
-        Serial.print(max_velocity_deg_s);
+        Serial.print(MAX_VELOCITY_DEG);
         Serial.println("°/s");
     }
 
@@ -348,18 +337,8 @@ void MotorController::begin() {
     // Torque mode can cause cogging at low speeds
     motor.torque_controller = TorqueControlType::voltage;
 
-    // Set motion control type based on default mode
-    switch (control_mode) {
-        case MODE_POSITION:
-            motor.controller = MotionControlType::angle;
-            break;
-        case MODE_VELOCITY:
-            motor.controller = MotionControlType::velocity;
-            break;
-        case MODE_TORQUE:
-            motor.controller = MotionControlType::torque;
-            break;
-    }
+    // Set motion control type to position control (angle mode)
+    motor.controller = MotionControlType::angle;
 
     // Configure PID controllers
     // Velocity PID (SIMPLEFOC: uses radians internally)
@@ -368,14 +347,14 @@ void MotorController::begin() {
     motor.PID_velocity.D = PID_D_VELOCITY;
     motor.PID_velocity.output_ramp = PID_RAMP_VELOCITY;  // rad/s
     motor.LPF_velocity.Tf = PID_LPF_VELOCITY;  // Low-pass filter for gimbal motor stability
-    motor.PID_velocity.limit = degreesToRadians(max_velocity_deg_s);
+    motor.PID_velocity.limit = degreesToRadians(MAX_VELOCITY_DEG);
 
     // Position PID (SIMPLEFOC: uses radians internally)
     motor.P_angle.P = PID_P_POSITION;
     motor.P_angle.I = PID_I_POSITION;
     motor.P_angle.D = PID_D_POSITION;
     motor.P_angle.output_ramp = PID_RAMP_POSITION;  // rad/s
-    motor.P_angle.limit = degreesToRadians(max_velocity_deg_s);
+    motor.P_angle.limit = degreesToRadians(MAX_VELOCITY_DEG);
 
     // CRITICAL FIX: Initialize angle low-pass filter (prevents shaft_angle reset bug)
     motor.LPF_angle.Tf = 0.0f;  // No filtering for absolute encoders
@@ -386,13 +365,13 @@ void MotorController::begin() {
     motor.PID_current_q.I = PID_I_CURRENT;
     motor.PID_current_q.D = PID_D_CURRENT;
     motor.PID_current_q.output_ramp = PID_RAMP_CURRENT;
-    motor.PID_current_q.limit = current_limit_a;
+    motor.PID_current_q.limit = CURRENT_LIMIT;
 
     motor.PID_current_d.P = PID_P_CURRENT;
     motor.PID_current_d.I = PID_I_CURRENT;
     motor.PID_current_d.D = PID_D_CURRENT;
     motor.PID_current_d.output_ramp = PID_RAMP_CURRENT;
-    motor.PID_current_d.limit = current_limit_a;
+    motor.PID_current_d.limit = CURRENT_LIMIT;
 
     // Enable SimpleFOC monitoring for debugging
     if (DEBUG_MOTOR) {
@@ -449,21 +428,17 @@ bool MotorController::calibrate() {
         Serial.println("Starting motor calibration...");
     }
 
-    system_state = STATE_CALIBRATING;
-
     // Run SimpleFOC calibration
     bool success = runCalibration();
 
     if (success) {
         motor_calibrated = true;
-        system_state = STATE_IDLE;
 
         if (DEBUG_MOTOR) {
             Serial.println("Calibration successful");
         }
     } else {
         motor_calibrated = false;
-        system_state = STATE_ERROR;
 
         if (DEBUG_MOTOR) {
             Serial.println("Calibration failed");
@@ -938,14 +913,9 @@ void MotorController::enable() {
     motor.enable();
     motor_enabled = true;
 
-    // CRITICAL FIX: Sync shaft_angle with sensor when enabling
-    // This ensures SimpleFOC knows the current position before starting control
-    encoder.update();
-    motor.shaft_angle = encoder.getSensorAngle();
-
     if (DEBUG_MOTOR) {
         Serial.println("Motor enabled");
-        Serial.print("[FIX] Synced shaft_angle to sensor: ");
+        Serial.print("Current position: ");
         Serial.print(radiansToDegrees(motor.shaft_angle), 2);
         Serial.println("°");
     }
@@ -964,7 +934,6 @@ void MotorController::stop() {
     // Emergency stop - disable motor immediately
     motor.disable();
     motor_enabled = false;
-    system_state = STATE_IDLE;
 
     if (DEBUG_MOTOR) {
         Serial.println("Motor stopped (emergency)");
@@ -972,23 +941,16 @@ void MotorController::stop() {
 }
 
 void MotorController::setHome() {
-    // Set current position as home (zero) using SOFTWARE OFFSET
-    // SimpleFOC continues to work in absolute positions (sensor_offset = 0)
-    // We translate user positions: user_pos = absolute_pos - home_offset
-    encoder.update();
-    float current_sensor_angle = encoder.getSensorAngle();
-
-    // Store home offset in our software layer (NOT in SimpleFOC)
-    home_offset_rad = current_sensor_angle;
+    // Absolute encoders don't need homing - they retain position after power-off
+    // This function just logs the current position as a reference point
+    // All position commands work in absolute coordinates (0-360°)
 
     if (DEBUG_MOTOR) {
-        Serial.print("Home set at absolute angle: ");
-        Serial.print(radiansToDegrees(current_sensor_angle), 2);
-        Serial.print("° (");
-        Serial.print(current_sensor_angle, 4);
-        Serial.println(" rad)");
-        Serial.println("  SimpleFOC continues working in absolute positions");
-        Serial.println("  We translate: user_position = absolute - home_offset");
+        Serial.print("Current absolute position: ");
+        Serial.print(radiansToDegrees(motor.shaft_angle), 2);
+        Serial.println("°");
+        Serial.println("  Note: Absolute encoders work in fixed coordinates (0-360°)");
+        Serial.println("  All move commands use absolute positions");
     }
 }
 
@@ -1000,95 +962,67 @@ void MotorController::moveToPosition(float position_deg) {
         return;
     }
 
-    if (control_mode != MODE_POSITION) {
-        if (DEBUG_MOTOR) {
-            Serial.println("Cannot move - not in position control mode");
-        }
-        return;
-    }
-
+    // Store target position (absolute coordinates 0-360°)
     target_position_deg = position_deg;
-    target_reached = false;
-    system_state = STATE_MOVING;
 
     if (DEBUG_MOTOR) {
-        Serial.print("Moving to position: ");
+        Serial.print("Moving to absolute position: ");
         Serial.print(position_deg, 2);
         Serial.println("°");
     }
 }
 
 void MotorController::setVelocity(float velocity_deg_s) {
-    target_velocity_deg_s = constrain(velocity_deg_s, -max_velocity_deg_s, max_velocity_deg_s);
+    // Legacy function - simplified interface uses position control only
+    // Update velocity limit directly in SimpleFOC
+    float velocity_rad_s = degreesToRadians(constrain(velocity_deg_s, 0, MAX_VELOCITY_DEG));
+    motor.velocity_limit = velocity_rad_s;
 
     if (DEBUG_MOTOR) {
-        Serial.print("Velocity set to: ");
-        Serial.print(target_velocity_deg_s, 2);
+        Serial.print("Velocity limit set to: ");
+        Serial.print(velocity_deg_s, 2);
         Serial.println("°/s");
     }
 }
 
 void MotorController::setAcceleration(float accel_deg_s2) {
-    max_acceleration_deg_s2 = constrain(accel_deg_s2, 0, MAX_ACCELERATION_DEG);
-
-    // SIMPLEFOC BOUNDARY: Update PID ramp limits (convert to rad/s)
-    float accel_rad_s2 = degreesToRadians(max_acceleration_deg_s2);
+    // Update PID ramp limits directly (this affects acceleration)
+    float accel_rad_s2 = degreesToRadians(constrain(accel_deg_s2, 0, MAX_ACCELERATION_DEG));
     motor.PID_velocity.output_ramp = accel_rad_s2;
     motor.P_angle.output_ramp = accel_rad_s2;
 
     if (DEBUG_MOTOR) {
         Serial.print("Acceleration set to: ");
-        Serial.print(max_acceleration_deg_s2, 2);
+        Serial.print(accel_deg_s2, 2);
         Serial.println("°/s²");
     }
 }
 
 void MotorController::setCurrentLimit(float new_current_limit_a) {
-    current_limit_a = constrain(new_current_limit_a, 0, CURRENT_LIMIT);
-    motor.current_limit = current_limit_a;
+    // Update current limit directly in SimpleFOC
+    float limited_current = constrain(new_current_limit_a, 0, CURRENT_LIMIT);
+    motor.current_limit = limited_current;
 
     if (DEBUG_MOTOR) {
         Serial.print("Current limit set to: ");
-        Serial.print(current_limit_a, 2);
+        Serial.print(limited_current, 2);
         Serial.println(" A");
     }
 }
 
 void MotorController::setControlMode(uint8_t mode) {
-    // Disable motor before changing mode
-    bool was_enabled = motor_enabled;
-    if (motor_enabled) {
-        disable();
-    }
-
-    control_mode = mode;
-
-    // Update motor controller type
-    switch (mode) {
-        case MODE_POSITION:
-            motor.controller = MotionControlType::angle;
-            break;
-        case MODE_VELOCITY:
-            motor.controller = MotionControlType::velocity;
-            break;
-        case MODE_TORQUE:
-            motor.controller = MotionControlType::torque;
-            break;
-    }
-
+    // Simplified interface: position control only
+    // This function is kept for compatibility but does nothing
     if (DEBUG_MOTOR) {
-        Serial.print("Control mode changed to: ");
-        Serial.println(mode);
-    }
-
-    // Re-enable motor if it was enabled before
-    if (was_enabled) {
-        enable();
+        Serial.print("Control mode: ");
+        Serial.print(mode);
+        Serial.println(" (note: simplified interface uses position control only)");
     }
 }
 
 uint8_t MotorController::getControlMode() {
-    return control_mode;
+    // Simplified interface: always in position control mode
+    return MODE_POSITION;
 }
 
 void MotorController::setPositionPID(float p, float i, float d, float ramp_deg_s) {
@@ -1210,24 +1144,20 @@ bool MotorController::autoTunePID(bool verbose) {
     return success;
 }
 
-float MotorController::getAbsolutePositionDeg() {
-    // ABSOLUTE ENCODER (MT6701): Direct hardware read - THIS IS TRUTH
-    // This bypasses SimpleFOC and reads the encoder directly via I2C
-    // Returns position relative to home (subtracts home_offset)
-    // Use this for position checking, not SimpleFOC's shaft_angle
-    float absolute_deg = encoder.getDegrees();
-    float home_offset_deg = radiansToDegrees(home_offset_rad);
+float MotorController::getPosition() {
+    // Return current position from SimpleFOC (absolute 0-360°)
+    // SimpleFOC's shaft_angle is kept synchronized by loopFOC()
+    return radiansToDegrees(motor.shaft_angle);
+}
 
-    // Return user-relative position
-    return normalizeDegrees(absolute_deg - home_offset_deg);
+float MotorController::getAbsolutePositionDeg() {
+    // Alias for getPosition() - kept for compatibility
+    return getPosition();
 }
 
 float MotorController::getCurrentPositionDeg() {
-    // SIMPLEFOC BOUNDARY: Read radians, return degrees
-    // WARNING: This is SimpleFOC's internal state, which may lag or drift!
-    // For accurate position, use getAbsolutePositionDeg() instead
-    // Subtract home offset to return position relative to home
-    return radiansToDegrees(motor.shaft_angle - home_offset_rad);
+    // Alias for getPosition() - kept for compatibility
+    return getPosition();
 }
 
 float MotorController::getCurrentVelocityDegPerSec() {
@@ -1260,42 +1190,40 @@ bool MotorController::isCalibrated() {
 }
 
 bool MotorController::isAtTarget() {
-    if (control_mode != MODE_POSITION) {
-        return false;
+    // FIX: Use motor.shaft_angle (already updated by loopFOC)
+    // Do NOT call encoder.update() - it creates a race condition!
+    // SimpleFOC's loopFOC() already updated the sensor and shaft_angle
+
+    float current_position_rad = motor.shaft_angle;
+    float current_velocity_rad_s = motor.shaft_velocity;
+
+    // Convert to degrees for comparison
+    float current_position_deg = radiansToDegrees(current_position_rad);
+    float velocity_deg_s = abs(radiansToDegrees(current_velocity_rad_s));
+
+    // Calculate position error (both in absolute coordinates)
+    float position_error_deg = abs(current_position_deg - target_position_deg);
+
+    // Handle wraparound (e.g., target=5°, current=355° → error=10°, not 350°)
+    if (position_error_deg > 180.0f) {
+        position_error_deg = 360.0f - position_error_deg;
     }
 
-    // CRITICAL: Use ENCODER position, not SimpleFOC shaft_angle!
-    // SimpleFOC's shaft_angle may not update correctly, but the MT6701 absolute
-    // encoder is the source of truth for actual motor position.
+    // Target reached if position error is small and velocity is low
+    const float POSITION_TOLERANCE_DEG = 2.0f;  // degrees
+    const float VELOCITY_THRESHOLD_DEG = 5.0f;  // deg/s
 
-    // Update encoder to get fresh reading
-    encoder.update();
-    float current_position_deg = encoder.getDegrees();  // Absolute position (0-360°)
-    float current_velocity_deg_s = encoder.getDegreesPerSecond();
-
-    // Convert user target to absolute target for comparison
-    // target_position_deg is user-relative, encoder reads absolute
-    float target_absolute_deg = target_position_deg + radiansToDegrees(home_offset_rad);
-
-    // Normalize target to 0-360° range
-    target_absolute_deg = normalizeDegrees(target_absolute_deg);
-
-    float position_error_deg = abs(current_position_deg - target_absolute_deg);
-    float velocity_deg_s = abs(current_velocity_deg_s);
-
-    // Consider target reached if position error is small and velocity is near zero
-    bool at_target = (position_error_deg < position_tolerance_deg) && (velocity_deg_s < VELOCITY_THRESHOLD_DEG);
+    bool at_target = (position_error_deg < POSITION_TOLERANCE_DEG) &&
+                     (velocity_deg_s < VELOCITY_THRESHOLD_DEG);
 
     if (DEBUG_MOTOR && at_target) {
         static unsigned long last_debug = 0;
         if (millis() - last_debug > 1000) {  // Debug once per second
-            Serial.print("[AT_TARGET] Encoder: ");
+            Serial.print("[AT_TARGET] Current: ");
             Serial.print(current_position_deg, 2);
-            Serial.print("° (abs), Target: ");
+            Serial.print("°, Target: ");
             Serial.print(target_position_deg, 2);
-            Serial.print("° (user) = ");
-            Serial.print(target_absolute_deg, 2);
-            Serial.print("° (abs), Error: ");
+            Serial.print("°, Error: ");
             Serial.print(position_error_deg, 2);
             Serial.print("°, Vel: ");
             Serial.print(velocity_deg_s, 2);
@@ -1308,7 +1236,18 @@ bool MotorController::isAtTarget() {
 }
 
 uint8_t MotorController::getState() {
-    return system_state;
+    // Simplified state tracking based on calibration and enable status
+    if (!motor_calibrated) {
+        return STATE_ERROR;  // Not calibrated = error state
+    }
+    if (!motor_enabled) {
+        return STATE_IDLE;  // Calibrated but not enabled = idle
+    }
+    // Motor is enabled and calibrated - check if at target
+    if (isAtTarget()) {
+        return STATE_IDLE;  // At target = idle
+    }
+    return STATE_MOVING;  // Moving to target
 }
 
 void MotorController::updateEncoder() {
@@ -1336,38 +1275,19 @@ void MotorController::update() {
     // Do NOT call encoder.update() manually here - it breaks the control loop!
     motor.loopFOC();
 
-    // SIMPLEFOC: Run motion control (position/velocity control)
-    // BOUNDARY: Convert degrees to radians for SimpleFOC
-    switch (control_mode) {
-        case MODE_POSITION:
-            // Convert target from degrees to radians and add home offset
-            // user_position = absolute_position - home_offset
-            // absolute_target = user_target + home_offset
-            motor.move(degreesToRadians(target_position_deg) + home_offset_rad);
+    // SIMPLEFOC: Run motion control (position control)
+    // Convert target from degrees to radians for SimpleFOC
+    // Both target and shaft_angle are in absolute coordinates (0-360° / 0-2π rad)
+    motor.move(degreesToRadians(target_position_deg));
 
-            // Check if target reached
-            if (system_state == STATE_MOVING && isAtTarget()) {
-                if (!target_reached) {
-                    target_reached = true;
-                    system_state = STATE_IDLE;
-
-                    if (DEBUG_MOTOR) {
-                        Serial.print("Target position reached: ");
-                        Serial.print(target_position_deg, 2);
-                        Serial.println("°");
-                    }
-                }
-            }
-            break;
-
-        case MODE_VELOCITY:
-            // Convert velocity from degrees/s to radians/s
-            motor.move(degreesToRadians(target_velocity_deg_s));
-            break;
-
-        case MODE_TORQUE:
-            // For torque mode, target is in current/torque units (no conversion)
-            motor.move(target_velocity_deg_s);  // Reuse variable for torque
-            break;
+    // Optional: Log when target is reached (for debugging)
+    if (DEBUG_MOTOR && isAtTarget()) {
+        static unsigned long last_reached_log = 0;
+        if (millis() - last_reached_log > 2000) {  // Log every 2 seconds when at target
+            Serial.print("At target position: ");
+            Serial.print(target_position_deg, 2);
+            Serial.println("°");
+            last_reached_log = millis();
+        }
     }
 }
