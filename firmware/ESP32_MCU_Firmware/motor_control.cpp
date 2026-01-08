@@ -258,17 +258,9 @@ MotorController::MotorController()
     : motor(POLE_PAIRS),
       driver(MOTOR_PWM_A, MOTOR_PWM_B, MOTOR_PWM_C, MOTOR_ENABLE),
       encoder(ENCODER_I2C_ADDR),
-      system_state(STATE_IDLE),
-      control_mode(DEFAULT_CONTROL_MODE),
       motor_enabled(false),
       motor_calibrated(false),
-      target_position_deg(0.0f),
-      target_velocity_deg_s(0.0f),
-      max_velocity_deg_s(MAX_VELOCITY_DEG),
-      max_acceleration_deg_s2(DEFAULT_ACCELERATION_DEG),
-      current_limit_a(CURRENT_LIMIT),
-      target_reached(false),
-      position_tolerance_deg(POSITION_TOLERANCE_DEG) {
+      target_position_deg(0.0f) {
 }
 
 void MotorController::begin() {
@@ -373,6 +365,9 @@ void MotorController::begin() {
     motor.P_angle.D = PID_D_POSITION;
     motor.P_angle.output_ramp = PID_RAMP_POSITION;  // rad/s
     motor.P_angle.limit = degreesToRadians(max_velocity_deg_s);
+
+    // CRITICAL FIX: Initialize angle low-pass filter (prevents shaft_angle reset bug)
+    motor.LPF_angle.Tf = 0.0f;  // No filtering for absolute encoders
 
     // Current control PID (for FOC)
     // Current control PID (FOC - uses amperes, no unit conversion needed)
