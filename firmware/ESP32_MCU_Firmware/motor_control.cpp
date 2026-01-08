@@ -268,7 +268,8 @@ MotorController::MotorController()
       max_acceleration_deg_s2(DEFAULT_ACCELERATION_DEG),
       current_limit_a(CURRENT_LIMIT),
       target_reached(false),
-      position_tolerance_deg(POSITION_TOLERANCE_DEG) {
+      position_tolerance_deg(POSITION_TOLERANCE_DEG),
+      home_offset_rad(0.0f) {
 }
 
 void MotorController::begin() {
@@ -966,24 +967,23 @@ void MotorController::stop() {
 }
 
 void MotorController::setHome() {
-    // Set current position as home (zero)
-    // IMPORTANT: For absolute encoders, we must read the actual sensor position,
-    // not rely on shaft_angle which may be stale or unsynced.
+    // Set current position as home (zero) using SOFTWARE OFFSET
+    // SimpleFOC continues to work in absolute positions (sensor_offset = 0)
+    // We translate user positions: user_pos = absolute_pos - home_offset
     encoder.update();
     float current_sensor_angle = encoder.getSensorAngle();
 
-    // Update shaft_angle to match sensor (in case it drifted)
-    motor.shaft_angle = current_sensor_angle;
-
-    // Set sensor offset so this position becomes "zero"
-    motor.sensor_offset = current_sensor_angle;
+    // Store home offset in our software layer (NOT in SimpleFOC)
+    home_offset_rad = current_sensor_angle;
 
     if (DEBUG_MOTOR) {
-        Serial.print("Home set at angle: ");
+        Serial.print("Home set at absolute angle: ");
         Serial.print(radiansToDegrees(current_sensor_angle), 2);
         Serial.print("° (");
         Serial.print(current_sensor_angle, 4);
         Serial.println(" rad)");
+        Serial.println("  SimpleFOC continues working in absolute positions");
+        Serial.println("  We translate: user_position = absolute - home_offset");
     }
 }
 
@@ -1208,15 +1208,21 @@ bool MotorController::autoTunePID(bool verbose) {
 float MotorController::getAbsolutePositionDeg() {
     // ABSOLUTE ENCODER (MT6701): Direct hardware read - THIS IS TRUTH
     // This bypasses SimpleFOC and reads the encoder directly via I2C
+    // Returns position relative to home (subtracts home_offset)
     // Use this for position checking, not SimpleFOC's shaft_angle
-    return encoder.getDegrees();
+    float absolute_deg = encoder.getDegrees();
+    float home_offset_deg = radiansToDegrees(home_offset_rad);
+
+    // Return user-relative position
+    return normalizeDegrees(absolute_deg - home_offset_deg);
 }
 
 float MotorController::getCurrentPositionDeg() {
     // SIMPLEFOC BOUNDARY: Read radians, return degrees
     // WARNING: This is SimpleFOC's internal state, which may lag or drift!
     // For accurate position, use getAbsolutePositionDeg() instead
-    return radiansToDegrees(motor.shaft_angle);
+    // Subtract home offset to return position relative to home
+    return radiansToDegrees(motor.shaft_angle - home_offset_rad);
 }
 
 float MotorController::getCurrentVelocityDegPerSec() {
@@ -1259,10 +1265,17 @@ bool MotorController::isAtTarget() {
 
     // Update encoder to get fresh reading
     encoder.update();
-    float current_position_deg = encoder.getDegrees();
+    float current_position_deg = encoder.getDegrees();  // Absolute position (0-360°)
     float current_velocity_deg_s = encoder.getDegreesPerSecond();
 
-    float position_error_deg = abs(current_position_deg - target_position_deg);
+    // Convert user target to absolute target for comparison
+    // target_position_deg is user-relative, encoder reads absolute
+    float target_absolute_deg = target_position_deg + radiansToDegrees(home_offset_rad);
+
+    // Normalize target to 0-360° range
+    target_absolute_deg = normalizeDegrees(target_absolute_deg);
+
+    float position_error_deg = abs(current_position_deg - target_absolute_deg);
     float velocity_deg_s = abs(current_velocity_deg_s);
 
     // Consider target reached if position error is small and velocity is near zero
@@ -1273,9 +1286,11 @@ bool MotorController::isAtTarget() {
         if (millis() - last_debug > 1000) {  // Debug once per second
             Serial.print("[AT_TARGET] Encoder: ");
             Serial.print(current_position_deg, 2);
-            Serial.print("°, Target: ");
+            Serial.print("° (abs), Target: ");
             Serial.print(target_position_deg, 2);
-            Serial.print("°, Error: ");
+            Serial.print("° (user) = ");
+            Serial.print(target_absolute_deg, 2);
+            Serial.print("° (abs), Error: ");
             Serial.print(position_error_deg, 2);
             Serial.print("°, Vel: ");
             Serial.print(velocity_deg_s, 2);
@@ -1320,8 +1335,10 @@ void MotorController::update() {
     // BOUNDARY: Convert degrees to radians for SimpleFOC
     switch (control_mode) {
         case MODE_POSITION:
-            // Convert target from degrees to radians
-            motor.move(degreesToRadians(target_position_deg));
+            // Convert target from degrees to radians and add home offset
+            // user_position = absolute_position - home_offset
+            // absolute_target = user_target + home_offset
+            motor.move(degreesToRadians(target_position_deg) + home_offset_rad);
 
             // Check if target reached
             if (system_state == STATE_MOVING && isAtTarget()) {
