@@ -22,23 +22,26 @@ void logMotorState(MotorController& motorControl, const char* context) {
     motorControl.updateEncoder();
 
     // Get all critical values
-    float encoder_deg = motorControl.getEncoderDegrees();
-    float shaft_angle_deg = motorControl.getCurrentPositionDeg();  // SimpleFOC internal
-    float target_deg = motorControl.getTargetPositionDeg();
+    float encoder_abs_deg = motorControl.getEncoderDegrees();  // Absolute (0-360°)
+    float user_position_deg = motorControl.getCurrentPositionDeg();  // User-relative (with home_offset subtracted)
+    float target_deg = motorControl.getTargetPositionDeg();  // User-relative
     bool enabled = motorControl.isEnabled();
     bool calibrated = motorControl.isCalibrated();
 
-    // Get SimpleFOC's raw motor state
+    // Get SimpleFOC's raw motor state (ABSOLUTE coordinates)
     BLDCMotor& motor = motorControl.getMotor();
+    float shaft_angle_abs_deg = radiansToDegrees(motor.shaft_angle);  // Absolute (0-360°)
     bool foc_enabled = (motor.enabled > 0);
     bool has_sensor = (motor.sensor != nullptr);
 
     Serial.print("[DIAG] ");
     Serial.println(context);
-    Serial.print("  Encoder: ");
-    Serial.print(encoder_deg, 2);
-    Serial.print("° | SimpleFOC shaft_angle: ");
-    Serial.print(shaft_angle_deg, 2);
+    Serial.print("  Encoder (abs): ");
+    Serial.print(encoder_abs_deg, 2);
+    Serial.print("° | SimpleFOC shaft_angle (abs): ");
+    Serial.print(shaft_angle_abs_deg, 2);
+    Serial.print("° | User pos: ");
+    Serial.print(user_position_deg, 2);
     Serial.print("° | Target: ");
     Serial.print(target_deg, 2);
     Serial.println("°");
@@ -50,9 +53,9 @@ void logMotorState(MotorController& motorControl, const char* context) {
     Serial.print(has_sensor ? "Y" : "N");
     Serial.print(" | Calibrated: ");
     Serial.println(calibrated ? "Y" : "N");
-    Serial.print("  Shaft_angle diff from encoder: ");
-    Serial.print(abs(encoder_deg - shaft_angle_deg), 2);
-    Serial.println("°");
+    Serial.print("  Tracking error (abs): ");
+    Serial.print(abs(encoder_abs_deg - shaft_angle_abs_deg), 2);
+    Serial.println("° (should be <5° for good tracking)");
 }
 
 //=============================================================================
@@ -391,18 +394,31 @@ void runMotorTest(MotorController& motorControl) {
 
     logMotorState(motorControl, "After setHome()");
 
-    // CRITICAL CHECK: SimpleFOC shaft_angle should match encoder after setHome
-    float shaft_angle_deg = motorControl.getCurrentPositionDeg();
-    float encoder_deg = motorControl.getEncoderDegrees();
-    float tracking_error = abs(encoder_deg - shaft_angle_deg);
+    // CRITICAL CHECK 1: User position should be ~0° after setting home
+    float user_position_deg = motorControl.getCurrentPositionDeg();
+    if (abs(user_position_deg) > 5.0) {
+        Serial.print("\n✗✗✗ TEST FAILED: User position (");
+        Serial.print(user_position_deg, 2);
+        Serial.println("°) should be ~0° after setHome()!");
+        Serial.println("Home offset not being applied correctly.");
+        return;
+    }
+    Serial.println("✓ User position is 0° after setHome()");
 
-    if (tracking_error > 5.0) {
+    // CRITICAL CHECK 2: SimpleFOC shaft_angle (absolute) should match encoder (absolute)
+    // This verifies SimpleFOC is tracking the sensor correctly
+    BLDCMotor& motor = motorControl.getMotor();
+    float shaft_angle_abs_deg = radiansToDegrees(motor.shaft_angle);
+    float encoder_abs_deg = motorControl.getEncoderDegrees();
+    float tracking_error_abs = abs(encoder_abs_deg - shaft_angle_abs_deg);
+
+    if (tracking_error_abs > 5.0) {
         Serial.print("\n✗✗✗ TEST FAILED: SimpleFOC shaft_angle (");
-        Serial.print(shaft_angle_deg, 2);
-        Serial.print("°) doesn't match encoder (");
-        Serial.print(encoder_deg, 2);
-        Serial.print("°) - diff: ");
-        Serial.print(tracking_error, 2);
+        Serial.print(shaft_angle_abs_deg, 2);
+        Serial.print("° abs) doesn't match encoder (");
+        Serial.print(encoder_abs_deg, 2);
+        Serial.print("° abs) - diff: ");
+        Serial.print(tracking_error_abs, 2);
         Serial.println("°");
         Serial.println("This means SimpleFOC isn't tracking the sensor!");
         Serial.println("\nPossible causes:");
@@ -411,7 +427,7 @@ void runMotorTest(MotorController& motorControl) {
         Serial.println("  3. Motor not actually enabled in SimpleFOC");
         return;
     }
-    Serial.println("✓ SimpleFOC tracking encoder correctly\n");
+    Serial.println("✓ SimpleFOC tracking encoder correctly (in absolute coordinates)\n");
 
     // Step 3: Test movement (30° to ensure visible motion)
     Serial.println("=== Step 3: Test 30° Movement ===");
