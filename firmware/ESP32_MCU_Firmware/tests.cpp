@@ -22,9 +22,9 @@ void logMotorState(MotorController& motorControl, const char* context) {
     motorControl.updateEncoder();
 
     // Get all critical values
-    float encoder_abs_deg = motorControl.getEncoderDegrees();  // Absolute (0-360°)
-    float user_position_deg = motorControl.getCurrentPositionDeg();  // User-relative (with home_offset subtracted)
-    float target_deg = motorControl.getTargetPositionDeg();  // User-relative
+    float encoder_abs_deg = motorControl.getEncoderDegrees();  // Absolute (0-360°) direct from encoder
+    float user_position_deg = motorControl.getCurrentPositionDeg();  // Absolute (0-360°) from SimpleFOC shaft_angle
+    float target_deg = motorControl.getTargetPositionDeg();  // Absolute (0-360°)
     bool enabled = motorControl.isEnabled();
     bool calibrated = motorControl.isCalibrated();
 
@@ -128,9 +128,9 @@ void printHelp() {
     Serial.println("  d, disable     - Disable motor");
     Serial.println("  c, calibrate   - Run motor calibration");
     Serial.println("  p, pidtune     - Run PID auto-tuning (after calibration)");
-    Serial.println("  home           - Set current position as home");
+    Serial.println("  home           - Log current position (absolute encoders don't need homing)");
     Serial.println("  stop           - Stop motor movement");
-    Serial.println("  m <angle>      - Move to angle (e.g., 'm 90' for 90 degrees)");
+    Serial.println("  m <angle>      - Move to absolute angle (e.g., 'm 90' for 90 degrees absolute)");
     Serial.println("  v <velocity>   - Set velocity (e.g., 'v 100.0' deg/s)");
     Serial.println("  a <accel>      - Set acceleration (e.g., 'a 50.0' deg/s²)");
     Serial.println("  mode <0-2>     - Set control mode (0=position, 1=velocity, 2=torque)");
@@ -384,28 +384,21 @@ void runMotorTest(MotorController& motorControl) {
         Serial.println("✓ Motor enabled\n");
     }
 
-    // Step 2: Set home and check shaft_angle tracking
-    Serial.println("=== Step 2: Set Home & Check Tracking ===");
+    // Step 2: Verify SimpleFOC tracking (absolute coordinates)
+    Serial.println("=== Step 2: Verify SimpleFOC Tracking ===");
     motorControl.updateEncoder();
-    float encoder_before_home = motorControl.getEncoderDegrees();
+    float current_abs_deg = motorControl.getEncoderDegrees();
 
-    motorControl.setHome();
+    Serial.print("Current absolute position: ");
+    Serial.print(current_abs_deg, 2);
+    Serial.println("°");
+    Serial.println("  Note: Absolute encoders work in fixed coordinates (0-360°)");
+    Serial.println("  All positions are absolute - no home offset applied\n");
+
     delay(100);
+    logMotorState(motorControl, "Current state");
 
-    logMotorState(motorControl, "After setHome()");
-
-    // CRITICAL CHECK 1: User position should be ~0° after setting home
-    float user_position_deg = motorControl.getCurrentPositionDeg();
-    if (abs(user_position_deg) > 5.0) {
-        Serial.print("\n✗✗✗ TEST FAILED: User position (");
-        Serial.print(user_position_deg, 2);
-        Serial.println("°) should be ~0° after setHome()!");
-        Serial.println("Home offset not being applied correctly.");
-        return;
-    }
-    Serial.println("✓ User position is 0° after setHome()");
-
-    // CRITICAL CHECK 2: SimpleFOC shaft_angle (absolute) should match encoder (absolute)
+    // CRITICAL CHECK: SimpleFOC shaft_angle (absolute) should match encoder (absolute)
     // This verifies SimpleFOC is tracking the sensor correctly
     BLDCMotor& motor = motorControl.getMotor();
     float shaft_angle_abs_deg = radiansToDegrees(motor.shaft_angle);
@@ -429,18 +422,23 @@ void runMotorTest(MotorController& motorControl) {
     }
     Serial.println("✓ SimpleFOC tracking encoder correctly (in absolute coordinates)\n");
 
-    // Step 3: Test movement (30° to ensure visible motion)
+    // Step 3: Test movement (+30° from current position)
     Serial.println("=== Step 3: Test 30° Movement ===");
-    float test_target = 30.0;  // Larger movement to overcome static friction
     motorControl.updateEncoder();
     float start_position = motorControl.getEncoderDegrees();
 
+    // Calculate target as +30° from current (with wraparound)
+    float test_target = start_position + 30.0;
+    if (test_target >= 360.0) {
+        test_target -= 360.0;
+    }
+
     Serial.print("Starting position: ");
     Serial.print(start_position, 2);
-    Serial.println("°");
+    Serial.println("° (absolute)");
     Serial.print("Commanding move to: ");
     Serial.print(test_target, 2);
-    Serial.println("°\n");
+    Serial.println("° (absolute, +30° from start)\n");
 
     motorControl.moveToPosition(test_target);
     logMotorState(motorControl, "After moveToPosition() called");
@@ -470,8 +468,18 @@ void runMotorTest(MotorController& motorControl) {
     // Check results
     motorControl.updateEncoder();
     float final_position = motorControl.getEncoderDegrees();
-    float movement = abs(final_position - start_position);
-    float error = abs(final_position - test_target);
+
+    // Calculate movement accounting for wraparound
+    float movement = final_position - start_position;
+    if (movement < -180.0) movement += 360.0;
+    if (movement > 180.0) movement -= 360.0;
+    movement = abs(movement);
+
+    // Calculate error accounting for wraparound
+    float error = final_position - test_target;
+    if (error < -180.0) error += 360.0;
+    if (error > 180.0) error -= 360.0;
+    error = abs(error);
 
     Serial.println("\n--- Movement Results ---");
     Serial.print("Start:    ");
@@ -494,7 +502,7 @@ void runMotorTest(MotorController& motorControl) {
     // FAILURE DETECTION
     if (movement < 5.0) {
         Serial.println("✗✗✗ TEST FAILED: Motor didn't move significantly!");
-        Serial.print("Commanded 30° movement but encoder only changed by ");
+        Serial.print("Expected ~30° movement but encoder only changed by ");
         Serial.print(movement, 2);
         Serial.println("°");
         Serial.println("\nThis suggests:");
@@ -504,6 +512,15 @@ void runMotorTest(MotorController& motorControl) {
         Serial.println("  4. Static friction too high (mechanical issue)");
         logMotorState(motorControl, "Final state");
         return;
+    }
+
+    // Check if movement is roughly correct (within ±10° of 30°)
+    if (abs(movement - 30.0) > 10.0) {
+        Serial.println("⚠ WARNING: Movement amount unexpected");
+        Serial.print("Expected ~30° but moved ");
+        Serial.print(movement, 2);
+        Serial.println("°");
+        Serial.println("Motor may have taken shortest path or wrapped around differently");
     }
 
     if (error > 3.0) {
@@ -550,20 +567,27 @@ void runPositionSweepTest(MotorController& motorControl) {
 
     delay(500);
 
-    // Set home position
-    Serial.print("\nSetting home position... ");
-    motorControl.setHome();
+    // Get starting position and calculate test positions (absolute coordinates)
     motorControl.updateEncoder();
-    float home_angle = motorControl.getEncoderDegrees();
-    Serial.print("Home set at ");
-    Serial.print(home_angle, 2);
-    Serial.println("° (absolute encoder reading)");
+    float start_angle = motorControl.getEncoderDegrees();
+    Serial.print("\nStarting position: ");
+    Serial.print(start_angle, 2);
+    Serial.println("° (absolute)");
+    Serial.println("Will test 5 positions within ±30° range (safe for cables)");
     delay(1000);
 
-    // Define 5 test positions within ±30° range (safe for cables)
-    const float test_positions[] = {0.0, -15.0, -30.0, 15.0, 30.0};
+    // Define 5 test positions as offsets from start, then convert to absolute
+    const float position_offsets[] = {0.0, -15.0, -30.0, 15.0, 30.0};
     const int num_positions = 5;
     const float position_tolerance = 2.0;  // ±2° tolerance for success
+
+    // Convert to absolute positions with wraparound
+    float test_positions[num_positions];
+    for (int i = 0; i < num_positions; i++) {
+        test_positions[i] = start_angle + position_offsets[i];
+        if (test_positions[i] < 0.0) test_positions[i] += 360.0;
+        if (test_positions[i] >= 360.0) test_positions[i] -= 360.0;
+    }
 
     Serial.println("\n───────────────────────────────────────────────────────────────");
     Serial.println("Starting position sweep...");
@@ -574,6 +598,7 @@ void runPositionSweepTest(MotorController& motorControl) {
 
     for (int i = 0; i < num_positions; i++) {
         float target_deg = test_positions[i];
+        float offset = position_offsets[i];
 
         Serial.print("[");
         Serial.print(i + 1);
@@ -581,7 +606,10 @@ void runPositionSweepTest(MotorController& motorControl) {
         Serial.print(num_positions);
         Serial.print("] Moving to ");
         Serial.print(target_deg, 1);
-        Serial.println("°...");
+        Serial.print("° (");
+        if (offset >= 0) Serial.print("+");
+        Serial.print(offset, 1);
+        Serial.println("° from start)...");
 
         // Command movement
         motorControl.moveToPosition(target_deg);
