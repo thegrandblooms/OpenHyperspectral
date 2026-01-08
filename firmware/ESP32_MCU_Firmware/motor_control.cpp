@@ -167,6 +167,36 @@ float MT6701Sensor::getSensorAngle() {
     return cached_radians;
 }
 
+float MT6701Sensor::getAngle() {
+    // CRITICAL FIX for single-turn absolute encoders
+    // SimpleFOC's base class Sensor::getAngle() returns:
+    //   angle_prev + full_rotations * 2π
+    //
+    // For single-turn absolute encoders (MT6701, AS5600, AS5048A):
+    // - Position naturally wraps at 0°/360° (0 to 2π radians)
+    // - Crossing 0°/360° is NOT a full rotation, just boundary wraparound
+    // - full_rotations should ALWAYS be 0
+    //
+    // Without this override, when motor crosses 0°/360°:
+    // 1. Base update() sees angle jump from 359° to 1° (Δ = -358° = -6.25 rad)
+    // 2. Triggers wraparound detection: abs(-6.25) > 0.8*2π = 5.03 ✓
+    // 3. Increments full_rotations: full_rotations += 1
+    // 4. getAngle() returns: 1° + (1 * 360°) = 361° (wrong!)
+    // 5. shaft_angle = 361° when encoder shows 1° → 360° tracking error
+    //
+    // This override fixes the issue by ignoring full_rotations for single-turn sensors
+    // FOC calculations use getMechanicalAngle() (not affected), so motor control still works
+    // Only position reporting (shaft_angle) was broken - now fixed
+    //
+    // Research sources:
+    // - SimpleFOC Sensor.cpp: getAngle() vs getMechanicalAngle() implementation
+    // - FOCMotor.cpp: shaftAngle() uses getAngle(), electricalAngle() uses getMechanicalAngle()
+    // - AS5600/AS5048A implementations: all single-turn absolute encoders have this issue
+    // - Community discussions: most users don't cross 0°/360° or use velocity/torque mode
+
+    return angle_prev;  // Return 0-2π only, ignore full_rotations
+}
+
 // DO NOT override update() - follow standard SimpleFOC pattern
 // Let base class Sensor::update() call getSensorAngle() and handle tracking
 // This matches all official SimpleFOC drivers and third-party implementations
