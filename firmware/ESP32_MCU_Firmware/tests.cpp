@@ -19,7 +19,9 @@
  * Call this to understand why motor isn't moving or tracking correctly
  */
 void logMotorState(MotorController& motorControl, const char* context) {
-    motorControl.updateEncoder();
+    // DO NOT call updateEncoder() during movement - it races with loopFOC()!
+    // SimpleFOC's loopFOC() already updates the sensor automatically
+    // Manual encoder reads can cause I2C bus contention and return 0
 
     // Get all critical values
     float encoder_abs_deg = motorControl.getEncoderDegrees();  // Absolute (0-360°) direct from encoder
@@ -530,7 +532,9 @@ void runMotorTest(MotorController& motorControl) {
         Serial.print("° but missed target by ");
         Serial.print(error, 2);
         Serial.println("°");
-        Serial.println("\nMotor CAN move but accuracy is poor - check PID tuning.");
+        Serial.println("\nMotor CAN move but closed-loop control failing.");
+        Serial.println("Check if shaft_angle is tracking encoder correctly.");
+        Serial.println("If shaft_angle is 0°, this indicates I2C communication errors.");
         logMotorState(motorControl, "Final state");
         return;
     }

@@ -11,6 +11,7 @@ MT6701::MT6701(uint8_t address) {
     _address = address;
     _wire = nullptr;
     _initialized = false;
+    _last_valid_angle = 0;  // Initialize cache
 }
 
 bool MT6701::begin(TwoWire *wire) {
@@ -28,12 +29,15 @@ bool MT6701::begin(TwoWire *wire) {
 
 uint16_t MT6701::readRawAngle() {
     if (!_initialized) {
-        return 0;
+        // Return last valid reading instead of 0
+        return _last_valid_angle;
     }
 
     uint8_t buffer[2];
     if (!readRegisters(MT6701_REG_ANGLE_MSB, buffer, 2)) {
-        return 0;
+        // I2C communication failed - return last valid reading
+        // This prevents shaft_angle from resetting to 0° on transient errors
+        return _last_valid_angle;
     }
 
     // Combine MSB and LSB (14-bit value)
@@ -42,6 +46,9 @@ uint16_t MT6701::readRawAngle() {
 
     // Mask to 14 bits
     angle &= 0x3FFF;
+
+    // Cache successful read for I2C failure recovery
+    _last_valid_angle = angle;
 
     return angle;
 }
