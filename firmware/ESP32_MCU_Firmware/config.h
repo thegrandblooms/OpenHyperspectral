@@ -66,13 +66,14 @@
 #define DEFAULT_ACCELERATION_DEG 286.5  // Default acceleration (deg/s²)
 #define DEFAULT_ACCELERATION 5.0        // Default acceleration (rad/s²)
 
-// Position control PID parameters - OPTIMIZED FOR GIMBAL MOTORS (2804, etc.)
-// NOTE: Gimbal motors require MUCH lower gains than regular BLDC motors!
-// Research shows P=0.5-2.0 is typical for gimbal motors
-// Run PID auto-tuning ('p' or 'pidtune' command) to find optimal values
-#define PID_P_POSITION   1.0            // Proportional gain (based on gimbal motor research)
-#define PID_I_POSITION   0.0            // Integral gain for position control
-#define PID_D_POSITION   0.0            // Derivative gain for position control
+// Position control PID parameters - TUNED FOR POSITION CONTROL
+// CRITICAL FIX: Previous P=1.0 was based on incorrect gimbal motor guidance
+// SimpleFOC documentation and smart knob projects use P=15-25 for position control
+// Even gimbal motors need sufficient P gain to overcome static friction!
+// Start with SimpleFOC default P=20, tune down if oscillations occur
+#define PID_P_POSITION   20.0           // Proportional gain - FIXED from 1.0
+#define PID_I_POSITION   0.0            // Integral gain (usually not needed for position)
+#define PID_D_POSITION   0.0            // Derivative gain (can cause noise/vibration)
 #define PID_RAMP_POSITION_DEG 1000.0    // Output ramp (deg/s)
 #define PID_RAMP_POSITION 100.0         // Output ramp (rad/s) - for SimpleFOC
 
@@ -124,8 +125,11 @@
 //=============================================================================
 // POSITION TRACKING
 //=============================================================================
-#define POSITION_TOLERANCE_DEG 5.7      // Position tolerance (degrees)
-#define POSITION_TOLERANCE 0.1          // Position tolerance (radians) - for SimpleFOC
+// CRITICAL FIX: Previous tolerance of 5.7° was WAY too large!
+// Motor would think it reached target without actually moving
+// SimpleFOC examples and smart knob projects use ~0.1°-0.5°
+#define POSITION_TOLERANCE_DEG 0.5      // Position tolerance (degrees) - FIXED from 5.7°
+#define POSITION_TOLERANCE 0.009        // Position tolerance (radians) ~0.5° - for SimpleFOC
 #define VELOCITY_THRESHOLD_DEG 0.57     // Velocity threshold (deg/s)
 #define VELOCITY_THRESHOLD 0.01         // Velocity threshold (rad/s) - for SimpleFOC
 
