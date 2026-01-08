@@ -156,6 +156,11 @@ void MT6701Sensor::update() {
     // Update timestamp
     last_update_time = micros();
 
+    // CRITICAL: Call base class Sensor::update() for SimpleFOC tracking
+    // This updates angle_prev, full_rotations, and other SimpleFOC internal state
+    // Without this, SimpleFOC may not update shaft_angle correctly
+    Sensor::update();
+
     // DEBUG: Throttled update logging (every 1 second max)
     if (DEBUG_MOTOR) {
         static unsigned long last_debug_print = 0;
