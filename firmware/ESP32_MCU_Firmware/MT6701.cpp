@@ -24,6 +24,18 @@ bool MT6701::begin(TwoWire *wire) {
     }
 
     _initialized = true;
+
+    // Initialize the failure recovery cache with current position
+    // This prevents returning 0 if the first read after begin() fails
+    uint8_t buffer[2];
+    if (readRegisters(MT6701_REG_ANGLE_MSB, buffer, 2)) {
+        uint16_t angle = ((uint16_t)buffer[0] << 6) | (buffer[1] & 0x3F);
+        angle &= 0x3FFF;
+        _last_valid_angle = angle;
+    }
+    // If initial read fails, _last_valid_angle stays at 0 (set in constructor)
+    // This is acceptable since we verified connection works via testConnection()
+
     return true;
 }
 

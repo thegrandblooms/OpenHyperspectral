@@ -92,7 +92,7 @@ public:
     //=========================================================================
     void init() override;
     float getSensorAngle() override;       // Returns RADIANS (SimpleFOC expects this)
-    void update() override;                // Update cached values
+    // NOTE: update() NOT overridden - base class handles it (standard SimpleFOC pattern)
     int needsSearch() override;            // Return 0 normally, 1 during calibration
     float getVelocity() override;          // Returns rad/s
     int32_t getFullRotations() { return 0; }  // Single-turn encoder
@@ -116,7 +116,7 @@ public:
 private:
     MT6701 encoder;                        // Hardware driver
 
-    // Cached values (updated by update())
+    // Cached values (updated by getSensorAngle())
     uint16_t cached_raw_count;             // Raw count (0-16383)
     float cached_degrees;                  // Degrees (0-360)
     float cached_radians;                  // Radians (0-2π) for SimpleFOC

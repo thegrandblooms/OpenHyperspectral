@@ -128,26 +128,14 @@ void MT6701Sensor::init() {
 }
 
 float MT6701Sensor::getSensorAngle() {
-    // SIMPLEFOC BOUNDARY: Return angle in RADIANS (SimpleFOC expects this)
-    // NOTE: SimpleFOC SHOULD call update() first, but let's verify
-
-    // DEBUG: Throttled logging (disabled - too verbose even with throttling)
-    // SimpleFOC calls this frequently during loopFOC(), use heartbeat instead
-
-    return cached_radians;
-}
-
-void MT6701Sensor::update() {
-    // SimpleFOC calls this before reading sensor angle via getSensorAngle()
-    // We read the encoder here and cache ALL values (raw, degrees, radians)
-
-    // Save previous for velocity calculation
-    previous_degrees = cached_degrees;
+    // CORRECT SIMPLEFOC PATTERN: Read sensor and return angle in radians
+    // The base class Sensor::update() will call this method
+    // No need to override update() - let base class handle tracking
 
     // Read raw encoder count (MINIMAL ABSTRACTION - closest to hardware)
     cached_raw_count = encoder.readRawAngle();
 
-    // Convert to degrees (our preferred unit)
+    // Convert to degrees (our preferred unit for diagnostics)
     cached_degrees = rawToDegrees(cached_raw_count);
 
     // Convert to radians for SimpleFOC
@@ -160,7 +148,7 @@ void MT6701Sensor::update() {
     if (DEBUG_MOTOR) {
         static unsigned long last_debug_print = 0;
         if (millis() - last_debug_print > 1000) {
-            Serial.print("[SENSOR] update() - Raw: ");
+            Serial.print("[SENSOR] getSensorAngle() - Raw: ");
             Serial.print(cached_raw_count);
             Serial.print(", Deg: ");
             Serial.print(cached_degrees, 2);
@@ -170,7 +158,18 @@ void MT6701Sensor::update() {
             last_debug_print = millis();
         }
     }
+
+    // Return angle in radians (SimpleFOC expects this)
+    // Base class Sensor::update() will handle:
+    // - Rotation tracking (angle_prev, full_rotations)
+    // - Wraparound detection
+    // - Timestamp management
+    return cached_radians;
 }
+
+// DO NOT override update() - follow standard SimpleFOC pattern
+// Let base class Sensor::update() call getSensorAngle() and handle tracking
+// This matches all official SimpleFOC drivers and third-party implementations
 
 int MT6701Sensor::needsSearch() {
     // MT6701 is an absolute encoder - normally doesn't need index search
