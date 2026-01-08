@@ -1160,7 +1160,8 @@ float MotorController::getTargetPositionDeg() {
 }
 
 float MotorController::getTargetVelocityDegPerSec() {
-    return target_velocity_deg_s;
+    // Simplified interface: return current velocity limit
+    return radiansToDegrees(motor.velocity_limit);
 }
 
 float MotorController::getCurrent() {
@@ -1200,9 +1201,7 @@ bool MotorController::isAtTarget() {
     }
 
     // Target reached if position error is small and velocity is low
-    const float POSITION_TOLERANCE_DEG = 2.0f;  // degrees
-    const float VELOCITY_THRESHOLD_DEG = 5.0f;  // deg/s
-
+    // Use constants from config.h
     bool at_target = (position_error_deg < POSITION_TOLERANCE_DEG) &&
                      (velocity_deg_s < VELOCITY_THRESHOLD_DEG);
 
