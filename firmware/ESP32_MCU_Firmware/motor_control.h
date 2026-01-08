@@ -151,130 +151,37 @@ class MotorController {
 public:
     MotorController();
 
-    //=========================================================================
-    // INITIALIZATION
-    //=========================================================================
+    // Setup
     void begin();
-    bool calibrate();
+    bool calibrate();  // Runs motor.initFOC()
 
-    //=========================================================================
-    // MANUAL CALIBRATION (For MT6701 I2C sensors where auto-calibration fails)
-    //=========================================================================
-    bool testDriverPhases();               // Test each driver phase individually
-    bool testMotorAlignment();             // Diagnostic test - verify motor holds positions
-    bool runManualCalibration();           // Manual calibration to find zero_electric_angle
-
-    //=========================================================================
-    // CONTROL COMMANDS
-    //=========================================================================
+    // Control
     void enable();
     void disable();
-    void stop();
-    void setHome();
+    void moveToPosition(float absolute_deg);  // Move to absolute position (0-360°)
+    void update();  // Call in loop - runs motor.loopFOC() + motor.move()
 
-    //=========================================================================
-    // MOTION COMMANDS (All in DEGREES)
-    //=========================================================================
-    void moveToPosition(float position_deg);        // Move to absolute position (degrees)
-    void setVelocity(float velocity_deg_s);         // Set velocity (degrees/second)
-    void setAcceleration(float accel_deg_s2);       // Set acceleration (degrees/second²)
-    void setCurrentLimit(float current_limit_a);    // Set current limit (amps)
-
-    //=========================================================================
-    // CONTROL MODE
-    //=========================================================================
-    void setControlMode(uint8_t mode);
-    uint8_t getControlMode();
-
-    //=========================================================================
-    // PID TUNING
-    // NOTE: PID gains are unitless, ramp is in units/second
-    //=========================================================================
-    void setPositionPID(float p, float i, float d, float ramp_deg_s);
-    void setVelocityPID(float p, float i, float d, float ramp_deg_s);
-    void setCurrentPID(float p, float i, float d, float ramp);
-
-    //=========================================================================
-    // PID AUTO-TUNING
-    //=========================================================================
-    bool autoTunePID(bool verbose = true);
-
-    //=========================================================================
-    // STATE QUERIES (All in DEGREES unless otherwise noted)
-    //=========================================================================
-    // ABSOLUTE ENCODER POSITION (Direct hardware read - TRUTH SOURCE)
-    float getAbsolutePositionDeg();             // Absolute encoder position (degrees) - REAL position from MT6701
-
-    // SIMPLEFOC CONTROLLER STATE (Internal motor controller state)
-    float getCurrentPositionDeg();              // SimpleFOC shaft_angle (degrees) - may lag or drift
-    float getCurrentVelocityDegPerSec();        // SimpleFOC velocity (deg/s)
-
-    // OTHER STATE
-    float getTargetPositionDeg();               // Target position (degrees)
-    float getTargetVelocityDegPerSec();         // Target velocity (deg/s)
-    float getCurrent();                         // Q-axis current (amps)
-    float getVoltage();                         // Q-axis voltage (volts)
+    // Status (for diagnostics only)
+    float getPosition();  // Encoder position (absolute 0-360°)
     bool isEnabled();
     bool isCalibrated();
-    bool isAtTarget();                          // Uses ABSOLUTE ENCODER position
-    uint8_t getState();
 
-    //=========================================================================
-    // DIRECT ENCODER ACCESS (Bypass SimpleFOC - for debugging)
-    //=========================================================================
-    void updateEncoder();                       // Force fresh encoder read from I2C
-    uint16_t getRawEncoderCount();              // Raw encoder (0-16383)
-    float getEncoderDegrees();                  // Direct encoder read (degrees)
-
-    //=========================================================================
-    // SIMPLEFOC ACCESS (For PID tuner compatibility)
-    //=========================================================================
+    // Direct access for tests
     BLDCMotor& getMotor() { return motor; }
     MT6701Sensor& getEncoder() { return encoder; }
-
-    //=========================================================================
-    // UPDATE LOOP (Call frequently - runs FOC and motion control)
-    //=========================================================================
-    void update();
+    void updateEncoder();  // Force encoder read
+    float getEncoderDegrees();  // Direct encoder read
 
 private:
-    //=========================================================================
-    // SIMPLEFOC OBJECTS (Work in RADIANS)
-    //=========================================================================
+    // SimpleFOC objects
     BLDCMotor motor;
     BLDCDriver3PWM driver;
     MT6701Sensor encoder;
 
-    //=========================================================================
-    // STATE VARIABLES (Our internal state - in DEGREES)
-    //=========================================================================
-    uint8_t system_state;
-    uint8_t control_mode;
+    // State
     bool motor_enabled;
     bool motor_calibrated;
-
-    // Targets (in DEGREES)
-    float target_position_deg;
-    float target_velocity_deg_s;
-
-    // Limits (in DEGREES where applicable)
-    float max_velocity_deg_s;
-    float max_acceleration_deg_s2;
-    float current_limit_a;
-
-    // Position tracking
-    bool target_reached;
-    float position_tolerance_deg;
-
-    // Home offset (software layer - NOT passed to SimpleFOC)
-    // SimpleFOC always works in absolute positions (sensor_offset = 0)
-    // We translate: user_position = absolute_position - home_offset
-    float home_offset_rad;
-
-    //=========================================================================
-    // PRIVATE METHODS
-    //=========================================================================
-    bool runCalibration();
+    float target_position_deg;  // Absolute position (0-360°)
 };
 
 #endif // MOTOR_CONTROL_H
