@@ -266,11 +266,6 @@ private:
     bool target_reached;
     float position_tolerance_deg;
 
-    // Home offset (software layer - NOT passed to SimpleFOC)
-    // SimpleFOC always works in absolute positions (sensor_offset = 0)
-    // We translate: user_position = absolute_position - home_offset
-    float home_offset_rad;
-
     //=========================================================================
     // PRIVATE METHODS
     //=========================================================================
