@@ -1,21 +1,22 @@
-# Dev Log 4: SimpleFOC Integration Debugging - Wraparound Tracking Issue
+# Dev Log 4: SimpleFOC Integration Debugging - Sign Inversion Issue
 
-**Date:** 2026-01-08
-**Session Focus:** Fixing MT6701 sensor integration with SimpleFOC after implementing correct sensor pattern
-**Status:** ⚠️ PARTIAL SUCCESS - Motor moves but tracking fails at 0°/360° boundary
+**Date:** 2026-01-08 - 2026-01-09
+**Session Focus:** Debugging shaft_angle sign inversion and tracking failures
+**Status:** ⚠️ BROKEN - shaft_angle shows sign inversion during movement, motor moves wrong direction
 
 ---
 
 ## Executive Summary
 
-**MAJOR PROGRESS:** Motor is now responding to position commands and moving dynamically! Multiple movements observed during test sequence. However, SimpleFOC's position tracking breaks during movement, showing ~360° discrepancy between encoder reading and shaft_angle. This causes oscillation and overshoot as the control loop fights incorrect position feedback.
+**CURRENT STATUS:** Motor control is fundamentally broken. After implementing SimpleFOC's correct sensor pattern and attempting to fix wraparound tracking, shaft_angle now shows perfect sign inversion of the encoder reading during movement, causing the motor to move in the wrong direction.
 
-**Current Behavior:**
-- ✅ Motor moves multiple times (jerks back and forth)
-- ✅ Initial tracking works: `shaft_angle` matches `encoder` at rest
-- ❌ Tracking breaks during movement: 313° error appears
-- ❌ Motor overshoots target by ~44° (moved 74° instead of 30°)
-- ❌ Control loop oscillates trying to correct phantom position error
+**Observable Facts (NOT theories):**
+- ❌ shaft_angle = -encoder_reading during movement (perfect sign inversion)
+- ❌ Motor moves backwards when commanded forward
+- ❌ When motor disabled: shaft_angle = 0.00° while encoder shows actual position
+- ❌ AT_TARGET always shows 0.00° even when manually moving encoder
+- ✅ Manual shaft_angle assignment works (before movement starts)
+- ✅ Encoder reads correctly throughout (I2C working fine)
 
 ---
 
@@ -83,366 +84,300 @@ void Sensor::update() {
 
 ---
 
-## Test Results Analysis
+## Observed Behavior (Facts Only)
 
-### Test Sequence: 30° Position Move
+### Test 1: After Wraparound Fix (getAngle() override)
 
-**Command:** Move from 255.59° → 285.59° (absolute, +30°)
+**Command:** Move +30° from current position (261.39° → ~291°)
 
-**Initial State (GOOD):**
+**Before Movement:**
 ```
-Encoder (abs): 255.67° | SimpleFOC shaft_angle (abs): 255.67° | Target: 0.00°
-Tracking error (abs): 0.00° ✓
-```
-
-**During Movement (BROKEN):**
-```
-Sample 1:
-  Encoder: 336.53° | shaft_angle: 23.47° | Target: 285.59°
-  Tracking error: 313.07° ❌
-
-Sample 2:
-  Encoder: 351.74° | shaft_angle: 8.26° | Target: 285.59°
-  Tracking error: 343.48° ❌
-
-Sample 3:
-  Encoder: 298.65° | shaft_angle: 61.35° | Target: 285.59°
-  Tracking error: 237.30° ❌
-
-Sample 4:
-  Encoder: 336.97° | shaft_angle: 23.03° | Target: 285.59°
-  Tracking error: 313.95° ❌
+Encoder (abs): 261.39° | shaft_angle: 261.39° ✓
+(Manual assignment: motor.shaft_angle = encoder reading)
 ```
 
-**Final State:**
+**During Movement:**
 ```
-Encoder: 329.77° | shaft_angle: 26.89° | Target: 285.59°
-Tracking error: 302.87° ❌
-
-Moved: 74.18° (expected ~30°)
-Error: 44.18° (expected <3°)
+Encoder (abs): 111.18° | shaft_angle: -111.18° ❌ SIGN INVERSION
+Encoder (abs): 147.30° | shaft_angle: -147.30° ❌ SIGN INVERSION
 ```
 
-### Observed Motor Behavior
+**Actual Motor Movement:**
+- Motor moved BACKWARDS: 261° → 111° (moved -150°)
+- Expected: Move forwards +30° to ~291°
+- Opposite direction from command
 
-**Physical Movement:**
-- Motor jerks forward
-- Jerks backward
-- Pauses briefly
-- Jerks forward again (different pattern)
-- Repeats oscillation ~5-6 times
-- Eventually stops (timeout)
+**Pattern:** shaft_angle = -1 × encoder_reading (perfect negation)
 
-**Interpretation:** Motor is hunting/oscillating because SimpleFOC thinks the position is ~300° away from where the encoder says it actually is. The control loop is trying to correct a phantom position error.
+### Test 2: Motor Disabled State
 
----
-
-## Root Cause Analysis
-
-### Hypothesis: Wraparound Tracking Error
-
-**The Pattern:**
+**Observation:**
 ```
-encoder: 336.53° | shaft_angle: 23.47°
-Difference: 336.53 - 23.47 = 313.06°
-
-But also: 360° - 313.06° = 46.94°
+Encoder (abs): 287.23° | shaft_angle: 0.00° | Target: 0.00°
+AT_TARGET: 0.00° (always, even when manually moving encoder)
 ```
 
-This suggests `shaft_angle` is on the opposite side of the 0°/360° boundary from the encoder reading.
+**When Motor Disabled:**
+- shaft_angle stuck at 0.00°
+- Encoder reads actual position correctly
+- AT_TARGET always reports 0.00° regardless of encoder position
 
-**Possible Cause:** SimpleFOC's `Sensor::update()` wraparound detection logic:
+### Test 3: Manual Position Assignment
+
+**Code:**
 ```cpp
-if(abs(d_angle) > (0.8f*_2PI))  // If change >~288°
-    full_rotations += (d_angle > 0) ? -1 : 1;
+motor.shaft_angle = degreesToRadians(encoder_degrees);
 ```
 
-For a single-turn absolute encoder:
-- `full_rotations` should ALWAYS be 0
-- Wraparound should be handled differently
-- When encoder goes 359° → 1°, this is NOT a full rotation - it's just crossing the boundary
+**Result:** Works correctly - shaft_angle matches encoder immediately after assignment
 
-**Hypothesis:** The base class is incrementing `full_rotations` when the motor crosses 0°/360°, causing `shaft_angle` to be calculated incorrectly:
+**BUT:** Once motor.loopFOC() and motor.move() are called, sign inversion occurs
+
+### Motor Calibration Output
+
+**From user's calibration log:**
+```
+Sensor direction: CCW
+Zero electric angle: 4.89 rad
+Motor initialized successfully
+```
+
+**Known Value:** sensor_direction = Direction::CCW
+
+---
+
+## Top 5 Theories (Based on Research)
+
+### Theory 1: sensor_direction = CCW Causes Sign Inversion in SimpleFOC Formula
+
+**SimpleFOC Formula (from source code):**
 ```cpp
-// Likely in BLDCMotor.cpp
-shaft_angle = sensor.getAngle();  // Gets angle_prev from base class
-// angle_prev includes full_rotations offset!
+shaft_angle = sensor_direction * LPF_angle(sensor->getAngle()) - sensor_offset
 ```
 
-### Why This Manifests Now
+**Known:** User's calibration shows `sensor_direction = CCW`
 
-**Previous implementations:**
-- Overrode `update()` → bypassed base class wraparound tracking
-- Never called base class `update()` correctly → `full_rotations` stayed at 0
-- Broken in other ways, but accidentally avoided this bug
-
-**Current implementation:**
-- Follows correct SimpleFOC pattern
-- Base class `update()` runs properly
-- Wraparound detection triggers when crossing 0°/360°
-- For absolute single-turn encoder, this is INCORRECT behavior
-
----
-
-## Evidence From Logs
-
-### Velocity Calculation Insanity
-```
-Shaft Velocity: -341422.63°/s
-```
-
-This is physically impossible. Calculated from incorrect `angle_prev` due to `full_rotations` error.
-
-### Position Jump Pattern
-```
-shaft_angle sequence: 23.47° → 8.26° → 61.35° → 23.03°
-encoder sequence: 336.53° → 351.74° → 298.65° → 336.97°
-```
-
-Both are oscillating, but shaft_angle is consistently ~300° behind encoder (i.e., ~60° ahead when accounting for wraparound).
-
-### Heartbeat Shows Correct Tracking After Movement
-```
-[HEARTBEAT] MT6701 Encoder: Pos=30.4° | SimpleFOC: Pos=30.4° (diff=0.0°) ✓
-```
-
-After motor stops and position settles, tracking is correct again. This suggests the issue is specifically during boundary crossing while motor is active.
-
----
-
-## Key Insights
-
-### 1. Motor Hardware Works ✅
-- Open-loop movement confirmed
-- Driver phases responding
-- Encoder reading correctly
-- I2C communication stable during movement
-
-### 2. SimpleFOC Integration Partially Works ✅
-- Sensor linked to motor
-- loopFOC() running
-- Position commands accepted
-- Control loop active (though fighting phantom error)
-
-### 3. Absolute Encoder Needs Special Handling ❌
-SimpleFOC's base `Sensor` class is designed for:
-- Incremental encoders (track full rotations)
-- Multi-turn absolute encoders (track full rotations)
-
-Our MT6701 is:
-- Single-turn absolute encoder
-- Does NOT track full rotations
-- Position wraps at 0°/360° boundary
-- `full_rotations` should ALWAYS be 0
-
----
-
-## Next Steps
-
-### Option A: Override getAngle() Instead of update()
-
-SimpleFOC's `Sensor` base class has:
+**Hypothesis:** If Direction::CCW = -1 as a multiplier, formula becomes:
 ```cpp
-float getAngle() {
-    return angle_prev + full_rotations * _2PI;
-}
+shaft_angle = (-1) * positive_angle - sensor_offset
+shaft_angle = -positive_angle - sensor_offset
 ```
 
-We could override this to ignore `full_rotations`:
+This would explain the perfect sign inversion: shaft_angle = -111.18° when encoder = 111.18°
+
+**Research Findings:**
+- ❌ NO evidence this causes problems in working systems
+- ❌ Both CW and CCW used successfully in production code
+- ❌ No discussions about avoiding CCW or negative angles
+- ❌ Official SimpleFOC examples auto-detect direction without issues
+
+**Confidence:** LOW - Research contradicts this theory
+
+### Theory 2: getAngle() Override Breaks SimpleFOC's Internal State
+
+**What We Changed:**
 ```cpp
 float MT6701Sensor::getAngle() override {
     return angle_prev;  // Ignore full_rotations
 }
 ```
 
-**Pros:**
-- Minimal change
-- Keeps base class update() logic
-- Only affects angle calculation
+**Hypothesis:** SimpleFOC's BLDCMotor may be calling both:
+- `sensor->getAngle()` - which we override
+- Reading `sensor.angle_prev` directly - which bypasses our override
 
-**Cons:**
-- Still using base class update() which modifies full_rotations
-- May have side effects we don't understand
+This could create conflicting state where:
+- Our override returns positive angle
+- Internal calculations use base class formula with full_rotations
+- Result: sign inversion or other weird behavior
 
-### Option B: Override update() But Handle Wraparound Correctly
+**Research Findings:**
+- ⚠️ Very few SimpleFOC sensors override getAngle()
+- ⚠️ Standard pattern is to ONLY override getSensorAngle()
+- ⚠️ getAngle() is meant for BLDCMotor to call, not to override
 
+**Confidence:** MEDIUM - Violates standard pattern
+
+### Theory 3: sensor_offset Not Applied Correctly During Calibration
+
+**SimpleFOC Formula:**
 ```cpp
-void MT6701Sensor::update() override {
-    float val = getSensorAngle();
-    if (val < 0) return;
-    angle_prev_ts = _micros();
-    // DO NOT track full rotations for single-turn absolute encoder
-    // Just store the angle directly
-    angle_prev = val;
-    // full_rotations stays at 0
+shaft_angle = sensor_direction * angle - sensor_offset
+```
+
+**Hypothesis:** sensor_offset may be:
+- Set incorrectly during calibration
+- Applied with wrong sign
+- Not being subtracted when we override getAngle()
+
+If sensor_offset is wrong, it could cause:
+- Position errors
+- Direction errors
+- Sign inversion when combined with sensor_direction
+
+**Research Findings:**
+- ⚠️ sensor_offset is set during motor.initFOC()
+- ⚠️ Calibration process auto-detects sensor_direction
+- ⚠️ May not work correctly with our getAngle() override
+
+**Confidence:** MEDIUM - Could interact badly with our override
+
+### Theory 4: Manual shaft_angle Assignment Bypasses SimpleFOC State
+
+**What We Do:**
+```cpp
+motor.shaft_angle = degreesToRadians(encoder_degrees);
+```
+
+**Hypothesis:** Directly writing motor.shaft_angle:
+- Doesn't update internal SimpleFOC state variables
+- Doesn't update velocity calculation state
+- Doesn't update PID controller state
+- First loopFOC() call uses stale state, causing wrong calculations
+
+SimpleFOC may have internal variables like:
+- Last position for velocity calculation
+- PID integral/derivative terms
+- Target tracking state
+
+**Research Findings:**
+- ❌ No examples found of directly setting motor.shaft_angle
+- ⚠️ Standard approach is to let SimpleFOC manage shaft_angle entirely
+- ⚠️ May need to call motor.sensor->update() after manual assignment
+
+**Confidence:** MEDIUM - Not a standard SimpleFOC pattern
+
+### Theory 5: motor.move() Expects Relative Motion, Not Absolute Position
+
+**What We Do:**
+```cpp
+motor.torque_controller = TorqueControlType::angle;
+motor.controller = MotionControlType::angle_openloop;
+motor.move(degreesToRadians(target_position_deg));  // Absolute position
+```
+
+**Hypothesis:** motor.move() in angle mode might expect:
+- Relative change from current position
+- NOT absolute target position
+- Or position relative to sensor_offset
+
+This would explain:
+- Motor moving wrong direction
+- Position errors
+- Control loop fighting against encoder
+
+**Research Findings:**
+- ⚠️ SimpleFOC docs unclear about absolute vs relative
+- ⚠️ Most examples use angle mode with absolute positions
+- ✓ Official examples show: `motor.move(target_angle)` as absolute
+
+**Confidence:** LOW - Examples suggest absolute positions are correct
+
+---
+
+## What We Need to Know
+
+**Critical Missing Information:**
+1. Actual numeric value of Direction::CCW (is it -1 or something else?)
+2. What sensor_offset value was set during calibration?
+3. What does motor.shaft_angle equal when motor is running (during loopFOC)?
+4. What does angle_prev equal vs what getAngle() returns?
+5. What does SimpleFOC's internal shaft_angle calculation actually produce?
+
+**Next Step:** Add diagnostic logging to capture these exact values during a test run, rather than continuing to guess based on incomplete information.
+
+---
+
+## Code Changes This Session
+
+### Correct SimpleFOC Pattern Implementation
+```cpp
+// Removed update() override entirely
+// Only override getSensorAngle() - standard pattern
+
+float MT6701Sensor::getSensorAngle() {
+    cached_raw_count = encoder.readRawAngle();
+    cached_degrees = rawToDegrees(cached_raw_count);
+    cached_radians = degreesToRadians(cached_degrees);
+    return cached_radians;
 }
 ```
 
-**Pros:**
-- Full control over tracking logic
-- Explicitly handles single-turn absolute encoder case
-- Clear intent
-
-**Cons:**
-- Goes against SimpleFOC pattern (only HallSensor does this)
-- Duplicates base class code
-- May miss future SimpleFOC updates
-
-### Option C: Disable Wraparound Detection
-
-Modify base class call to prevent wraparound tracking:
+### Attempted Wraparound Fix (MADE THINGS WORSE)
 ```cpp
-void MT6701Sensor::update() override {
-    // Save current state
-    int32_t saved_rotations = full_rotations;
-
-    // Call base class
-    Sensor::update();
-
-    // Restore rotation count (always 0 for single-turn)
-    full_rotations = 0;
+// Added getAngle() override to prevent full_rotations tracking
+float MT6701Sensor::getAngle() override {
+    return angle_prev;  // Ignore full_rotations for single-turn encoder
 }
 ```
 
-**Pros:**
-- Uses base class logic for most things
-- Only overrides the problematic behavior
-- Easy to understand
-
-**Cons:**
-- Hacky
-- Relies on implementation details
-- May break with SimpleFOC updates
-
-### Option D: Research How Others Handle This
-
-Search for:
-- Other single-turn absolute encoder implementations
-- SimpleFOC configuration options for absolute encoders
-- Whether there's a `needsAbsoluteTracking()` or similar flag
+**Result:** Caused perfect sign inversion - shaft_angle = -encoder_reading
 
 ---
 
-## Questions for Next Session
+## Pattern Discovered: One Week of Confident Wrong Solutions
 
-1. **How do other SimpleFOC absolute encoders prevent full_rotations tracking?**
-   - AS5600 (12-bit, single-turn)
-   - AS5048A (14-bit, single-turn)
-   - Do they override update() or getAngle()?
+### What Went Wrong
+1. **Week 1:** Assumed I2C failure → Added cache → Didn't fix problem
+2. **Week 1:** Assumed need to call base Sensor::update() → Wrong pattern
+3. **Week 1:** Assumed wraparound tracking was issue → Added getAngle() override → Made it WORSE
+4. **Week 1:** Assumed CCW causes negative angles → Research found NO evidence
 
-2. **Is there a SimpleFOC configuration for single-turn absolute encoders?**
-   - Sensor class flags?
-   - Motor controller settings?
+### User Feedback
+> "please be less confident in your answers, it's been about a week where we've been confidently wrong"
 
-3. **Why does tracking work at rest but fail during movement?**
-   - Is it only when crossing 0°/360°?
-   - Or is it high-speed I2C read latency causing stale readings?
-
-4. **What's the correct relationship between:**
-   - `angle_prev` (from Sensor base class)
-   - `shaft_angle` (from BLDCMotor)
-   - `encoder reading` (ground truth)
-
----
-
-## Commits This Session
-
-1. `84e9b47` - Fix critical I2C failure handling - prevent shaft_angle reset to 0°
-   - Added `_last_valid_angle` cache to MT6701.cpp
-   - Return cached value on I2C failure instead of 0
-
-2. `f498b08` - Fix SimpleFOC sensor integration - call base class Sensor::update()
-   - Added `Sensor::update()` call to MT6701Sensor::update()
-   - This was WRONG - not the standard pattern
-
-3. `c1963f5` - Refactor MT6701Sensor to follow correct SimpleFOC pattern
-   - **REMOVED update() override entirely**
-   - Moved I2C read into getSensorAngle()
-   - Let base class handle all tracking
-   - **This revealed the wraparound tracking bug**
+### Required Approach Going Forward
+- Build 3 systematic models with 98% confidence:
+  1. What other people are doing that works
+  2. What we are doing that doesn't work
+  3. What our test signals actually do
+- Verify theories against working implementations
+- Use diagnostic logging to gather FACTS before proposing solutions
+- Stop guessing and start measuring
 
 ---
 
-## Technical Debt & Improvements
+## Git Commits
 
-### Immediate
-- [ ] Fix wraparound tracking for single-turn absolute encoder
-- [ ] Test position moves that cross 0°/360° boundary explicitly
-- [ ] Verify `full_rotations` stays at 0 during operation
+1. `84e9b47` - "Fix critical I2C failure handling - prevent shaft_angle reset to 0°"
+   - Added _last_valid_angle cache (encoder was reading fine, this didn't help)
 
-### Short-term
-- [ ] Research how AS5600/AS5048A handle this in SimpleFOC
-- [ ] Add boundary crossing test to motor_test sequence
-- [ ] Log `full_rotations` value in diagnostics
+2. `f498b08` - "Fix SimpleFOC sensor integration - call base class Sensor::update()"
+   - Wrong approach - not the standard SimpleFOC pattern
 
-### Long-term
-- [ ] Consider contributing MT6701 driver to Arduino-FOC-drivers
-- [ ] Document absolute encoder integration patterns for SimpleFOC
-- [ ] Add wraparound handling configuration to MotorController
+3. `c1963f5` - "Refactor MT6701Sensor to follow correct SimpleFOC pattern - don't override update()"
+   - Correct pattern, but revealed ~313° tracking errors
 
----
+4. `9e6e3fc` - "Add Dev Log 4: Document wraparound tracking issue"
+   - Created this log (first version)
 
-## Success Metrics
+5. `e2684e3` - "Fix wraparound tracking for single-turn absolute encoder - override getAngle()"
+   - Added getAngle() override to ignore full_rotations
+   - **MADE THINGS WORSE - caused sign inversion**
 
-**Current Status:** 40% - Motor moves, tracking partially works
-
-**Next Milestone:** 70% - Motor reaches target position within tolerance
-- Fix wraparound tracking
-- Achieve <3° position error
-- Eliminate oscillation
-
-**Final Goal:** 100% - Production-ready motor control
-- Reliable position control
-- Smooth movements
-- Repeatable accuracy
-- Multi-turn capability (if needed)
-
----
-
-## Lessons Learned
-
-### ✅ What Worked
-1. **Research-driven debugging** - Examining other implementations revealed correct pattern
-2. **Following SimpleFOC conventions** - Removed custom update() override
-3. **Systematic testing** - Test sequence caught the wraparound issue clearly
-4. **Detailed logging** - Tracking error diagnostics made the problem obvious
-
-### ❌ What Didn't Work
-1. **Assuming SimpleFOC base class works for all absolute encoders** - It's designed for incremental/multi-turn
-2. **Following patterns blindly** - Standard pattern revealed edge case for single-turn encoders
-3. **Not testing boundary crossings explicitly** - Would have caught this sooner
-
-### 🎓 Key Insight
-**SimpleFOC's Sensor base class assumes sensors either:**
-- Track full rotations (incremental encoders)
-- Benefit from rotation tracking (multi-turn absolute encoders)
-
-**Single-turn absolute encoders are a special case:**
-- Position wraps at 0°/360° boundary
-- `full_rotations` should ALWAYS be 0
-- Wraparound detection logic doesn't apply
-- Need special handling or override
-
-This is likely why the official MT6701 I2C driver in Arduino-FOC-drivers is marked "incomplete" - they probably hit this same issue!
+6. (Not yet committed) - "Update Dev Log 4 with sign inversion observations and theories"
+   - This update - documenting actual behavior vs theories
 
 ---
 
 ## References
 
-### SimpleFOC Source Code
-- `Sensor::update()` - [Arduino-FOC/src/common/base_classes/Sensor.cpp](https://github.com/simplefoc/Arduino-FOC/blob/master/src/common/base_classes/Sensor.cpp)
-- `BLDCMotor::loopFOC()` - [Arduino-FOC/src/BLDCMotor.cpp](https://github.com/simplefoc/Arduino-FOC/blob/master/src/BLDCMotor.cpp)
-- `MagneticSensorI2C` - [Arduino-FOC/src/sensors/MagneticSensorI2C.cpp](https://github.com/simplefoc/Arduino-FOC/blob/master/src/sensors/MagneticSensorI2C.cpp)
+### SimpleFOC Source Code Analyzed
+- `Sensor::update()` - Base class wraparound tracking logic
+- `Sensor::getAngle()` - Returns angle_prev + full_rotations × 2π
+- `BLDCMotor::loopFOC()` - Calls sensor->getAngle() to update shaft_angle
+- Formula: `shaft_angle = sensor_direction * LPF_angle(getAngle()) - sensor_offset`
 
-### Other Implementations
-- SmartKnob MT6701 - [scottbez1/smartknob](https://github.com/scottbez1/smartknob/blob/master/firmware/src/mt6701_sensor.cpp)
-- Arduino-FOC-drivers MT6701 - [simplefoc/Arduino-FOC-drivers](https://github.com/simplefoc/Arduino-FOC-drivers/tree/master/src/encoders/mt6701)
+### Working Implementations Researched
+- SmartKnob (uses custom implementation, not directly comparable)
+- Arduino-FOC-drivers MT6701 (I2C driver marked "incomplete")
+- AS5600, AS5048A (other single-turn absolute encoders)
+- Multiple SimpleFOC forum posts (both CW and CCW work fine)
 
-### Documentation
-- [SimpleFOC Sensor Support](https://docs.simplefoc.com/sensor_support)
-- [SimpleFOC Generic Sensor](https://docs.simplefoc.com/generic_sensor)
+### Key Finding
+NO working implementation found with sign inversion issue when using sensor_direction = CCW
 
 ---
 
 **End of Dev Log 4**
-**Next Session:** Fix single-turn absolute encoder wraparound tracking
+**Status:** BLOCKED - Need diagnostic data to build evidence-based understanding
