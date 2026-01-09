@@ -193,7 +193,7 @@ float MT6701Sensor::getAngle() {
     // - FOCMotor.cpp: shaftAngle() uses getAngle(), electricalAngle() uses getMechanicalAngle()
     // - AS5600/AS5048A implementations: all single-turn absolute encoders have this issue
     // - Community discussions: most users don't cross 0°/360° or use velocity/torque mode
-
+    
     return angle_prev;  // Return 0-2π only, ignore full_rotations
 }
 
