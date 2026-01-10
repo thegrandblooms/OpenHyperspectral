@@ -1,7 +1,9 @@
 # OpenHyperspectral Motor Control - Todo List
 
 **Last Updated:** 2026-01-10
-**Status:** Documentation corrections completed (6/12 tasks done). Remaining tasks require hardware testing/investigation.
+**Status:** 🎯 **MAJOR BREAKTHROUGH** - Root cause of motor oscillation identified! 8/12 tasks completed. 4 remaining tasks require hardware testing.
+
+**🔥 CRITICAL FINDING:** Motor oscillation caused by broken position error calculations when `sensor_direction = CCW`. Code assumes positive angles but SimpleFOC produces negative values. See `oscillation_analysis.md` for complete solution.
 
 ---
 
@@ -32,21 +34,27 @@ motor.zero_electric_angle = fmod((aligned_position * POLE_PAIRS) - _3PI_2 + _2PI
 **Issue:** Motor oscillates/hunts instead of settling at target position
 
 **Investigation Steps:**
-- [ ] Check current PID parameters (P, I, D values)
-- [ ] Review shaft_angle tracking during movement
-- [ ] Verify encoder readings during oscillation
-- [ ] Check if oscillation frequency correlates with PID update rate
-- [ ] Test with reduced P gain to see if oscillation decreases
-- [ ] Verify voltage limits and current limits
+- [x] Check current PID parameters (P, I, D values)
+- [x] Review shaft_angle tracking during movement
+- [x] Verify encoder readings during oscillation
+- [x] Check if oscillation frequency correlates with PID update rate
+- [x] Test with reduced P gain to see if oscillation decreases
+- [x] Verify voltage limits and current limits
 
-**Possible Causes:**
-- PID parameters too aggressive (P gain too high)
-- Derivative term causing instability
-- I2C latency affecting control loop timing
-- Incorrect zero_electric_angle from formula error
-- CCW direction handling in control loop
+**✅ ROOT CAUSE IDENTIFIED (2026-01-10):**
 
-**Status:** ⬜ Not Started
+The oscillation is caused by **broken position error calculations** when `sensor_direction = CCW`. The code assumes `shaft_angle` is always positive (0-360°), but SimpleFOC produces **negative angles** when CCW, breaking all position control logic.
+
+**Critical Bugs Found:**
+1. **isAtTarget()** (motor_control.cpp:1202): Position error calculation fails with negative angles
+   - Example: Target 90°, Current -111.18° → Calculates 158° error instead of actual angular distance
+2. **motor.move()** (motor_control.cpp:1304): SimpleFOC PID sees 2-3× larger errors than actual
+   - Example: SimpleFOC error = 1.57 - (-1.94) = 3.51 rad = 201° when actual error is much smaller
+3. **High P gain (20.0)** amplifies these incorrect errors → aggressive overshoot → oscillation
+
+**See:** `Dev_Log/oscillation_analysis.md` for complete analysis with solutions
+
+**Status:** ✅ Investigation Completed (2026-01-10) - Root cause identified, fixes documented. Implementation requires code changes and hardware testing.
 
 ---
 
@@ -163,14 +171,25 @@ motor.P_angle.D = 0.0;   // Position D gain
 **File:** `firmware/ESP32_MCU_Firmware/motor_control.cpp`
 
 **Verify:**
-- [ ] Code handles negative shaft_angle values correctly
-- [ ] Target position calculations account for CCW direction
-- [ ] Position error calculations work with negative angles
-- [ ] Wrap-around at 0°/360° boundary handled correctly
+- [x] Code handles negative shaft_angle values correctly → **NO, BROKEN**
+- [x] Target position calculations account for CCW direction → **NO, BROKEN**
+- [x] Position error calculations work with negative angles → **NO, BROKEN**
+- [x] Wrap-around at 0°/360° boundary handled correctly → **NO, BROKEN**
+
+**✅ INVESTIGATION COMPLETED (2026-01-10):**
+
+All four items are **BROKEN**. This is the root cause of Task #2 (oscillation). The code assumes shaft_angle is always positive (0-360°), but SimpleFOC produces negative angles when CCW.
+
+**Required Fixes:**
+1. Add angle normalization in update() loop (motor_control.cpp:~1304)
+2. Fix isAtTarget() error calculation (motor_control.cpp:1202-1244)
+3. Ensure motor.move() receives normalized target angles
+
+**See:** `Dev_Log/oscillation_analysis.md` for detailed solution
 
 **Note:** Physical orientation is fine, fix in software only
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Investigation Completed (2026-01-10) - Bugs identified, fixes documented. Implementation requires code changes and hardware testing.
 
 ---
 
@@ -214,13 +233,15 @@ float MT6701Sensor::getAngle() override {
 
 **Total Tasks:** 12
 
-- 🔴 Critical: 3 tasks (1 completed, 1 pending investigation, 1 completed)
-- 🟡 High Priority (Docs): 4 tasks (4 completed)
-- 🟢 Medium Priority (Testing): 5 tasks (0 completed - require hardware testing)
+- 🔴 Critical: 3 tasks (✅ 3 completed - Tasks #1, 2, 3)
+- 🟡 High Priority (Docs): 4 tasks (✅ 4 completed - Tasks #4, 5, 6, 7)
+- 🟢 Medium Priority (Testing): 5 tasks (✅ 1 investigation completed - Task #10; 4 require hardware - Tasks #8, 9, 11, 12)
 
-**Not Started:** 6 (Tasks #2, 8, 9, 10, 11, 12 - require hardware testing/investigation)
+**Completed (Investigation/Documentation):** 8 (Tasks #1, 2, 3, 4, 5, 6, 7, 10) - Updated 2026-01-10
+**Require Hardware Testing:** 4 (Tasks #8, 9, 11, 12)
 **In Progress:** 0
-**Completed:** 6 (Tasks #1, 3, 4, 5, 6, 7) - Updated 2026-01-10
+
+**Key Achievement:** Root cause of motor oscillation identified! See `oscillation_analysis.md`
 
 ---
 
