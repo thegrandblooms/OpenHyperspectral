@@ -164,30 +164,17 @@ float MT6701Sensor::getSensorAngle() {
     // - Rotation tracking (angle_prev, full_rotations)
     // - Wraparound detection
     // - Timestamp management
-    // NOTE: We do NOT reset full_rotations here - it breaks SimpleFOC's internal state
-    // and causes calibration to fail. Velocity jumps handled elsewhere.
     return cached_radians;
 }
 
-float MT6701Sensor::getAngle() {
-    // DIAGNOSTIC: Log what we're returning and what SimpleFOC will do with it
-    float angle_to_return = angle_prev;
-
-    if (DEBUG_MOTOR) {
-        static unsigned long last_debug = 0;
-        if (millis() - last_debug > 500) {  // Log every 500ms
-            Serial.print("[DIAG_getAngle] returning: ");
-            Serial.print(radiansToDegrees(angle_to_return), 2);
-            Serial.print("° | angle_prev: ");
-            Serial.print(radiansToDegrees(angle_prev), 2);
-            Serial.print("° | full_rotations: ");
-            Serial.println(full_rotations);
-            last_debug = millis();
-        }
-    }
-
-    return angle_to_return;  // Return 0-2π only, ignore full_rotations
-}
+// NOTE: getAngle() NOT overridden - using base class Sensor::getAngle() which returns:
+//       (float)full_rotations * _2PI + angle_prev
+//
+// This provides continuous angle tracking which prevents velocity jumps at 0°/360° boundary.
+// Previous override returned angle_prev (0-2π only) which caused SimpleFOC's shaft_velocity
+// calculation to see -6.27 rad jumps when crossing boundaries, resulting in 10M+ °/s velocities.
+//
+// See Dev_Log/velocity_jump_solution.md for detailed analysis.
 
 // DO NOT override update() - follow standard SimpleFOC pattern
 // Let base class Sensor::update() call getSensorAngle() and handle tracking
