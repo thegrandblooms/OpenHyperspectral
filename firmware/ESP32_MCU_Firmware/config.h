@@ -52,7 +52,9 @@
 // Physical mounting: If encoder reads increase when motor rotates "forward", use CW
 //                    If encoder reads decrease when motor rotates "forward", use CCW
 // NOTE: Changing this does NOT change motor behavior, only angle interpretation
-#define FORCE_SENSOR_DIRECTION_CW true  // Set to true to override CCW and force CW direction
+// DISABLED: Forcing CW breaks electrical commutation when physical relationship is CCW
+//           Using CCW (physical truth) and fixing angle handling instead
+#define FORCE_SENSOR_DIRECTION_CW false  // Set to true to override CCW and force CW direction
 
 //=============================================================================
 // MOTION CONTROL PARAMETERS
