@@ -144,12 +144,6 @@ float MT6701Sensor::getSensorAngle() {
     // Update timestamp
     last_update_time = micros();
 
-    // CRITICAL: Reset full_rotations to prevent multi-turn tracking
-    // For absolute encoders in position control, we want angles to wrap at 0/2π
-    // SimpleFOC's base class automatically tracks rotations, which breaks velocity
-    // estimation when crossing 0° boundary (sees -2π jump, calculates insane velocity)
-    full_rotations = 0;
-
     // DEBUG: Throttled update logging (every 1 second max)
     if (DEBUG_MOTOR) {
         static unsigned long last_debug_print = 0;
@@ -167,9 +161,11 @@ float MT6701Sensor::getSensorAngle() {
 
     // Return angle in radians (SimpleFOC expects this)
     // Base class Sensor::update() will handle:
-    // - Rotation tracking (angle_prev, full_rotations) ← we reset full_rotations above
+    // - Rotation tracking (angle_prev, full_rotations)
     // - Wraparound detection
     // - Timestamp management
+    // NOTE: We do NOT reset full_rotations here - it breaks SimpleFOC's internal state
+    // and causes calibration to fail. Velocity jumps handled elsewhere.
     return cached_radians;
 }
 
