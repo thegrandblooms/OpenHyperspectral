@@ -1283,6 +1283,20 @@ void MotorController::update() {
     // Do NOT call encoder.update() manually here - it breaks the control loop!
     motor.loopFOC();
 
+    // CRITICAL FIX: Normalize shaft_angle to 0-2π range
+    // When sensor_direction = CCW, SimpleFOC produces negative shaft_angle values
+    // This breaks position error calculations (error = target - current becomes huge)
+    // and velocity estimation (sees massive jumps across wraparound)
+    // Normalizing to 0-2π fixes both issues while preserving motor behavior
+    float normalized_angle = motor.shaft_angle;
+    while (normalized_angle < 0) {
+        normalized_angle += _2PI;
+    }
+    while (normalized_angle >= _2PI) {
+        normalized_angle -= _2PI;
+    }
+    motor.shaft_angle = normalized_angle;
+
     // DIAGNOSTIC: Log SimpleFOC's shaft_angle calculation
     if (DEBUG_MOTOR) {
         static unsigned long last_debug = 0;
