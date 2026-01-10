@@ -40,13 +40,14 @@ bool MotorController::testDriverPhases() {
     bool fault_status = digitalRead(MOTOR_FAULT);
 
     // Test 6 positions covering all phase combinations
+    // CORRECTED (fixed in Dev Log 5): Phases are 120° apart, not 90°
     PhaseTest tests[] = {
         {0.0,       "Phase A positive (0° electrical)"},
         {_PI_3,     "Phase A→B transition (60°)"},
-        {_PI_2,     "Phase B positive (90°)"},
-        {2.0*_PI_3, "Phase B→C transition (120°)"},
-        {PI,        "Phase C positive (180°)"},
-        {4.0*_PI_3, "Phase C→A transition (240°)"}
+        {2.0*_PI_3, "Phase B positive (120°)"},        // 120° = 2π/3, not 90°
+        {PI,        "Phase B→C transition (180°)"},    // 180° = π
+        {4.0*_PI_3, "Phase C positive (240°)"},        // 240° = 4π/3
+        {5.0*_PI_3, "Phase C→A transition (300°)"}     // 300° = 5π/3
     };
 
     // Apply voltage and track position at each angle

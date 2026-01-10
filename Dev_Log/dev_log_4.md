@@ -10,8 +10,10 @@
 
 **CURRENT STATUS:** Motor control is fundamentally broken. After implementing SimpleFOC's correct sensor pattern and attempting to fix wraparound tracking, shaft_angle now shows perfect sign inversion of the encoder reading during movement, causing the motor to move in the wrong direction.
 
+**⚠️ UPDATE (from Dev Log 5 analysis):** The sign inversion is actually **expected SimpleFOC behavior** when `sensor_direction = CCW`. The formula `shaft_angle = sensor_direction * angle - offset` intentionally produces negative angles when CCW=-1. This is working as designed - SimpleFOC handles negative angles correctly. The real issue is likely in application code or control loop interaction with these negative angles.
+
 **Observable Facts (NOT theories):**
-- ❌ shaft_angle = -encoder_reading during movement (perfect sign inversion)
+- ❌ shaft_angle = -encoder_reading during movement (perfect sign inversion) → **Actually expected with CCW**
 - ❌ Motor moves backwards when commanded forward
 - ❌ When motor disabled: shaft_angle = 0.00° while encoder shows actual position
 - ❌ AT_TARGET always shows 0.00° even when manually moving encoder
@@ -173,6 +175,15 @@ This would explain the perfect sign inversion: shaft_angle = -111.18° when enco
 
 **Confidence:** LOW - Research contradicts this theory
 
+**✅ CORRECTION (from Dev Log 5 research):** This theory is actually CORRECT! SimpleFOC source code confirms:
+- `Direction::CCW = -1` (defined in Sensor.h)
+- Formula: `shaft_angle = sensor_direction * LPF_angle(sensor->getAngle()) - sensor_offset`
+- When `sensor_direction = CCW`, this DOES produce negative shaft_angle values
+- **This is NOT a bug** - it's how SimpleFOC normalizes motor direction
+- SimpleFOC's control loops handle negative angles correctly
+- The sign inversion observed is **expected behavior** when CCW direction is detected
+- The issue isn't the sign inversion itself, but ensuring all application code handles negative angles properly
+
 ### Theory 2: getAngle() Override Breaks SimpleFOC's Internal State
 
 **What We Changed:**
@@ -251,10 +262,12 @@ SimpleFOC may have internal variables like:
 
 **What We Do:**
 ```cpp
-motor.torque_controller = TorqueControlType::angle;
+motor.torque_controller = TorqueControlType::angle;  // ⚠️ ERROR: This enum doesn't exist!
 motor.controller = MotionControlType::angle_openloop;
 motor.move(degreesToRadians(target_position_deg));  // Absolute position
 ```
+
+**⚠️ CORRECTION (from Dev Log 5):** The above code contains an error. `TorqueControlType::angle` does NOT exist in SimpleFOC. Valid options are `voltage`, `dc_current`, or `foc_current`. The actual firmware code correctly uses `TorqueControlType::voltage` (verified in motor_control.cpp:357). This was theoretical/example code, not actual implementation.
 
 **Hypothesis:** motor.move() in angle mode might expect:
 - Relative change from current position

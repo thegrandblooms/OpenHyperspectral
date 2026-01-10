@@ -2,7 +2,7 @@
 ## Executive Summary
 **Status: Manual Calibration Implemented** - Bypassing SimpleFOC auto-calibration issues with MT6701 I2C sensors.
 
-**Root Cause (Identified)**: SimpleFOC's automatic `initFOC()` calibration fails with MT6701 I2C sensors because I2C is too slow (~10-20ms per read) for SimpleFOC's movement detection algorithm. This is a known issue (GitHub #172).
+**Root Cause (Identified)**: SimpleFOC's automatic `initFOC()` calibration fails with MT6701 I2C sensors because I2C polling (even at ~1ms per read) is slower than SPI alternatives, potentially causing timing issues with SimpleFOC's movement detection algorithm. This is a known issue (GitHub #172). Note: While typical I2C reads at 100-400kHz take <1ms for 2-byte reads, this is still insufficient for SimpleFOC's calibration timing requirements.
 
 **Solution (Implemented)**: Manual calibration using `setPhaseVoltage()` at known electrical angles to calculate `zero_electric_angle` and `sensor_direction` before calling `initFOC()`.
 
@@ -475,8 +475,13 @@ encoder.update();
 float aligned_position = encoder.getSensorAngle();
 
 // Now we know: when encoder reads X, motor is at 3π/2 electrical
+// CORRECTED FORMULA (fixed in Dev Log 5):
+// aligned_position is mechanical angle, need to convert to electrical
+// zero_electric_angle = (mechanical_position × pole_pairs) - applied_electrical_angle
 
-motor.zero_electric_angle = aligned_position - (_3PI_2 / POLE_PAIRS);
+motor.zero_electric_angle = (aligned_position * POLE_PAIRS) - _3PI_2;
+// Or with normalization to 0-2π range:
+// motor.zero_electric_angle = fmod((aligned_position * POLE_PAIRS) - _3PI_2 + _2PI, _2PI);
 
 ```
 
