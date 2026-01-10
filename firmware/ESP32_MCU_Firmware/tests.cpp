@@ -58,6 +58,38 @@ void logMotorState(MotorController& motorControl, const char* context) {
     Serial.print("  Tracking error (abs): ");
     Serial.print(abs(encoder_abs_deg - shaft_angle_abs_deg), 2);
     Serial.println("° (should be <5° for good tracking)");
+
+    // SimpleFOC Internal State - Critical for diagnosing position control issues
+    Serial.println("  --- SimpleFOC Internals ---");
+    Serial.print("  Target angle (shaft_angle_sp): ");
+    Serial.print(radiansToDegrees(motor.shaft_angle_sp), 2);
+    Serial.print("° (");
+    Serial.print(motor.shaft_angle_sp, 4);
+    Serial.println(" rad)");
+
+    Serial.print("  Position PID error: ");
+    Serial.print(radiansToDegrees(motor.P_angle.error), 2);
+    Serial.print("° (");
+    Serial.print(motor.P_angle.error, 4);
+    Serial.println(" rad)");
+
+    Serial.print("  Velocity command (shaft_velocity_sp): ");
+    Serial.print(radiansToDegrees(motor.shaft_velocity_sp), 2);
+    Serial.print("°/s (");
+    Serial.print(motor.shaft_velocity_sp, 4);
+    Serial.println(" rad/s)");
+
+    Serial.print("  Actual velocity (shaft_velocity): ");
+    Serial.print(radiansToDegrees(motor.shaft_velocity), 2);
+    Serial.print("°/s (");
+    Serial.print(motor.shaft_velocity, 4);
+    Serial.println(" rad/s)");
+
+    Serial.print("  Voltage q/d: ");
+    Serial.print(motor.voltage.q, 4);
+    Serial.print(" / ");
+    Serial.print(motor.voltage.d, 4);
+    Serial.println(" V");
 }
 
 //=============================================================================
@@ -451,18 +483,36 @@ void runMotorTest(MotorController& motorControl) {
     int loop_count = 0;
 
     Serial.println("Running control loop...");
+    Serial.println("\n--- Movement Trajectory (timestamp, position, velocity) ---");
+
     while (millis() - start_time < timeout_ms) {
         motorControl.update();
         delay(10);
         loop_count++;
 
-        // Log state every 50 loops (500ms)
+        // Quick trajectory log every 10 loops (100ms) - track movement path
+        if (loop_count % 10 == 0) {
+            unsigned long elapsed = millis() - start_time;
+            BLDCMotor& motor = motorControl.getMotor();
+            Serial.print("[");
+            Serial.print(elapsed);
+            Serial.print(" ms] Pos: ");
+            Serial.print(radiansToDegrees(motor.shaft_angle), 2);
+            Serial.print("° | Vel: ");
+            Serial.print(radiansToDegrees(motor.shaft_velocity), 1);
+            Serial.print("°/s | PID err: ");
+            Serial.print(radiansToDegrees(motor.P_angle.error), 1);
+            Serial.println("°");
+        }
+
+        // Detailed state every 50 loops (500ms)
         if (loop_count % 50 == 0) {
+            Serial.println("");  // Blank line for readability
             logMotorState(motorControl, "During movement");
         }
 
         if (motorControl.isAtTarget()) {
-            Serial.println("✓ Reached target!");
+            Serial.println("\n✓ Reached target!");
             break;
         }
     }
