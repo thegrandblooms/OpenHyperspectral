@@ -127,6 +127,8 @@ void begin() {
 
 **Result:** ⚠️ INCOMPLETE - shaft_angle STILL resets to 0° during movement!
 
+**⚠️ CLARIFICATION (from Dev Log 5 review):** This diagnosis was misleading. SimpleFOC initializes `LPF_angle.Tf` with a default value (typically 0.0f), so it's not truly "uninitialized." Setting it to 0.0f explicitly just disables the low-pass filter (passes signal through unchanged). An uninitialized filter would cause random/noisy angles, NOT the clean "reset to 0°" behavior observed. This was a red herring that didn't address the actual root cause of the shaft_angle reset issue.
+
 ---
 
 ## Current Status: Still Broken

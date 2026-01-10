@@ -1,7 +1,7 @@
 # OpenHyperspectral Motor Control - Todo List
 
 **Last Updated:** 2026-01-10
-**Status:** Planning phase after dev logs 1-5 review
+**Status:** Documentation corrections completed (6/12 tasks done). Remaining tasks require hardware testing/investigation.
 
 ---
 
@@ -24,7 +24,7 @@ motor.zero_electric_angle = fmod((aligned_position * POLE_PAIRS) - _3PI_2 + _2PI
 
 **Why:** Unit mismatch - subtracting mechanical angle from mechanical angle but storing as electrical angle. Critical for calibration to work.
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Completed (2026-01-10) - Formula corrected in dev_log_1.md:482
 
 ---
 
@@ -59,7 +59,7 @@ motor.zero_electric_angle = fmod((aligned_position * POLE_PAIRS) - _3PI_2 + _2PI
 
 **Impact:** Won't compile or undefined behavior
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Completed (2026-01-10) - Firmware verified correct (uses TorqueControlType::voltage). Invalid enum only appeared in dev_log_4.md theoretical code, now corrected with warning note.
 
 ---
 
@@ -78,7 +78,7 @@ motor.zero_electric_angle = fmod((aligned_position * POLE_PAIRS) - _3PI_2 + _2PI
 - Phase C: 240° (4π/3)
 - Transitions at 60°, 180°, 300°
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Completed (2026-01-10) - Phase angle descriptions corrected in dev_log_2.md:47-50
 
 ---
 
@@ -90,7 +90,7 @@ motor.zero_electric_angle = fmod((aligned_position * POLE_PAIRS) - _3PI_2 + _2PI
 
 **Reality:** 10-20ms would indicate serious I2C problem. Actual timing is <1ms but still slower than SPI.
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Completed (2026-01-10) - I2C timing claim corrected in dev_log_1.md:5
 
 ---
 
@@ -105,7 +105,7 @@ motor.zero_electric_angle = fmod((aligned_position * POLE_PAIRS) - _3PI_2 + _2PI
 - Uninitialized filter would cause noise, not "reset to 0°" behavior
 - This was a red herring, not the root cause
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Completed (2026-01-10) - Clarification added to dev_log_3.md:130
 
 ---
 
@@ -119,7 +119,7 @@ motor.zero_electric_angle = fmod((aligned_position * POLE_PAIRS) - _3PI_2 + _2PI
 - SimpleFOC handles negative angles correctly
 - Not a bug to fix, but expected behavior
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Completed (2026-01-10) - Documentation added to dev_log_4.md:13 (Executive Summary) and dev_log_4.md:176 (Theory 1 correction)
 
 ---
 
@@ -214,13 +214,13 @@ float MT6701Sensor::getAngle() override {
 
 **Total Tasks:** 12
 
-- 🔴 Critical: 3 tasks
-- 🟡 High Priority (Docs): 4 tasks
-- 🟢 Medium Priority (Testing): 5 tasks
+- 🔴 Critical: 3 tasks (1 completed, 1 pending investigation, 1 completed)
+- 🟡 High Priority (Docs): 4 tasks (4 completed)
+- 🟢 Medium Priority (Testing): 5 tasks (0 completed - require hardware testing)
 
-**Not Started:** 12
+**Not Started:** 6 (Tasks #2, 8, 9, 10, 11, 12 - require hardware testing/investigation)
 **In Progress:** 0
-**Completed:** 0
+**Completed:** 6 (Tasks #1, 3, 4, 5, 6, 7) - Updated 2026-01-10
 
 ---
 
