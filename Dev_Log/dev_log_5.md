@@ -157,24 +157,139 @@ motor.move(degreesToRadians(target_position_deg));
 
 ---
 
-## Questionable Claims (Not Definitively Wrong, But Suspect)
+## Research Findings: Definitive Answers to Questionable Theories
 
-### Claim A: getAngle() Override Causes Sign Inversion
-**Location:** Dev Log 4, Theory 2
+The following theories from dev_log_4 were researched using SimpleFOC source code and documentation.
 
-The log claims overriding `getAngle()` to return `angle_prev` (ignoring full_rotations) caused perfect sign inversion. This is suspicious because:
-- Ignoring full_rotations should only affect multi-rotation tracking
-- It shouldn't cause sign inversion on a single-turn encoder
-- The sign inversion is more likely caused by sensor_direction = CCW being applied
+### Theory 1 RESOLVED: sensor_direction = CCW Does Cause Sign Inversion (But It's Expected)
 
-### Claim B: sensor_direction = CCW Causes Problems
 **Location:** Dev Log 4, Theory 1
 
-The log speculates CCW direction might cause sign inversion, then says "research contradicts this." However, the formula:
+**SimpleFOC Source Code (Sensor.h):**
 ```cpp
-shaft_angle = sensor_direction * LPF_angle(sensor->getAngle()) - sensor_offset
+enum Direction : int8_t {
+    CW      = 1,   // clockwise
+    CCW     = -1,  // counter clockwise
+    UNKNOWN = 0    // not yet known or invalid state
+};
 ```
-WILL produce negative angles if `sensor_direction = -1` and the base angle is positive. This isn't a "bug" - it's expected behavior. The real question is whether the rest of the code handles this correctly.
+
+**SimpleFOC Source Code (FOCMotor.cpp):**
+```cpp
+float FOCMotor::shaftAngle() {
+    return sensor_direction * LPF_angle(sensor->getAngle()) - sensor_offset;
+}
+```
+
+**Definitive Answer:**
+- **YES**, `sensor_direction = CCW` means multiplying by -1
+- **YES**, this produces negative shaft_angle when sensor returns positive angles
+- **This is NOT a bug** - it's how SimpleFOC normalizes direction
+- The rest of SimpleFOC handles negative angles correctly
+- The sign inversion observed in testing is **expected behavior** when CCW is detected
+
+**Dev Log 4 Error:** The log said "research contradicts this theory" but the theory is actually CORRECT. The sign inversion IS caused by CCW = -1. What the dev log got wrong is thinking this is a problem - it's working as designed.
+
+---
+
+### Theory 2 RESOLVED: getAngle() Override is NOT the Cause of Sign Inversion
+
+**Location:** Dev Log 4, Theory 2
+
+**SimpleFOC Source Code (Sensor.cpp):**
+```cpp
+float Sensor::getAngle() {
+    return (float)full_rotations * _2PI + angle_prev;
+}
+```
+
+**Analysis:**
+- Overriding `getAngle()` to return just `angle_prev` only affects multi-rotation tracking
+- It cannot cause sign inversion - it just ignores accumulated rotations
+- For a single-turn absolute encoder (0-360°), this is actually a reasonable override
+- The sign inversion is caused by `sensor_direction = -1`, NOT the getAngle() override
+
+**Definitive Answer:** Theory 2 is WRONG. The getAngle() override is not the cause.
+
+---
+
+### GitHub Issue #172 VERIFIED: I2C Calibration Issues Are Real
+
+**Location:** Dev Log 1, Lines 5-6
+
+**GitHub Issue #172 Actual Contents:**
+- Title: "initFOC with MT6701Sensor get wrong pole pair value and electrical zero offset"
+- User replaced AS5600 with MT6701 sensor
+- `initFOC()` produced **wildly incorrect values**:
+  - Estimated pole pairs: 18.76 (actual: 11)
+  - Estimated zero offset: 5.85 (actual: 3.7)
+- Motor consumed 5W instead of expected 1.5W
+- Motor oscillated between poles
+
+**SimpleFOC alignSensor() Timing Requirements:**
+- Direction detection loop: 500 steps × 2ms = ~1 second total
+- Sensor must respond within 2ms per iteration
+- I2C reads taking longer cause stale data → wrong direction detection
+
+**MT6701 I2C Driver Status (from Arduino-FOC-drivers):**
+> "work in progress... I2C not yet complete"
+> "the I2C output of this sensor is probably too slow for high performance motor control"
+
+**Definitive Answer:**
+- The claim that I2C causes calibration failures is **TRUE**
+- The timing estimate of "10-20ms per read" is **WRONG** (typical reads are <1ms)
+- The root cause is timing sensitivity, not raw I2C speed
+- Recommended workaround: manual calibration with hardcoded values
+
+---
+
+### MotionControlType::angle_openloop VERIFIED: It Does Exist
+
+**Location:** Dev Log 5, Error 3 (my own error in initial review)
+
+**SimpleFOC Source Code (FOCMotor.h):**
+```cpp
+enum MotionControlType : uint8_t {
+    torque            = 0x00,
+    velocity          = 0x01,
+    angle             = 0x02,
+    velocity_openloop = 0x03,
+    angle_openloop    = 0x04   // ← This DOES exist
+};
+```
+
+**Correction:** `MotionControlType::angle_openloop` is valid. Only `TorqueControlType::angle` is invalid.
+
+---
+
+## Root Cause Analysis: Why Motor Moves Wrong Direction
+
+Based on research, the actual root cause chain is:
+
+1. **initFOC() calibration detected CCW direction** (sensor_direction = -1)
+2. **shaftAngle() formula multiplies by -1**: `shaft_angle = -1 * positive_angle - offset`
+3. **This produces negative shaft_angle values** (expected behavior)
+4. **Motor control loop uses shaft_angle for position feedback**
+5. **If the code expects positive angles**, the negative values cause reverse motion
+
+**The fix is NOT to change sensor_direction** - it's to ensure all code handles negative angles correctly, OR to verify if the CCW detection was actually correct for the physical setup.
+
+**Key Question:** Was CCW detection correct? If the motor/sensor are mounted such that increasing encoder angle = CW motor rotation, then CCW detection is wrong. This could happen if:
+- Sensor is mounted upside down
+- Motor wires are swapped
+- Sensor magnet polarity is reversed
+
+---
+
+## Sources
+
+- [SimpleFOC Sensor.h - Direction enum](https://github.com/simplefoc/Arduino-FOC/blob/master/src/common/base_classes/Sensor.h)
+- [SimpleFOC FOCMotor.cpp - shaftAngle() implementation](https://github.com/simplefoc/Arduino-FOC/blob/master/src/common/base_classes/FOCMotor.cpp)
+- [SimpleFOC Sensor.cpp - getAngle() implementation](https://github.com/simplefoc/Arduino-FOC/blob/master/src/common/base_classes/Sensor.cpp)
+- [SimpleFOC FOCMotor.h - MotionControlType enum](https://github.com/simplefoc/Arduino-FOC/blob/master/src/common/base_classes/FOCMotor.h)
+- [GitHub Issue #172 - initFOC with MT6701Sensor](https://github.com/simplefoc/Arduino-FOC/issues/172)
+- [Arduino-FOC-drivers MT6701 README](https://github.com/simplefoc/Arduino-FOC-drivers/blob/master/src/encoders/mt6701/README.md)
+- [SimpleFOC Community - Skip Alignment](https://community.simplefoc.com/t/skip-the-alignment-of-the-position-sensor/4960)
 
 ---
 
