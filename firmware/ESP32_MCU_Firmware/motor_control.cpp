@@ -845,6 +845,20 @@ bool MotorController::runManualCalibration() {
     motor.zero_electric_angle = zero_elec_angle;
     motor.sensor_direction = sensor_dir;
 
+    // CRITICAL FIX: Override sensor direction to CW if configured
+    // When sensor_direction = CCW, SimpleFOC produces negative shaft_angle values
+    // which breaks position error calculations and velocity estimation
+    // Forcing CW ensures all angles are positive (0-2π range)
+#if FORCE_SENSOR_DIRECTION_CW
+    if (DEBUG_MOTOR && motor.sensor_direction == Direction::CCW) {
+        Serial.println("");
+        Serial.println("⚠ OVERRIDE: Forcing sensor_direction to CW (was CCW)");
+        Serial.println("  This fixes negative shaft_angle values that break position control");
+        Serial.println("  Motor behavior unchanged, only angle interpretation");
+    }
+    motor.sensor_direction = Direction::CW;
+#endif
+
     // Restore voltage limit
     motor.voltage_limit = normal_voltage_limit;
 
