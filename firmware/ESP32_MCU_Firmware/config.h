@@ -45,6 +45,15 @@
 #define MOTOR_RESISTANCE 10.0           // Phase resistance (Ohms) - gimbal motors typically R>10Ω
 #define MOTOR_KV         100            // Motor KV rating (RPM/V)
 
+// SENSOR DIRECTION OVERRIDE
+// SimpleFOC auto-detects sensor direction during calibration (CW or CCW)
+// When CCW is detected, shaft_angle becomes negative, breaking position control
+// Override to CW to force positive angles and fix position/velocity calculations
+// Physical mounting: If encoder reads increase when motor rotates "forward", use CW
+//                    If encoder reads decrease when motor rotates "forward", use CCW
+// NOTE: Changing this does NOT change motor behavior, only angle interpretation
+#define FORCE_SENSOR_DIRECTION_CW true  // Set to true to override CCW and force CW direction
+
 //=============================================================================
 // MOTION CONTROL PARAMETERS
 //=============================================================================
