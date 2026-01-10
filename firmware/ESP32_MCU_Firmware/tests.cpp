@@ -67,10 +67,12 @@ void logMotorState(MotorController& motorControl, const char* context) {
     Serial.print(motor.shaft_angle_sp, 4);
     Serial.println(" rad)");
 
-    Serial.print("  Position PID error: ");
-    Serial.print(radiansToDegrees(motor.P_angle.error), 2);
+    // Calculate position error (target - current)
+    float position_error_rad = motor.shaft_angle_sp - motor.shaft_angle;
+    Serial.print("  Position PID error (target-current): ");
+    Serial.print(radiansToDegrees(position_error_rad), 2);
     Serial.print("° (");
-    Serial.print(motor.P_angle.error, 4);
+    Serial.print(position_error_rad, 4);
     Serial.println(" rad)");
 
     Serial.print("  Velocity command (shaft_velocity_sp): ");
@@ -494,6 +496,7 @@ void runMotorTest(MotorController& motorControl) {
         if (loop_count % 10 == 0) {
             unsigned long elapsed = millis() - start_time;
             BLDCMotor& motor = motorControl.getMotor();
+            float pos_error = motor.shaft_angle_sp - motor.shaft_angle;
             Serial.print("[");
             Serial.print(elapsed);
             Serial.print(" ms] Pos: ");
@@ -501,7 +504,7 @@ void runMotorTest(MotorController& motorControl) {
             Serial.print("° | Vel: ");
             Serial.print(radiansToDegrees(motor.shaft_velocity), 1);
             Serial.print("°/s | PID err: ");
-            Serial.print(radiansToDegrees(motor.P_angle.error), 1);
+            Serial.print(radiansToDegrees(pos_error), 1);
             Serial.println("°");
         }
 
