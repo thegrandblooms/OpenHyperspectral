@@ -144,6 +144,12 @@ float MT6701Sensor::getSensorAngle() {
     // Update timestamp
     last_update_time = micros();
 
+    // CRITICAL: Reset full_rotations to prevent multi-turn tracking
+    // For absolute encoders in position control, we want angles to wrap at 0/2π
+    // SimpleFOC's base class automatically tracks rotations, which breaks velocity
+    // estimation when crossing 0° boundary (sees -2π jump, calculates insane velocity)
+    full_rotations = 0;
+
     // DEBUG: Throttled update logging (every 1 second max)
     if (DEBUG_MOTOR) {
         static unsigned long last_debug_print = 0;
@@ -161,7 +167,7 @@ float MT6701Sensor::getSensorAngle() {
 
     // Return angle in radians (SimpleFOC expects this)
     // Base class Sensor::update() will handle:
-    // - Rotation tracking (angle_prev, full_rotations)
+    // - Rotation tracking (angle_prev, full_rotations) ← we reset full_rotations above
     // - Wraparound detection
     // - Timestamp management
     return cached_radians;
@@ -1225,11 +1231,15 @@ bool MotorController::isAtTarget() {
     float current_position_rad = motor.shaft_angle;
     float current_velocity_rad_s = motor.shaft_velocity;
 
-    // Convert to degrees for comparison
+    // Normalize current position to 0-360° range (handles negative angles from CCW)
     float current_position_deg = radiansToDegrees(current_position_rad);
+    while (current_position_deg < 0) current_position_deg += 360.0f;
+    while (current_position_deg >= 360.0f) current_position_deg -= 360.0f;
+
     float velocity_deg_s = abs(radiansToDegrees(current_velocity_rad_s));
 
-    // Calculate position error (both in absolute coordinates)
+    // Calculate position error with wraparound handling
+    // Both angles now guaranteed to be in 0-360° range
     float position_error_deg = abs(current_position_deg - target_position_deg);
 
     // Handle wraparound (e.g., target=5°, current=355° → error=10°, not 350°)
