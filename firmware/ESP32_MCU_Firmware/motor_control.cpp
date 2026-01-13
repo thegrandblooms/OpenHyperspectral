@@ -170,23 +170,25 @@ float MT6701Sensor::getSensorAngle() {
 }
 
 float MT6701Sensor::getAngle() {
-    // DIAGNOSTIC: Log what we're returning and what SimpleFOC will do with it
-    float angle_to_return = angle_prev;
+    // CRITICAL FIX: Use continuous angle tracking to prevent velocity jumps at 0°/360° boundary
+    //
+    // SimpleFOC's BLDCMotor calculates shaft_velocity from angle differences:
+    //   shaft_velocity = (shaft_angle - last_shaft_angle) / dt
+    //
+    // If we return 0-2π only (wrapping at boundary), SimpleFOC sees large jumps:
+    //   Before crossing: 6.28 rad (359°)
+    //   After crossing:  0.01 rad (0.6°)
+    //   Calculated velocity: (0.01 - 6.28) / 0.001s = -6270 rad/s = -359,300 °/s!
+    //
+    // By returning continuous tracking (can be negative or >2π), angle changes are small:
+    //   Before crossing: 6.28 rad (full_rotations=0)
+    //   After crossing:  6.29 rad (full_rotations=1, angle_prev=0.01)
+    //   Calculated velocity: (6.29 - 6.28) / 0.001s = 10 rad/s ✓
+    //
+    // This follows SimpleFOC's standard pattern for absolute encoders.
+    // See Dev_Log/velocity_jump_analysis.md for complete explanation.
 
-    if (DEBUG_MOTOR) {
-        static unsigned long last_debug = 0;
-        if (millis() - last_debug > 500) {  // Log every 500ms
-            Serial.print("[DIAG_getAngle] returning: ");
-            Serial.print(radiansToDegrees(angle_to_return), 2);
-            Serial.print("° | angle_prev: ");
-            Serial.print(radiansToDegrees(angle_prev), 2);
-            Serial.print("° | full_rotations: ");
-            Serial.println(full_rotations);
-            last_debug = millis();
-        }
-    }
-
-    return angle_to_return;  // Return 0-2π only, ignore full_rotations
+    return (float)full_rotations * _2PI + angle_prev;
 }
 
 // DO NOT override update() - follow standard SimpleFOC pattern
