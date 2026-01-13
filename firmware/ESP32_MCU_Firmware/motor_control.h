@@ -13,20 +13,28 @@
 //
 // ARCHITECTURE OVERVIEW:
 // ----------------------
-// Raw Encoder (0-16383 counts, 14-bit)
+// Raw Encoder (0-16383 counts, 14-bit I2C)
 //     ↓
-// MT6701Sensor (exposes: raw counts, degrees, radians)
+// Cartesian Filtering (SmartKnob pattern - eliminates wraparound discontinuities)
+//     ↓
+// MT6701Sensor (exposes: raw counts, degrees, filtered radians)
 //     ↓
 // MotorController (works in DEGREES internally)
 //     ↓
 // SimpleFOC Boundary (converts degrees → radians)
 //     ↓
-// SimpleFOC Library (expects radians)
+// SimpleFOC Library (expects radians, handles position control)
 //
 // WHY DEGREES?
 // - More intuitive for humans (0-360° vs 0-6.28 rad)
 // - Easier to debug and tune
 // - Clearer separation from SimpleFOC (which uses radians)
+//
+// CARTESIAN FILTERING (SmartKnob Innovation):
+// - Converts angle to (x,y) coordinates before filtering
+// - Filters x and y separately (eliminates 0°/360° discontinuity)
+// - Converts back to angle via atan2
+// - Prevents hunting/vibration at angle boundaries
 //
 // SIMPLEFOC INTEGRATION:
 // - motor.loopFOC() - Runs current control (FOC algorithm)
@@ -75,10 +83,16 @@ inline float normalizeRadians(float radians) {
 /**
  * SimpleFOC-compatible wrapper for MT6701 encoder library
  *
- * This class provides MINIMAL ABSTRACTION over the raw encoder:
- * - Exposes raw encoder counts (0-16383)
- * - Provides degrees (0-360) for internal use
- * - Provides radians (0-2π) for SimpleFOC
+ * This class implements the SmartKnob-proven sensor integration pattern:
+ * - Reads raw encoder counts (0-16383) via I2C
+ * - Applies Cartesian filtering to eliminate wraparound discontinuities
+ * - Returns filtered angle (0-2π radians) to SimpleFOC
+ * - Provides raw counts and degrees for diagnostics
+ *
+ * CARTESIAN FILTERING:
+ * Instead of filtering angles directly (which fails at 0°/360° boundary),
+ * we convert to (x,y) coordinates, filter those, then convert back.
+ * This prevents hunting/vibration when crossing angle boundaries.
  *
  * CLEAR SEPARATION: This is the encoder, SimpleFOC is the motor controller.
  * We read position here, SimpleFOC uses it for control.
@@ -91,13 +105,9 @@ public:
     // SENSOR INTERFACE (Required by SimpleFOC - works in RADIANS)
     //=========================================================================
     void init() override;
-    float getSensorAngle() override;       // Returns RADIANS (SimpleFOC expects this)
-    // NOTE: update() NOT overridden - base class handles it (standard SimpleFOC pattern)
-
-    // Override getAngle() to provide continuous angle tracking
-    // Returns: (float)full_rotations * 2π + angle_prev
-    // This prevents velocity jumps at 0°/360° boundary (see motor_control.cpp for details)
-    float getAngle() override;             // Returns continuous angle (can be negative or >2π)
+    float getSensorAngle() override;       // Returns RADIANS with Cartesian filtering (SimpleFOC expects this)
+    // NOTE: update() and getAngle() NOT overridden - base class handles rotation tracking
+    // This follows the standard SimpleFOC pattern used by SmartKnob
 
     int needsSearch() override;            // Return 0 normally, 1 during calibration
     float getVelocity() override;          // Returns rad/s (with boundary crossing detection)
@@ -125,6 +135,11 @@ private:
     uint16_t cached_raw_count;             // Raw count (0-16383)
     float cached_degrees;                  // Degrees (0-360)
     float cached_radians;                  // Radians (0-2π) for SimpleFOC
+
+    // Cartesian filtering (SmartKnob pattern - eliminates wraparound discontinuities)
+    float filtered_x;                      // Filtered X coordinate (cos component)
+    float filtered_y;                      // Filtered Y coordinate (sin component)
+    static constexpr float FILTER_ALPHA = 0.4f;  // Low-pass filter coefficient (0=no filtering, 1=no smoothing)
 
     // Previous values for velocity calculation
     float previous_degrees;

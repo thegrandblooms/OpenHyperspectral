@@ -12,6 +12,8 @@ MT6701Sensor::MT6701Sensor(uint8_t address)
       cached_raw_count(0),
       cached_degrees(0.0f),
       cached_radians(0.0f),
+      filtered_x(1.0f),                    // Initialize to angle=0 (cos(0)=1)
+      filtered_y(0.0f),                    // Initialize to angle=0 (sin(0)=0)
       previous_degrees(0.0f),
       last_update_time(0),
       force_needs_search(false) {
@@ -107,12 +109,16 @@ void MT6701Sensor::init() {
         Serial.println(" deg)");
     }
 
-    // Initialize cached values
+    // Initialize cached values and Cartesian filter
     cached_raw_count = encoder.readRawAngle();
     cached_degrees = rawToDegrees(cached_raw_count);
     cached_radians = degreesToRadians(cached_degrees);
     previous_degrees = cached_degrees;
     last_update_time = micros();
+
+    // Initialize Cartesian filter to current position
+    filtered_x = cos(cached_radians);
+    filtered_y = sin(cached_radians);
 
     if (DEBUG_MOTOR) {
         Serial.println("[MT6701] Initial values cached:");
@@ -124,22 +130,55 @@ void MT6701Sensor::init() {
         Serial.print("  Radians: ");
         Serial.print(cached_radians, 4);
         Serial.println(" rad");
+        Serial.print("  Cartesian filter initialized: (x=");
+        Serial.print(filtered_x, 4);
+        Serial.print(", y=");
+        Serial.print(filtered_y, 4);
+        Serial.println(")");
     }
 }
 
 float MT6701Sensor::getSensorAngle() {
-    // CORRECT SIMPLEFOC PATTERN: Read sensor and return angle in radians
-    // The base class Sensor::update() will call this method
-    // No need to override update() - let base class handle tracking
+    // SMARTKNOB PATTERN: Cartesian filtering eliminates angle wraparound discontinuities
+    //
+    // Traditional approach:
+    //   Raw: 359.95° → 0.02° → 359.98° → 0.01° (discontinuous!)
+    //   Filter: ???  (can't average 359.95° and 0.02° meaningfully)
+    //
+    // Cartesian approach:
+    //   Raw angle → (x, y) coordinates → filter x and y separately → atan2 back to angle
+    //   At 0/360° boundary: x≈1, y≈0 (smooth transition, no discontinuity!)
+    //
+    // This prevents velocity jumps and hunting at angle boundaries.
+    // See: https://github.com/scottbez1/smartknob/blob/master/firmware/src/mt6701_sensor.cpp
 
-    // Read raw encoder count (MINIMAL ABSTRACTION - closest to hardware)
+    // Read raw encoder count (closest to hardware)
     cached_raw_count = encoder.readRawAngle();
 
-    // Convert to degrees (our preferred unit for diagnostics)
-    cached_degrees = rawToDegrees(cached_raw_count);
+    // Convert to radians (raw reading, not yet filtered)
+    float raw_radians = degreesToRadians(rawToDegrees(cached_raw_count));
 
-    // Convert to radians for SimpleFOC
-    cached_radians = degreesToRadians(cached_degrees);
+    // Convert angle to Cartesian coordinates
+    float new_x = cos(raw_radians);
+    float new_y = sin(raw_radians);
+
+    // Apply exponential moving average filter to x and y components
+    // alpha = 0.4: 40% new value, 60% previous value (smooths jitter while staying responsive)
+    filtered_x = new_x * FILTER_ALPHA + filtered_x * (1.0f - FILTER_ALPHA);
+    filtered_y = new_y * FILTER_ALPHA + filtered_y * (1.0f - FILTER_ALPHA);
+
+    // Convert filtered Cartesian coordinates back to angle
+    // atan2 handles all quadrants correctly and returns -π to π
+    float filtered_radians = atan2(filtered_y, filtered_x);
+
+    // Normalize to 0-2π range (SimpleFOC expects positive angles)
+    if (filtered_radians < 0) {
+        filtered_radians += 2.0f * PI;
+    }
+
+    // Cache values for diagnostics
+    cached_degrees = radiansToDegrees(filtered_radians);
+    cached_radians = filtered_radians;
 
     // Update timestamp
     last_update_time = micros();
@@ -150,50 +189,33 @@ float MT6701Sensor::getSensorAngle() {
         if (millis() - last_debug_print > 1000) {
             Serial.print("[SENSOR] getSensorAngle() - Raw: ");
             Serial.print(cached_raw_count);
-            Serial.print(", Deg: ");
+            Serial.print(", Raw°: ");
+            Serial.print(radiansToDegrees(raw_radians), 2);
+            Serial.print("°, Filtered°: ");
             Serial.print(cached_degrees, 2);
-            Serial.print("°, Rad: ");
-            Serial.print(cached_radians, 4);
-            Serial.println(" rad");
+            Serial.print("° (x=");
+            Serial.print(filtered_x, 3);
+            Serial.print(", y=");
+            Serial.print(filtered_y, 3);
+            Serial.println(")");
             last_debug_print = millis();
         }
     }
 
-    // Return angle in radians (SimpleFOC expects this)
+    // Return filtered angle in radians (SimpleFOC expects this)
     // Base class Sensor::update() will handle:
     // - Rotation tracking (angle_prev, full_rotations)
     // - Wraparound detection
-    // - Timestamp management
-    // NOTE: We do NOT reset full_rotations here - it breaks SimpleFOC's internal state
-    // and causes calibration to fail. Velocity jumps handled elsewhere.
+    // - Velocity calculation
     return cached_radians;
 }
 
-float MT6701Sensor::getAngle() {
-    // CRITICAL FIX: Use continuous angle tracking to prevent velocity jumps at 0°/360° boundary
-    //
-    // SimpleFOC's BLDCMotor calculates shaft_velocity from angle differences:
-    //   shaft_velocity = (shaft_angle - last_shaft_angle) / dt
-    //
-    // If we return 0-2π only (wrapping at boundary), SimpleFOC sees large jumps:
-    //   Before crossing: 6.28 rad (359°)
-    //   After crossing:  0.01 rad (0.6°)
-    //   Calculated velocity: (0.01 - 6.28) / 0.001s = -6270 rad/s = -359,300 °/s!
-    //
-    // By returning continuous tracking (can be negative or >2π), angle changes are small:
-    //   Before crossing: 6.28 rad (full_rotations=0)
-    //   After crossing:  6.29 rad (full_rotations=1, angle_prev=0.01)
-    //   Calculated velocity: (6.29 - 6.28) / 0.001s = 10 rad/s ✓
-    //
-    // This follows SimpleFOC's standard pattern for absolute encoders.
-    // See Dev_Log/velocity_jump_analysis.md for complete explanation.
-
-    return (float)full_rotations * _2PI + angle_prev;
-}
-
-// DO NOT override update() - follow standard SimpleFOC pattern
-// Let base class Sensor::update() call getSensorAngle() and handle tracking
-// This matches all official SimpleFOC drivers and third-party implementations
+// NOTE: getAngle() and update() are NOT overridden
+// We use the standard SimpleFOC Sensor base class implementation which:
+// - Calls our getSensorAngle() to get the current filtered angle
+// - Tracks rotations automatically (full_rotations counter)
+// - Calculates velocity from angle changes
+// This matches the SmartKnob pattern and all official SimpleFOC drivers
 
 int MT6701Sensor::needsSearch() {
     // MT6701 is an absolute encoder - normally doesn't need index search
