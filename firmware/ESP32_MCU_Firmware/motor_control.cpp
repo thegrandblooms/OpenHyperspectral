@@ -900,17 +900,27 @@ bool MotorController::runManualCalibration() {
 
     int foc_result = motor.initFOC();
 
-    // CRITICAL FIX: When using absolute encoders with pre-set zero_electric_angle,
-    // SimpleFOC skips alignment and doesn't initialize shaft_angle from the sensor.
-    // We must manually sync shaft_angle to the current sensor reading.
-    // This is a known SimpleFOC issue with absolute encoders.
-    // See: https://community.simplefoc.com/t/sensor-getangle-works-correctly-but-motor-shaft-angle-is-always-zero-mot-init-foc-failed-as-a-result/5357
+    // SMARTKNOB PATTERN: Trust SimpleFOC's initialization completely
+    // Do NOT manually set shaft_angle - this creates mismatches with sensor state
+    // (full_rotations, angle_prev) that cause velocity calculation errors.
+    //
+    // Instead, run stabilization cycles to let SimpleFOC synchronize naturally.
+    // This matches the proven SmartKnob implementation pattern.
     if (foc_result == 1) {
-        encoder.update();  // Update sensor
-        motor.shaft_angle = encoder.getSensorAngle();  // Force sync!
+        if (DEBUG_MOTOR) {
+            Serial.println("[OK] initFOC() succeeded");
+            Serial.println("  Running stabilization cycles to sync sensor state...");
+        }
+
+        // Run stabilization cycles to let sensor state settle
+        // This ensures full_rotations and angle_prev are synchronized with shaft_angle
+        for (int i = 0; i < 20; i++) {
+            motor.loopFOC();
+            delay(1);
+        }
 
         if (DEBUG_MOTOR) {
-            Serial.println("[FIX] Initialized shaft_angle from sensor");
+            Serial.println("[OK] Sensor state stabilized");
             Serial.print("  shaft_angle = ");
             Serial.print(radiansToDegrees(motor.shaft_angle), 2);
             Serial.println("°");
