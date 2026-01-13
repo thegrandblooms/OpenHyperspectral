@@ -1331,11 +1331,10 @@ void MotorController::update() {
     // Do NOT call encoder.update() manually here - it breaks the control loop!
     motor.loopFOC();
 
-    // NOTE: Angle normalization removed - no longer needed!
-    // We fixed the root cause by overriding sensor_direction to CW during calibration.
-    // Angles are now naturally positive (0-2π) from SimpleFOC.
-    // Previous normalization interfered with SimpleFOC's velocity estimation,
-    // causing insane velocity readings (1M+ °/s) by creating discontinuities.
+    // NOTE: No angle normalization needed here!
+    // FORCE_SENSOR_DIRECTION_CW=true in config.h forces calibration to use CW direction
+    // This ensures shaft_angle is always positive (0-2π range) even if physical sensor is CCW
+    // Normalizing here would create discontinuities and break velocity estimation
 
     // DIAGNOSTIC: Log SimpleFOC's shaft_angle calculation
     if (DEBUG_MOTOR) {

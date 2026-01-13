@@ -48,13 +48,16 @@
 // SENSOR DIRECTION OVERRIDE
 // SimpleFOC auto-detects sensor direction during calibration (CW or CCW)
 // When CCW is detected, shaft_angle becomes negative, breaking position control
-// Override to CW to force positive angles and fix position/velocity calculations
-// Physical mounting: If encoder reads increase when motor rotates "forward", use CW
-//                    If encoder reads decrease when motor rotates "forward", use CCW
-// NOTE: Changing this does NOT change motor behavior, only angle interpretation
-// DISABLED: Forcing CW breaks electrical commutation when physical relationship is CCW
-//           Using CCW (physical truth) and fixing angle handling instead
-#define FORCE_SENSOR_DIRECTION_CW false  // Set to true to override CCW and force CW direction
+// CRITICAL FIX: MUST force CW to prevent negative shaft_angle values
+//
+// Why this is safe:
+// - The zero_electric_angle calculation (motor_control.cpp:872) accounts for direction
+// - Electrical commutation works correctly regardless of this setting
+// - This only affects SimpleFOC's angle interpretation, not motor physics
+//
+// Physical relationship can be CCW, but we override to CW for correct angle math.
+// SimpleFOC expects shaft_angle in 0-2π range; CCW creates negative angles.
+#define FORCE_SENSOR_DIRECTION_CW true  // ENABLED: Fixes negative shaft_angle bug
 
 //=============================================================================
 // MOTION CONTROL PARAMETERS
