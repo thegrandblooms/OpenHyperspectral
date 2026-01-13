@@ -381,10 +381,10 @@ void processSerialCommand(String cmd) {
             float angle = args.toFloat();
             Serial.print("Moving to position: ");
             Serial.print(angle);
-            Serial.println(" rad");
+            Serial.println("° (absolute position 0-360)");
             motorControl.moveToPosition(angle);
         } else {
-            Serial.println("Error: Please specify angle (e.g., 'm 3.14')");
+            Serial.println("Error: Please specify angle in degrees (e.g., 'm 90' or 'm 180.5')");
         }
     }
     else if (command == "v" || command == "velocity") {
