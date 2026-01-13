@@ -93,13 +93,15 @@ public:
     void init() override;
     float getSensorAngle() override;       // Returns RADIANS (SimpleFOC expects this)
     // NOTE: update() NOT overridden - base class handles it (standard SimpleFOC pattern)
-    // NOTE: getAngle() NOT overridden - base class Sensor::getAngle() returns:
-    //       (float)full_rotations * _2PI + angle_prev
-    //       This gives continuous angle tracking which prevents velocity jumps at boundary crossings.
-    //       See Dev_Log/velocity_jump_solution.md for detailed explanation.
+
+    // Override getAngle() for single-turn absolute encoder
+    // SimpleFOC's base class adds full_rotations * 2π, but single-turn encoders
+    // naturally wrap at 0°/360° - this is NOT a full rotation, just boundary wraparound
+    float getAngle() override;             // Returns 0-2π only, ignores full_rotations
 
     int needsSearch() override;            // Return 0 normally, 1 during calibration
-    float getVelocity() override;          // Returns rad/s (with boundary crossing detection)
+    float getVelocity() override;          // Returns rad/s
+    int32_t getFullRotations() { return 0; }  // Single-turn encoder
 
     // Calibration mode control
     void setCalibrationMode(bool enabled) { force_needs_search = enabled; }

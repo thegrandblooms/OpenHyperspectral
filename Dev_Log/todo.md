@@ -1,11 +1,9 @@
 # OpenHyperspectral Motor Control - Todo List
 
 **Last Updated:** 2026-01-10
-**Status:** 🎯 **VELOCITY JUMP FIX IMPLEMENTED** - Root cause of 10M+ °/s velocity spikes identified and fixed! 9/13 tasks completed. 4 remaining tasks require hardware testing.
+**Status:** 🎯 **MAJOR BREAKTHROUGH** - Root cause of motor oscillation identified! 8/12 tasks completed. 4 remaining tasks require hardware testing.
 
-**🔥 CRITICAL FIX:** Velocity jumps at 0°/360° boundary caused by `getAngle()` override returning 0-2π only, breaking SimpleFOC's velocity calculation. Removed override to use base class continuous tracking. See `velocity_jump_solution.md` for complete analysis.
-
-**Previous Finding:** Motor oscillation also related to negative angles from CCW direction. See `oscillation_analysis.md` for details.
+**🔥 CRITICAL FINDING:** Motor oscillation caused by broken position error calculations when `sensor_direction = CCW`. Code assumes positive angles but SimpleFOC produces negative values. See `oscillation_analysis.md` for complete solution.
 
 ---
 
@@ -73,46 +71,9 @@ The oscillation is caused by **broken position error calculations** when `sensor
 
 ---
 
-### 4. Fix Velocity Jumps at 0°/360° Boundary Crossing
-**Files:**
-- `firmware/ESP32_MCU_Firmware/motor_control.h` (lines 97-100)
-- `firmware/ESP32_MCU_Firmware/motor_control.cpp` (lines 172-190)
-
-**Issue:** Motor shows 10M+ °/s velocity spikes when crossing 0°/360° boundary, causing position control to fail and motor to hunt/oscillate.
-
-**Root Cause:** `MT6701Sensor::getAngle()` override returns `angle_prev` (0-2π only), causing SimpleFOC's `shaft_velocity` calculation to see -6.27 rad jumps:
-- Before: getAngle() = 6.28 rad (359.8°)
-- After: getAngle() = 0.01 rad (0.6°)
-- SimpleFOC calculates: velocity = (0.01 - 6.28) / 0.001s = -6270 rad/s = **-359,300 °/s**
-
-**Why Override Was Wrong:** SimpleFOC's BLDCMotor doesn't use our `getVelocity()` override with boundary crossing detection. It calculates `shaft_velocity` internally from `shaft_angle` changes, so wrapping getAngle() at 2π breaks velocity estimation.
-
-**Fix Applied:**
-- ✅ Removed `getAngle()` override from motor_control.h
-- ✅ Removed `getAngle()` implementation from motor_control.cpp
-- ✅ Now uses SimpleFOC's base class `Sensor::getAngle()` which returns:
-  ```cpp
-  (float)full_rotations * _2PI + angle_prev
-  ```
-- ✅ This provides continuous angle tracking (can be negative or >2π)
-- ✅ Velocity calculation is smooth (no wraparound jumps)
-
-**Documentation:** See `Dev_Log/velocity_jump_solution.md` for complete analysis
-
-**Testing Required:**
-- [ ] Compile and upload firmware
-- [ ] Run motor test crossing 0°/360° boundary
-- [ ] Verify velocity stays < 100 rad/s (no millions)
-- [ ] Verify motor reaches target without hunting
-- [ ] Verify calibration still works
-
-**Status:** ✅ Code Changes Completed (2026-01-10) - Hardware testing pending
-
----
-
 ## 🟡 High Priority - Documentation Corrections
 
-### 5. Correct Phase Angle Descriptions in Dev Log 2
+### 4. Correct Phase Angle Descriptions in Dev Log 2
 **File:** `Dev_Log/dev_log_2.md` (lines 44-79)
 
 **Wrong Descriptions:**
@@ -129,7 +90,7 @@ The oscillation is caused by **broken position error calculations** when `sensor
 
 ---
 
-### 6. Correct I2C Timing Claim in Dev Log 1
+### 5. Correct I2C Timing Claim in Dev Log 1
 **File:** `Dev_Log/dev_log_1.md` (lines 5-6)
 
 **Wrong:** "~10-20ms per read"
@@ -141,7 +102,7 @@ The oscillation is caused by **broken position error calculations** when `sensor
 
 ---
 
-### 7. Clarify LPF_angle Diagnosis in Dev Log 3
+### 6. Clarify LPF_angle Diagnosis in Dev Log 3
 **File:** `Dev_Log/dev_log_3.md` (lines 105-156)
 
 **Issue:** Presented as "discovery" and "fix" but didn't actually solve the problem
@@ -156,7 +117,7 @@ The oscillation is caused by **broken position error calculations** when `sensor
 
 ---
 
-### 8. Document CCW Sign Inversion as Expected SimpleFOC Behavior
+### 7. Document CCW Sign Inversion as Expected SimpleFOC Behavior
 **Location:** Add note to relevant dev logs (3, 4, 5)
 
 **Key Points:**
@@ -172,7 +133,7 @@ The oscillation is caused by **broken position error calculations** when `sensor
 
 ## 🟢 Medium Priority - Testing & Verification
 
-### 9. Test Manual Calibration with Corrected Formula
+### 8. Test Manual Calibration with Corrected Formula
 **File:** `firmware/ESP32_MCU_Firmware/motor_control.cpp`
 
 **Steps:**
@@ -186,7 +147,7 @@ The oscillation is caused by **broken position error calculations** when `sensor
 
 ---
 
-### 10. Verify PID Tuning Parameters for Position Control
+### 9. Verify PID Tuning Parameters for Position Control
 **File:** `firmware/ESP32_MCU_Firmware/config.h` or `motor_control.cpp`
 
 **Current Parameters (from logs):**
@@ -206,7 +167,7 @@ motor.P_angle.D = 0.0;   // Position D gain
 
 ---
 
-### 11. Handle CCW Sensor Direction Correctly in Software
+### 10. Handle CCW Sensor Direction Correctly in Software
 **File:** `firmware/ESP32_MCU_Firmware/motor_control.cpp`
 
 **Verify:**
@@ -232,7 +193,7 @@ All four items are **BROKEN**. This is the root cause of Task #2 (oscillation). 
 
 ---
 
-### 12. Add Instrumentation to Measure Actual I2C Read Timing
+### 11. Add Instrumentation to Measure Actual I2C Read Timing
 **File:** `firmware/ESP32_MCU_Firmware/MT6701Sensor.cpp`
 
 **Implementation:**
@@ -249,7 +210,7 @@ unsigned long duration = micros() - start;
 
 ---
 
-### 13. Remove or Fix getAngle() Override if Present
+### 12. Remove or Fix getAngle() Override if Present
 **File:** `firmware/ESP32_MCU_Firmware/MT6701Sensor.cpp`
 
 **Check For:**
@@ -264,39 +225,35 @@ float MT6701Sensor::getAngle() override {
 - [ ] Remove if present (caused sign inversion in Dev Log 4)
 - [ ] Verify only getSensorAngle() is overridden (correct pattern)
 
-**Status:** ✅ Completed (2026-01-10) - getAngle() override removed (see Task #4)
+**Status:** ⬜ Not Started
 
 ---
 
 ## 📊 Status Summary
 
-**Total Tasks:** 13
+**Total Tasks:** 12
 
-- 🔴 Critical: 4 tasks (✅ 4 completed - Tasks #1, 2, 3, 4)
-- 🟡 High Priority (Docs): 4 tasks (✅ 4 completed - Tasks #5, 6, 7, 8)
-- 🟢 Medium Priority (Testing): 5 tasks (✅ 2 investigations completed - Tasks #11, 13; 3 require hardware - Tasks #9, 10, 12)
+- 🔴 Critical: 3 tasks (✅ 3 completed - Tasks #1, 2, 3)
+- 🟡 High Priority (Docs): 4 tasks (✅ 4 completed - Tasks #4, 5, 6, 7)
+- 🟢 Medium Priority (Testing): 5 tasks (✅ 1 investigation completed - Task #10; 4 require hardware - Tasks #8, 9, 11, 12)
 
-**Completed (Investigation/Documentation/Code Fixes):** 10 (Tasks #1, 2, 3, 4, 5, 6, 7, 8, 11, 13) - Updated 2026-01-10
-**Require Hardware Testing:** 3 (Tasks #9, 10, 12)
+**Completed (Investigation/Documentation):** 8 (Tasks #1, 2, 3, 4, 5, 6, 7, 10) - Updated 2026-01-10
+**Require Hardware Testing:** 4 (Tasks #8, 9, 11, 12)
 **In Progress:** 0
 
-**Key Achievements:**
-- Root cause of motor oscillation identified! See `oscillation_analysis.md`
-- Root cause of velocity jumps fixed! See `velocity_jump_solution.md`
+**Key Achievement:** Root cause of motor oscillation identified! See `oscillation_analysis.md`
 
 ---
 
 ## Priority Order for Execution
 
-1. ✅ **Fix zero_electric_angle formula** (Task #1) - COMPLETED
-2. ✅ **Check firmware for invalid enums** (Task #3) - COMPLETED
-3. ✅ **Investigate oscillation root cause** (Task #2) - COMPLETED
-4. ✅ **Fix velocity jump at boundary** (Task #4) - CODE COMPLETED, TESTING PENDING
-5. **Test velocity fix on hardware** (Task #4 testing) - NEXT PRIORITY
-6. **Verify PID parameters** (Task #10) - After velocity fix confirmed
-7. **Test corrected calibration** (Task #9) - Validate formula fix
-8. Remaining documentation corrections (Tasks #5-8) - COMPLETED
-9. Software verification tasks (Tasks #11-13) - MOSTLY COMPLETED
+1. **Fix zero_electric_angle formula** (Task #1) - Critical math error
+2. **Check firmware for invalid enums** (Task #3) - May prevent compilation
+3. **Investigate oscillation root cause** (Task #2) - Main functional issue
+4. **Verify PID parameters** (Task #9) - Likely related to oscillation
+5. **Test corrected calibration** (Task #8) - Validate formula fix
+6. Remaining documentation corrections (Tasks #4-7)
+7. Software verification tasks (Tasks #10-12)
 
 ---
 
