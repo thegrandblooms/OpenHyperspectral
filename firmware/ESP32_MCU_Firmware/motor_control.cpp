@@ -222,7 +222,7 @@ void MT6701Sensor::resetRotationTracking() {
     // This fixes full_rotations corruption from calibration movements
     full_rotations = 0;
     angle_prev = getSensorAngle();
-    timestamp_prev = micros();
+    // Note: timestamp management handled by base class on next update()
 
     if (DEBUG_MOTOR) {
         Serial.println("[MT6701] Rotation tracking reset to absolute mode");
