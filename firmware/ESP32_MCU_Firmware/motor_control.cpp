@@ -180,6 +180,9 @@ float MT6701Sensor::getSensorAngle() {
     cached_degrees = radiansToDegrees(filtered_radians);
     cached_radians = filtered_radians;
 
+    // Update previous values for our velocity calculation
+    previous_degrees = cached_degrees;
+
     // Update timestamp
     last_update_time = micros();
 
