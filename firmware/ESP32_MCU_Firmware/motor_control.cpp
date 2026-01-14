@@ -1426,9 +1426,21 @@ void MotorController::update() {
     }
 
     // SIMPLEFOC: Run motion control (position control)
-    // Convert target from degrees to radians for SimpleFOC
-    // Both target and shaft_angle are in absolute coordinates (0-360° / 0-2π rad)
-    motor.move(degreesToRadians(target_position_deg));
+    // CRITICAL: SimpleFOC's position PID doesn't normalize angle errors for absolute encoders!
+    // We must normalize the target to be within ±π of current position (shortest path)
+    // Otherwise SimpleFOC can calculate the wrong direction for wraparound cases
+    float current_rad = motor.shaft_angle;
+    float target_rad = degreesToRadians(target_position_deg);
+
+    // Normalize error to [-π, +π] (shortest path)
+    float error_rad = target_rad - current_rad;
+    while (error_rad > PI) error_rad -= TWO_PI;
+    while (error_rad < -PI) error_rad += TWO_PI;
+
+    // Calculate normalized target that's closest to current position
+    float normalized_target_rad = current_rad + error_rad;
+
+    motor.move(normalized_target_rad);
 
     // Optional: Log when target is reached (for debugging)
     if (DEBUG_MOTOR && isAtTarget()) {
