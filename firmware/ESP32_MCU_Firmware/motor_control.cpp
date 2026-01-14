@@ -186,24 +186,25 @@ float MT6701Sensor::getSensorAngle() {
     // Update timestamp
     last_update_time = micros();
 
-    // DEBUG: Throttled update logging (every 1 second max)
-    if (DEBUG_MOTOR) {
-        static unsigned long last_debug_print = 0;
-        if (millis() - last_debug_print > 1000) {
-            Serial.print("[SENSOR] getSensorAngle() - Raw: ");
-            Serial.print(cached_raw_count);
-            Serial.print(", Raw°: ");
-            Serial.print(radiansToDegrees(raw_radians), 2);
-            Serial.print("°, Filtered°: ");
-            Serial.print(cached_degrees, 2);
-            Serial.print("° (x=");
-            Serial.print(filtered_x, 3);
-            Serial.print(", y=");
-            Serial.print(filtered_y, 3);
-            Serial.println(")");
-            last_debug_print = millis();
-        }
-    }
+    // DEBUG: Verbose sensor logging disabled - too noisy during tests
+    // Enable this manually when debugging sensor filter issues
+    // if (DEBUG_MOTOR) {
+    //     static unsigned long last_debug_print = 0;
+    //     if (millis() - last_debug_print > 1000) {
+    //         Serial.print("[SENSOR] getSensorAngle() - Raw: ");
+    //         Serial.print(cached_raw_count);
+    //         Serial.print(", Raw°: ");
+    //         Serial.print(radiansToDegrees(raw_radians), 2);
+    //         Serial.print("°, Filtered°: ");
+    //         Serial.print(cached_degrees, 2);
+    //         Serial.print("° (x=");
+    //         Serial.print(filtered_x, 3);
+    //         Serial.print(", y=");
+    //         Serial.print(filtered_y, 3);
+    //         Serial.println(")");
+    //         last_debug_print = millis();
+    //     }
+    // }
 
     // Return filtered angle in radians (SimpleFOC expects this)
     // Base class Sensor::update() will handle:
@@ -952,9 +953,8 @@ void MotorController::enable() {
     motor_enabled = true;
 
     if (DEBUG_MOTOR) {
-        Serial.println("Motor enabled");
-        Serial.print("Current position: ");
-        Serial.print(radiansToDegrees(motor.shaft_angle), 2);
+        Serial.print("✓ Motor enabled at ");
+        Serial.print(radiansToDegrees(motor.shaft_angle), 1);
         Serial.println("°");
     }
 }
@@ -1311,20 +1311,21 @@ void MotorController::update() {
     // This ensures shaft_angle is always positive (0-2π range) even if physical sensor is CCW
     // Normalizing here would create discontinuities and break velocity estimation
 
-    // DIAGNOSTIC: Log SimpleFOC's shaft_angle calculation
-    if (DEBUG_MOTOR) {
-        static unsigned long last_debug = 0;
-        if (millis() - last_debug > 500) {  // Log every 500ms
-            Serial.print("[DIAG_shaft_angle] shaft_angle: ");
-            Serial.print(radiansToDegrees(motor.shaft_angle), 2);
-            Serial.print("° | sensor_direction: ");
-            Serial.print(motor.sensor_direction == Direction::CW ? "CW(+1)" : "CCW(-1)");
-            Serial.print(" | sensor_offset: ");
-            Serial.print(radiansToDegrees(motor.sensor_offset), 2);
-            Serial.println("°");
-            last_debug = millis();
-        }
-    }
+    // DIAGNOSTIC: Verbose shaft_angle logging disabled - too noisy during tests
+    // Enable this manually when debugging shaft_angle calculation issues
+    // if (DEBUG_MOTOR) {
+    //     static unsigned long last_debug = 0;
+    //     if (millis() - last_debug > 500) {  // Log every 500ms
+    //         Serial.print("[DIAG_shaft_angle] shaft_angle: ");
+    //         Serial.print(radiansToDegrees(motor.shaft_angle), 2);
+    //         Serial.print("° | sensor_direction: ");
+    //         Serial.print(motor.sensor_direction == Direction::CW ? "CW(+1)" : "CCW(-1)");
+    //         Serial.print(" | sensor_offset: ");
+    //         Serial.print(radiansToDegrees(motor.sensor_offset), 2);
+    //         Serial.println("°");
+    //         last_debug = millis();
+    //     }
+    // }
 
     // SIMPLEFOC: Run motion control (position control)
     // CRITICAL: SimpleFOC's position PID doesn't normalize angle errors for absolute encoders!

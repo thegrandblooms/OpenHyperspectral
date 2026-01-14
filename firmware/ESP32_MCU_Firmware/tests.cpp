@@ -367,54 +367,49 @@ void runAlignmentTest(MotorController& motorControl) {
 }
 
 void runMotorTest(MotorController& motorControl) {
-    Serial.println("\n=== Motor Diagnostic Test (30° movement) ===");
 
     // Step 1: Enable motor
     if (!motorControl.isEnabled()) {
-        Serial.println("[1/3] Enabling motor...");
+        Serial.print("[1/3] ");
         motorControl.enable();
         delay(100);
         if (!motorControl.isEnabled()) {
-            Serial.println("✗ FAILED: Motor won't enable (not calibrated?)");
+            Serial.println("✗ Motor won't enable (not calibrated?)");
             return;
         }
-        Serial.println("✓ Motor enabled");
     } else {
         Serial.println("[1/3] Motor already enabled");
     }
 
     // Step 2: Verify SimpleFOC tracking
-    Serial.println("[2/3] Verifying sensor tracking...");
     motorControl.updateEncoder();
-    logMotorState(motorControl, "Initial state");
-
     BLDCMotor& motor = motorControl.getMotor();
     float shaft_angle_abs_deg = radiansToDegrees(motor.shaft_angle);
     float encoder_abs_deg = motorControl.getEncoderDegrees();
     float tracking_error_abs = abs(encoder_abs_deg - shaft_angle_abs_deg);
 
     if (tracking_error_abs > 5.0) {
-        Serial.print("✗ FAILED: Tracking error ");
-        Serial.print(tracking_error_abs, 2);
-        Serial.println("° (SimpleFOC not reading sensor!)");
+        Serial.print("[2/3] ✗ Tracking error ");
+        Serial.print(tracking_error_abs, 1);
+        Serial.println("° - SimpleFOC not reading sensor!");
         return;
     }
-    Serial.println("✓ SimpleFOC tracking sensor correctly");
+    Serial.print("[2/3] ✓ Tracking (Err:");
+    Serial.print(tracking_error_abs, 1);
+    Serial.println("°)");
 
     // Step 3: Test movement (+30° from current position)
-    Serial.println("[3/3] Testing 30° movement...");
     float start_position = motorControl.getEncoderDegrees();
     float test_target = start_position + 30.0;
     if (test_target >= 360.0) test_target -= 360.0;
 
-    Serial.print("Start: ");
+    Serial.print("[3/3] Move +30°: ");
     Serial.print(start_position, 1);
-    Serial.print("° → Target: ");
+    Serial.print("° → ");
     Serial.print(test_target, 1);
-    Serial.println("° (absolute)");
+    Serial.println("°");
 
     motorControl.moveToPosition(test_target);
-    logMotorState(motorControl, "Command sent");
 
     // Run control loop with compact trajectory logging
     unsigned long start_time = millis();
@@ -441,10 +436,7 @@ void runMotorTest(MotorController& motorControl) {
             Serial.println("°");
         }
 
-        // Detailed state every 50 loops (500ms)
-        if (loop_count % 50 == 0) {
-            logMotorState(motorControl, "Moving");
-        }
+        // Detailed [DIAG] logging removed - trajectory already shows progress
 
         if (motorControl.isAtTarget()) {
             Serial.println("✓ Reached target");
@@ -694,16 +686,12 @@ void runFullTest(MotorController& motorControl) {
     Serial.println("╚════════════════════════════════════════════════════════════════╝");
 
     // Step 1: Calibration
-    Serial.println("\n=== Step 1: Motor Calibration ===");
+    Serial.println("\n=== Step 1: Calibration ===");
     if (motorControl.isCalibrated()) {
-        Serial.println("Motor already calibrated - skipping calibration");
+        Serial.println("Already calibrated - skipping");
     } else {
-        Serial.println("Running motor calibration...");
-        if (motorControl.calibrate()) {
-            Serial.println("✓ Calibration successful!");
-        } else {
-            Serial.println("✗ Calibration failed!");
-            Serial.println("Test sequence aborted.");
+        if (!motorControl.calibrate()) {
+            Serial.println("✗ Calibration failed - aborting test");
             return;
         }
     }
@@ -714,10 +702,8 @@ void runFullTest(MotorController& motorControl) {
     // TEMPORARILY DISABLED: PID tuning has motor movement issues
     // The tuner calls motor.move() without arguments, which doesn't work correctly
     // See pid_auto_tuner.cpp:89 - needs to call motor.move(target_rad) instead
-    Serial.println("\n=== Step 2: PID Auto-Tuning ===");
-    Serial.println("⚠ PID auto-tuning temporarily disabled");
-    Serial.println("Using default PID values from config.h");
-    Serial.println("(Tuning can be enabled separately with 'pidtune' command)");
+    Serial.println("\n=== Step 2: PID Tuning ===");
+    Serial.println("⚠ PID auto-tuning disabled (use 'pidtune' command to run separately)");
 
     // Commented out PID tuning code:
     /*
@@ -733,7 +719,7 @@ void runFullTest(MotorController& motorControl) {
     delay(1000);
 
     // Step 3: Motor test
-    Serial.println("\n=== Step 3: Motor Movement Test ===");
+    Serial.println("\n=== Step 3: Movement Test ===");
     runMotorTest(motorControl);
 
     Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
