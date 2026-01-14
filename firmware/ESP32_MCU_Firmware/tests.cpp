@@ -15,83 +15,50 @@
 //=============================================================================
 
 /**
- * Log critical motor control state for debugging
+ * Log critical motor control state for debugging (COMPACT FORMAT)
  * Call this to understand why motor isn't moving or tracking correctly
  */
 void logMotorState(MotorController& motorControl, const char* context) {
     // DO NOT call updateEncoder() during movement - it races with loopFOC()!
     // SimpleFOC's loopFOC() already updates the sensor automatically
-    // Manual encoder reads can cause I2C bus contention and return 0
 
     // Get all critical values
-    float encoder_abs_deg = motorControl.getEncoderDegrees();  // Absolute (0-360°) direct from encoder
-    float user_position_deg = motorControl.getCurrentPositionDeg();  // Absolute (0-360°) from SimpleFOC shaft_angle
-    float target_deg = motorControl.getTargetPositionDeg();  // Absolute (0-360°)
-    bool enabled = motorControl.isEnabled();
-    bool calibrated = motorControl.isCalibrated();
-
-    // Get SimpleFOC's raw motor state (ABSOLUTE coordinates)
+    float encoder_abs_deg = motorControl.getEncoderDegrees();
     BLDCMotor& motor = motorControl.getMotor();
-    float shaft_angle_abs_deg = radiansToDegrees(motor.shaft_angle);  // Absolute (0-360°)
-    bool foc_enabled = (motor.enabled > 0);
-    bool has_sensor = (motor.sensor != nullptr);
-
-    Serial.print("[DIAG] ");
-    Serial.println(context);
-    Serial.print("  Encoder (abs): ");
-    Serial.print(encoder_abs_deg, 2);
-    Serial.print("° | SimpleFOC shaft_angle (abs): ");
-    Serial.print(shaft_angle_abs_deg, 2);
-    Serial.print("° | User pos: ");
-    Serial.print(user_position_deg, 2);
-    Serial.print("° | Target: ");
-    Serial.print(target_deg, 2);
-    Serial.println("°");
-    Serial.print("  Enabled: ");
-    Serial.print(enabled ? "Y" : "N");
-    Serial.print(" | FOC enabled: ");
-    Serial.print(foc_enabled ? "Y" : "N");
-    Serial.print(" | Has sensor: ");
-    Serial.print(has_sensor ? "Y" : "N");
-    Serial.print(" | Calibrated: ");
-    Serial.println(calibrated ? "Y" : "N");
-    Serial.print("  Tracking error (abs): ");
-    Serial.print(abs(encoder_abs_deg - shaft_angle_abs_deg), 2);
-    Serial.println("° (should be <5° for good tracking)");
-
-    // SimpleFOC Internal State - Critical for diagnosing position control issues
-    Serial.println("  --- SimpleFOC Internals ---");
-    Serial.print("  Target angle (shaft_angle_sp): ");
-    Serial.print(radiansToDegrees(motor.shaft_angle_sp), 2);
-    Serial.print("° (");
-    Serial.print(motor.shaft_angle_sp, 4);
-    Serial.println(" rad)");
-
-    // Calculate position error (target - current)
+    float shaft_angle_abs_deg = radiansToDegrees(motor.shaft_angle);
+    float target_deg = motorControl.getTargetPositionDeg();
     float position_error_rad = motor.shaft_angle_sp - motor.shaft_angle;
-    Serial.print("  Position PID error (target-current): ");
-    Serial.print(radiansToDegrees(position_error_rad), 2);
-    Serial.print("° (");
-    Serial.print(position_error_rad, 4);
-    Serial.println(" rad)");
+    float tracking_error = abs(encoder_abs_deg - shaft_angle_abs_deg);
 
-    Serial.print("  Velocity command (shaft_velocity_sp): ");
-    Serial.print(radiansToDegrees(motor.shaft_velocity_sp), 2);
-    Serial.print("°/s (");
-    Serial.print(motor.shaft_velocity_sp, 4);
-    Serial.println(" rad/s)");
+    // Line 1: Context + Position data
+    Serial.print("[DIAG] ");
+    Serial.print(context);
+    Serial.print(" | Enc:");
+    Serial.print(encoder_abs_deg, 1);
+    Serial.print("° FOC:");
+    Serial.print(shaft_angle_abs_deg, 1);
+    Serial.print("° Tgt:");
+    Serial.print(target_deg, 1);
+    Serial.print("° | En:");
+    Serial.print(motorControl.isEnabled() ? "Y" : "N");
+    Serial.print(" Cal:");
+    Serial.print(motorControl.isCalibrated() ? "Y" : "N");
+    Serial.print(" | TrkErr:");
+    Serial.print(tracking_error, 2);
+    Serial.println("°");
 
-    Serial.print("  Actual velocity (shaft_velocity): ");
-    Serial.print(radiansToDegrees(motor.shaft_velocity), 2);
-    Serial.print("°/s (");
-    Serial.print(motor.shaft_velocity, 4);
-    Serial.println(" rad/s)");
-
-    Serial.print("  Voltage q/d: ");
-    Serial.print(motor.voltage.q, 4);
-    Serial.print(" / ");
-    Serial.print(motor.voltage.d, 4);
-    Serial.println(" V");
+    // Line 2: SimpleFOC PID state
+    Serial.print("       PIDerr:");
+    Serial.print(radiansToDegrees(position_error_rad), 1);
+    Serial.print("° VelCmd:");
+    Serial.print(radiansToDegrees(motor.shaft_velocity_sp), 1);
+    Serial.print("°/s VelAct:");
+    Serial.print(radiansToDegrees(motor.shaft_velocity), 1);
+    Serial.print("°/s | Vq:");
+    Serial.print(motor.voltage.q, 2);
+    Serial.print("V Vd:");
+    Serial.print(motor.voltage.d, 2);
+    Serial.println("V");
 }
 
 //=============================================================================
@@ -400,122 +367,88 @@ void runAlignmentTest(MotorController& motorControl) {
 }
 
 void runMotorTest(MotorController& motorControl) {
-    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
-    Serial.println("║                Motor Diagnostic Test Sequence                  ║");
-    Serial.println("╚════════════════════════════════════════════════════════════════╝");
-    Serial.println("\nThis test verifies motor control with detailed diagnostics.");
-    Serial.println("Will FAIL immediately if motor doesn't respond.\n");
+    Serial.println("\n=== Motor Diagnostic Test (30° movement) ===");
 
     // Step 1: Enable motor
     if (!motorControl.isEnabled()) {
-        Serial.println("=== Step 1: Enable Motor ===");
+        Serial.println("[1/3] Enabling motor...");
         motorControl.enable();
         delay(100);
-        logMotorState(motorControl, "After enable()");
-
         if (!motorControl.isEnabled()) {
-            Serial.println("\n✗✗✗ TEST FAILED: Motor won't enable (not calibrated?)");
+            Serial.println("✗ FAILED: Motor won't enable (not calibrated?)");
             return;
         }
-        Serial.println("✓ Motor enabled\n");
+        Serial.println("✓ Motor enabled");
+    } else {
+        Serial.println("[1/3] Motor already enabled");
     }
 
-    // Step 2: Verify SimpleFOC tracking (absolute coordinates)
-    Serial.println("=== Step 2: Verify SimpleFOC Tracking ===");
+    // Step 2: Verify SimpleFOC tracking
+    Serial.println("[2/3] Verifying sensor tracking...");
     motorControl.updateEncoder();
-    float current_abs_deg = motorControl.getEncoderDegrees();
+    logMotorState(motorControl, "Initial state");
 
-    Serial.print("Current absolute position: ");
-    Serial.print(current_abs_deg, 2);
-    Serial.println("°");
-    Serial.println("  Note: Absolute encoders work in fixed coordinates (0-360°)");
-    Serial.println("  All positions are absolute - no home offset applied\n");
-
-    delay(100);
-    logMotorState(motorControl, "Current state");
-
-    // CRITICAL CHECK: SimpleFOC shaft_angle (absolute) should match encoder (absolute)
-    // This verifies SimpleFOC is tracking the sensor correctly
     BLDCMotor& motor = motorControl.getMotor();
     float shaft_angle_abs_deg = radiansToDegrees(motor.shaft_angle);
     float encoder_abs_deg = motorControl.getEncoderDegrees();
     float tracking_error_abs = abs(encoder_abs_deg - shaft_angle_abs_deg);
 
     if (tracking_error_abs > 5.0) {
-        Serial.print("\n✗✗✗ TEST FAILED: SimpleFOC shaft_angle (");
-        Serial.print(shaft_angle_abs_deg, 2);
-        Serial.print("° abs) doesn't match encoder (");
-        Serial.print(encoder_abs_deg, 2);
-        Serial.print("° abs) - diff: ");
+        Serial.print("✗ FAILED: Tracking error ");
         Serial.print(tracking_error_abs, 2);
-        Serial.println("°");
-        Serial.println("This means SimpleFOC isn't tracking the sensor!");
-        Serial.println("\nPossible causes:");
-        Serial.println("  1. Sensor not linked to motor");
-        Serial.println("  2. initFOC() didn't initialize shaft_angle");
-        Serial.println("  3. Motor not actually enabled in SimpleFOC");
+        Serial.println("° (SimpleFOC not reading sensor!)");
         return;
     }
-    Serial.println("✓ SimpleFOC tracking encoder correctly (in absolute coordinates)\n");
+    Serial.println("✓ SimpleFOC tracking sensor correctly");
 
     // Step 3: Test movement (+30° from current position)
-    Serial.println("=== Step 3: Test 30° Movement ===");
-    motorControl.updateEncoder();
+    Serial.println("[3/3] Testing 30° movement...");
     float start_position = motorControl.getEncoderDegrees();
-
-    // Calculate target as +30° from current (with wraparound)
     float test_target = start_position + 30.0;
-    if (test_target >= 360.0) {
-        test_target -= 360.0;
-    }
+    if (test_target >= 360.0) test_target -= 360.0;
 
-    Serial.print("Starting position: ");
-    Serial.print(start_position, 2);
+    Serial.print("Start: ");
+    Serial.print(start_position, 1);
+    Serial.print("° → Target: ");
+    Serial.print(test_target, 1);
     Serial.println("° (absolute)");
-    Serial.print("Commanding move to: ");
-    Serial.print(test_target, 2);
-    Serial.println("° (absolute, +30° from start)\n");
 
     motorControl.moveToPosition(test_target);
-    logMotorState(motorControl, "After moveToPosition() called");
+    logMotorState(motorControl, "Command sent");
 
-    // Run control loop
+    // Run control loop with compact trajectory logging
     unsigned long start_time = millis();
     const unsigned long timeout_ms = 3000;
     int loop_count = 0;
 
-    Serial.println("Running control loop...");
-    Serial.println("\n--- Movement Trajectory (timestamp, position, velocity) ---");
-
+    Serial.println("--- Trajectory: [time] Pos | Vel | PIDerr ---");
     while (millis() - start_time < timeout_ms) {
         motorControl.update();
         delay(10);
         loop_count++;
 
-        // Quick trajectory log every 10 loops (100ms) - track movement path
+        // Compact trajectory log every 10 loops (100ms)
         if (loop_count % 10 == 0) {
             unsigned long elapsed = millis() - start_time;
-            BLDCMotor& motor = motorControl.getMotor();
             float pos_error = motor.shaft_angle_sp - motor.shaft_angle;
             Serial.print("[");
             Serial.print(elapsed);
-            Serial.print(" ms] Pos: ");
-            Serial.print(radiansToDegrees(motor.shaft_angle), 2);
-            Serial.print("° | Vel: ");
-            Serial.print(radiansToDegrees(motor.shaft_velocity), 1);
-            Serial.print("°/s | PID err: ");
+            Serial.print("ms] ");
+            Serial.print(radiansToDegrees(motor.shaft_angle), 1);
+            Serial.print("° | ");
+            Serial.print(radiansToDegrees(motor.shaft_velocity), 0);
+            Serial.print("°/s | ");
             Serial.print(radiansToDegrees(pos_error), 1);
             Serial.println("°");
         }
 
         // Detailed state every 50 loops (500ms)
         if (loop_count % 50 == 0) {
-            Serial.println("");  // Blank line for readability
-            logMotorState(motorControl, "During movement");
+            logMotorState(motorControl, "Moving");
         }
 
         if (motorControl.isAtTarget()) {
-            Serial.println("\n✓ Reached target!");
+            Serial.println("✓ Reached target");
             break;
         }
     }
@@ -523,80 +456,50 @@ void runMotorTest(MotorController& motorControl) {
     // Check results
     motorControl.updateEncoder();
     float final_position = motorControl.getEncoderDegrees();
-
-    // Calculate movement accounting for wraparound
     float movement = final_position - start_position;
     if (movement < -180.0) movement += 360.0;
     if (movement > 180.0) movement -= 360.0;
     movement = abs(movement);
 
-    // Calculate error accounting for wraparound
     float error = final_position - test_target;
     if (error < -180.0) error += 360.0;
     if (error > 180.0) error -= 360.0;
     error = abs(error);
 
-    Serial.println("\n--- Movement Results ---");
-    Serial.print("Start:    ");
-    Serial.print(start_position, 2);
+    Serial.print("\nResults: Start:");
+    Serial.print(start_position, 1);
+    Serial.print("° Final:");
+    Serial.print(final_position, 1);
+    Serial.print("° | Moved:");
+    Serial.print(movement, 1);
+    Serial.print("° Err:");
+    Serial.print(error, 1);
     Serial.println("°");
-    Serial.print("Target:   ");
-    Serial.print(test_target, 2);
-    Serial.println("°");
-    Serial.print("Final:    ");
-    Serial.print(final_position, 2);
-    Serial.println("°");
-    Serial.print("Moved:    ");
-    Serial.print(movement, 2);
-    Serial.println("°");
-    Serial.print("Error:    ");
-    Serial.print(error, 2);
-    Serial.println("°");
-    Serial.println();
 
     // FAILURE DETECTION
     if (movement < 5.0) {
-        Serial.println("✗✗✗ TEST FAILED: Motor didn't move significantly!");
-        Serial.print("Expected ~30° movement but encoder only changed by ");
-        Serial.print(movement, 2);
-        Serial.println("°");
-        Serial.println("\nThis suggests:");
-        Serial.println("  1. Motor isn't receiving power");
-        Serial.println("  2. FOC control loop isn't running");
-        Serial.println("  3. PID gains too low to generate motion");
-        Serial.println("  4. Static friction too high (mechanical issue)");
-        logMotorState(motorControl, "Final state");
+        Serial.print("✗ FAILED: Motor barely moved (");
+        Serial.print(movement, 1);
+        Serial.println("°) - Check power/driver/PID gains");
+        logMotorState(motorControl, "Final (no movement)");
         return;
     }
 
-    // Check if movement is roughly correct (within ±10° of 30°)
     if (abs(movement - 30.0) > 10.0) {
-        Serial.println("⚠ WARNING: Movement amount unexpected");
-        Serial.print("Expected ~30° but moved ");
-        Serial.print(movement, 2);
-        Serial.println("°");
-        Serial.println("Motor may have taken shortest path or wrapped around differently");
+        Serial.print("⚠ WARNING: Moved ");
+        Serial.print(movement, 1);
+        Serial.println("° (expected ~30°)");
     }
 
     if (error > 3.0) {
-        Serial.println("✗✗✗ TEST FAILED: Large position error");
-        Serial.print("Motor moved ");
-        Serial.print(movement, 2);
-        Serial.print("° but missed target by ");
-        Serial.print(error, 2);
-        Serial.println("°");
-        Serial.println("\nMotor CAN move but closed-loop control failing.");
-        Serial.println("Check if shaft_angle is tracking encoder correctly.");
-        Serial.println("If shaft_angle is 0°, this indicates I2C communication errors.");
-        logMotorState(motorControl, "Final state");
+        Serial.print("✗ FAILED: Large error ");
+        Serial.print(error, 1);
+        Serial.println("° (motor moves but control failing)");
+        logMotorState(motorControl, "Final (poor tracking)");
         return;
     }
 
-    Serial.println("╔════════════════════════════════════════════════════════════════╗");
-    Serial.println("║              ✓✓✓ TEST PASSED - Motor working!                 ║");
-    Serial.println("╚════════════════════════════════════════════════════════════════╝");
-    Serial.println("\nMotor responded to position commands and reached target.");
-    Serial.println("Encoder and SimpleFOC are synchronized.\n");
+    Serial.println("✓✓✓ TEST PASSED - Motor working!\n");
 }
 
 void runPositionSweepTest(MotorController& motorControl) {
