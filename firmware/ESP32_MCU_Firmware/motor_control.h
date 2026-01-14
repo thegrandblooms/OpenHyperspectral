@@ -115,6 +115,10 @@ public:
     // Calibration mode control
     void setCalibrationMode(bool enabled) { force_needs_search = enabled; }
 
+    // Reset rotation tracking to absolute encoder mode
+    // Call this after calibration movements to clear corrupted full_rotations counter
+    void resetRotationTracking();
+
     //=========================================================================
     // DIRECT ENCODER ACCESS (Our preferred interface - minimal abstraction)
     //=========================================================================

@@ -217,6 +217,22 @@ float MT6701Sensor::getSensorAngle() {
 // - Calculates velocity from angle changes
 // This matches the SmartKnob pattern and all official SimpleFOC drivers
 
+void MT6701Sensor::resetRotationTracking() {
+    // Reset sensor state to absolute encoder mode (no rotation tracking)
+    // This fixes full_rotations corruption from calibration movements
+    full_rotations = 0;
+    angle_prev = getSensorAngle();
+    timestamp_prev = micros();
+
+    if (DEBUG_MOTOR) {
+        Serial.println("[MT6701] Rotation tracking reset to absolute mode");
+        Serial.print("  full_rotations = 0");
+        Serial.print(", angle_prev = ");
+        Serial.print(radiansToDegrees(angle_prev), 2);
+        Serial.println("°");
+    }
+}
+
 int MT6701Sensor::needsSearch() {
     // MT6701 is an absolute encoder - normally doesn't need index search
     // BUT: SimpleFOC's alignment detection works better with needsSearch()=1
@@ -892,8 +908,19 @@ bool MotorController::runManualCalibration() {
     // Restore voltage limit
     motor.voltage_limit = normal_voltage_limit;
 
+    // CRITICAL FIX: Reset rotation tracking before initFOC()
+    // During calibration, setPhaseVoltage() caused instant electrical jumps (300° → 0°)
+    // which fooled SimpleFOC's wraparound detection, corrupting full_rotations counter.
+    // Reset to absolute encoder mode (full_rotations = 0) before initFOC().
+    if (DEBUG_MOTOR) {
+        Serial.println("");
+        Serial.println("Resetting sensor rotation tracking...");
+    }
+    encoder.resetRotationTracking();
+
     // Now call initFOC() which should skip alignment and succeed
     if (DEBUG_MOTOR) {
+        Serial.println("");
         Serial.println("Step 3: Initialize FOC");
         Serial.println("─────────────────────────────────────────────────────────────────");
     }
@@ -924,6 +951,40 @@ bool MotorController::runManualCalibration() {
             Serial.print("  shaft_angle = ");
             Serial.print(radiansToDegrees(motor.shaft_angle), 2);
             Serial.println("°");
+        }
+
+        // VALIDATION: Verify shaft_angle matches encoder
+        float encoder_angle = encoder.getSensorAngle();
+        float encoder_deg = radiansToDegrees(encoder_angle);
+        float shaft_deg = radiansToDegrees(motor.shaft_angle);
+        float error = abs(shaft_deg - encoder_deg);
+
+        // Handle wraparound (e.g., 355° vs 5° should be 10° error, not 350°)
+        if (error > 180.0f) {
+            error = 360.0f - error;
+        }
+
+        if (DEBUG_MOTOR) {
+            Serial.println("");
+            Serial.println("Validation Check:");
+            Serial.print("  Encoder position: ");
+            Serial.print(encoder_deg, 2);
+            Serial.println("°");
+            Serial.print("  shaft_angle:      ");
+            Serial.print(shaft_deg, 2);
+            Serial.println("°");
+            Serial.print("  Tracking error:   ");
+            Serial.print(error, 2);
+            Serial.println("°");
+
+            if (error > 5.0f) {
+                Serial.println("");
+                Serial.println("  ⚠ WARNING: Large tracking error detected!");
+                Serial.println("  shaft_angle does not match encoder position.");
+                Serial.println("  This may indicate sensor state corruption.");
+            } else {
+                Serial.println("  ✓ Tracking error acceptable (<5°)");
+            }
         }
     }
 
