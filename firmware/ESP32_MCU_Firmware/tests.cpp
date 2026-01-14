@@ -421,23 +421,22 @@ void runMotorTest(MotorController& motorControl) {
     const unsigned long timeout_ms = 3000;
     int loop_count = 0;
 
-    Serial.println("--- Trajectory: [time] Pos | Vel | PIDerr ---");
+    Serial.println("--- Trajectory ---");
     while (millis() - start_time < timeout_ms) {
         motorControl.update();
         delay(10);
         loop_count++;
 
-        // Compact trajectory log every 10 loops (100ms)
+        // Ultra-compact trajectory log every 10 loops (100ms) - data only
         if (loop_count % 10 == 0) {
             unsigned long elapsed = millis() - start_time;
             float pos_error = motor.shaft_angle_sp - motor.shaft_angle;
-            Serial.print("[");
             Serial.print(elapsed);
-            Serial.print("ms] ");
+            Serial.print("ms ");
             Serial.print(radiansToDegrees(motor.shaft_angle), 1);
-            Serial.print("° | ");
+            Serial.print("° ");
             Serial.print(radiansToDegrees(motor.shaft_velocity), 0);
-            Serial.print("°/s | ");
+            Serial.print("°/s Err:");
             Serial.print(radiansToDegrees(pos_error), 1);
             Serial.println("°");
         }
