@@ -488,25 +488,13 @@ void MotorController::begin() {
 }
 
 bool MotorController::calibrate() {
-    if (DEBUG_MOTOR) {
-        Serial.println("Starting motor calibration...");
-    }
-
     // Run SimpleFOC calibration
     bool success = runCalibration();
 
     if (success) {
         motor_calibrated = true;
-
-        if (DEBUG_MOTOR) {
-            Serial.println("Calibration successful");
-        }
     } else {
         motor_calibrated = false;
-
-        if (DEBUG_MOTOR) {
-            Serial.println("Calibration failed");
-        }
     }
 
     return success;
@@ -734,13 +722,7 @@ bool MotorController::testMotorAlignment() {
 
 bool MotorController::runManualCalibration() {
     if (DEBUG_MOTOR) {
-        Serial.println("");
-        Serial.println("╔════════════════════════════════════════════════════════════════╗");
-        Serial.println("║                    Motor Calibration                           ║");
-        Serial.println("╚════════════════════════════════════════════════════════════════╝");
-        Serial.println("");
-        Serial.println("This will test motor movement and calculate calibration values.");
-        Serial.println("");
+        Serial.println("\n[CALIBRATION] Starting...");
     }
 
     // Check magnetic field strength
@@ -762,18 +744,9 @@ bool MotorController::runManualCalibration() {
     }
 
     if (DEBUG_MOTOR) {
-        Serial.print("[OK] Encoder reading: ");
-        Serial.print(radiansToDegrees(test_angle), 2);
-        Serial.println("°");
-        Serial.println("");
-    }
-
-    // Enable motor
-    if (DEBUG_MOTOR) {
-        Serial.println("Step 1: Diagnostic Test");
-        Serial.println("─────────────────────────────────────────────────────────────────");
-        Serial.println("Testing motor at 4 electrical angles...");
-        Serial.println("");
+        Serial.print("  Encoder: ");
+        Serial.print(radiansToDegrees(test_angle), 1);
+        Serial.print("° | Testing 4 positions: ");
     }
     motor.enable();
 
@@ -794,27 +767,16 @@ bool MotorController::runManualCalibration() {
         positions[i] = encoder.getSensorAngle();
 
         if (DEBUG_MOTOR) {
-            Serial.print("[TEST] ");
-            Serial.print(angle_names[i]);
-            Serial.print(" electrical → ");
-            Serial.print(radiansToDegrees(positions[i]), 2);
-            Serial.println("° mechanical");
+            Serial.print(radiansToDegrees(positions[i]), 1);
+            Serial.print("° ");
         }
     }
 
     if (DEBUG_MOTOR) {
-        Serial.println("");
-        Serial.println("✓ Motor responding to all positions");
-        Serial.println("");
+        Serial.println("✓");
     }
 
     // Use 90° and 270° for calibration (they have best separation)
-    if (DEBUG_MOTOR) {
-        Serial.println("Step 2: Calculate Calibration Values");
-        Serial.println("─────────────────────────────────────────────────────────────────");
-        Serial.println("Using 90° and 270° electrical for calibration...");
-        Serial.println("");
-    }
 
     float angle_at_pi2 = positions[1];    // 90° electrical
     float angle_at_3pi2 = positions[3];   // 270° electrical
@@ -828,15 +790,9 @@ bool MotorController::runManualCalibration() {
 
     if (angle_diff < 0.1) {  // Less than ~5.7 degrees
         if (DEBUG_MOTOR) {
-            Serial.println("[ERROR] Insufficient movement between calibration points!");
-            Serial.print("[ERROR] Only ");
-            Serial.print(radiansToDegrees(angle_diff), 2);
-            Serial.println("° difference");
-            Serial.println("[ERROR] This usually means:");
-            Serial.println("  - Motor driver not powered");
-            Serial.println("  - Driver in fault state");
-            Serial.println("  - Enable pin not working");
-            Serial.println("  - Phase wires disconnected");
+            Serial.print("✗ Motor didn't move (");
+            Serial.print(radiansToDegrees(angle_diff), 1);
+            Serial.println("°) - check power/driver/wiring");
         }
         motor.disable();
         motor.voltage_limit = normal_voltage_limit;
@@ -844,10 +800,9 @@ bool MotorController::runManualCalibration() {
     }
 
     if (DEBUG_MOTOR) {
-        Serial.print("[OK] Motor moved ");
-        Serial.print(radiansToDegrees(angle_diff), 2);
-        Serial.println("° between calibration points");
-        Serial.println("");
+        Serial.print("  Movement: ");
+        Serial.print(radiansToDegrees(angle_diff), 1);
+        Serial.print("°");
     }
 
     // Calculate sensor direction
@@ -870,18 +825,14 @@ bool MotorController::runManualCalibration() {
     // Forcing CW ensures all angles are positive (0-2π range)
 #if FORCE_SENSOR_DIRECTION_CW
     if (DEBUG_MOTOR && sensor_dir == Direction::CCW) {
-        Serial.println("");
-        Serial.println("⚠ OVERRIDE: Forcing sensor_direction to CW (detected CCW)");
-        Serial.println("  This fixes negative shaft_angle values that break position control");
-        Serial.println("  Recalculating zero_electric_angle for CW direction...");
+        Serial.print(" [OVERRIDE: CCW→CW]");
     }
     sensor_dir = Direction::CW;
 #endif
 
     if (DEBUG_MOTOR) {
-        Serial.print("[OK] Sensor direction: ");
-        Serial.println(sensor_dir == Direction::CW ? "CW" : "CCW");
-        Serial.println("");
+        Serial.print(" Dir:");
+        Serial.print(sensor_dir == Direction::CW ? "CW" : "CCW");
     }
 
     // Calculate zero_electric_angle
@@ -894,12 +845,9 @@ bool MotorController::runManualCalibration() {
     float zero_elec_angle = normalizeRadians(electrical_from_encoder - _PI_2);
 
     if (DEBUG_MOTOR) {
-        Serial.print("[OK] zero_electric_angle = ");
-        Serial.print(zero_elec_angle, 4);
-        Serial.print(" rad (");
-        Serial.print(radiansToDegrees(zero_elec_angle), 2);
-        Serial.println("°)");
-        Serial.println("");
+        Serial.print(" ZeroAngle:");
+        Serial.print(radiansToDegrees(zero_elec_angle), 1);
+        Serial.println("°");
     }
 
     // Set calibration values
@@ -915,17 +863,11 @@ bool MotorController::runManualCalibration() {
     // During calibration, setPhaseVoltage() caused instant electrical jumps (300° → 0°)
     // which fooled SimpleFOC's wraparound detection, corrupting full_rotations counter.
     // Reset to absolute encoder mode (full_rotations = 0) before initFOC().
-    if (DEBUG_MOTOR) {
-        Serial.println("");
-        Serial.println("Resetting sensor rotation tracking...");
-    }
     encoder.resetRotationTracking();
 
     // Now call initFOC() which should skip alignment and succeed
     if (DEBUG_MOTOR) {
-        Serial.println("");
-        Serial.println("Step 3: Initialize FOC");
-        Serial.println("─────────────────────────────────────────────────────────────────");
+        Serial.print("  Initializing FOC...");
     }
 
     int foc_result = motor.initFOC();
@@ -938,8 +880,7 @@ bool MotorController::runManualCalibration() {
     // This matches the proven SmartKnob implementation pattern.
     if (foc_result == 1) {
         if (DEBUG_MOTOR) {
-            Serial.println("[OK] initFOC() succeeded");
-            Serial.println("  Running stabilization cycles to sync sensor state...");
+            Serial.print(" ✓");
         }
 
         // Run stabilization cycles to let sensor state settle
@@ -947,13 +888,6 @@ bool MotorController::runManualCalibration() {
         for (int i = 0; i < 20; i++) {
             motor.loopFOC();
             delay(1);
-        }
-
-        if (DEBUG_MOTOR) {
-            Serial.println("[OK] Sensor state stabilized");
-            Serial.print("  shaft_angle = ");
-            Serial.print(radiansToDegrees(motor.shaft_angle), 2);
-            Serial.println("°");
         }
 
         // VALIDATION: Verify shaft_angle matches encoder
@@ -968,25 +902,17 @@ bool MotorController::runManualCalibration() {
         }
 
         if (DEBUG_MOTOR) {
-            Serial.println("");
-            Serial.println("Validation Check:");
-            Serial.print("  Encoder position: ");
-            Serial.print(encoder_deg, 2);
-            Serial.println("°");
-            Serial.print("  shaft_angle:      ");
-            Serial.print(shaft_deg, 2);
-            Serial.println("°");
-            Serial.print("  Tracking error:   ");
-            Serial.print(error, 2);
-            Serial.println("°");
-
+            Serial.print(" | Enc:");
+            Serial.print(encoder_deg, 1);
+            Serial.print("° FOC:");
+            Serial.print(shaft_deg, 1);
+            Serial.print("° Err:");
+            Serial.print(error, 1);
+            Serial.print("°");
             if (error > 5.0f) {
-                Serial.println("");
-                Serial.println("  ⚠ WARNING: Large tracking error detected!");
-                Serial.println("  shaft_angle does not match encoder position.");
-                Serial.println("  This may indicate sensor state corruption.");
+                Serial.print(" ⚠");
             } else {
-                Serial.println("  ✓ Tracking error acceptable (<5°)");
+                Serial.print(" ✓");
             }
         }
     }
@@ -996,34 +922,9 @@ bool MotorController::runManualCalibration() {
 
     if (DEBUG_MOTOR) {
         if (foc_result == 1) {
-            Serial.println("");
-            Serial.println("╔════════════════════════════════════════════════════════════════╗");
-            Serial.println("║                 ✓ CALIBRATION SUCCESSFUL                       ║");
-            Serial.println("╚════════════════════════════════════════════════════════════════╝");
-            Serial.println("");
-            Serial.println("Calibration values:");
-            Serial.print("  • zero_electric_angle = ");
-            Serial.print(motor.zero_electric_angle, 4);
-            Serial.print(" rad (");
-            Serial.print(radiansToDegrees(motor.zero_electric_angle), 2);
-            Serial.println("°)");
-            Serial.print("  • sensor_direction = ");
-            Serial.println(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
-            Serial.println("");
-            Serial.println("Next steps:");
-            Serial.println("  1. Type 'e' to enable motor");
-            Serial.println("  2. Type 'status' to verify shaft_angle tracks encoder");
-            Serial.println("  3. Type 'm 90' to test position control");
-            Serial.println("");
+            Serial.println("\n✓ Calibration complete");
         } else {
-            Serial.println("");
-            Serial.println("╔════════════════════════════════════════════════════════════════╗");
-            Serial.println("║                  ✗ CALIBRATION FAILED                          ║");
-            Serial.println("╚════════════════════════════════════════════════════════════════╝");
-            Serial.println("");
-            Serial.println("initFOC() failed even with manual calibration");
-            Serial.println("Check hardware connections and driver status");
-            Serial.println("");
+            Serial.println("\n✗ initFOC() failed - check hardware");
         }
     }
 
