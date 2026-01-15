@@ -745,7 +745,6 @@ bool MotorController::runManualCalibration() {
 
     // Diagnostic test at 4 positions
     float test_angles[] = {0, _PI_2, PI, _3PI_2};
-    const char* angle_names[] = {"0°", "90°", "180°", "270°"};
     float positions[4];
 
     for (int i = 0; i < 4; i++) {
@@ -860,7 +859,7 @@ bool MotorController::runManualCalibration() {
     }
 
     // Temporarily suppress SimpleFOC's verbose "MOT:" messages
-    Stream* saved_monitor = motor.monitor_port;
+    Print* saved_monitor = motor.monitor_port;
     motor.monitor_port = nullptr;
 
     int foc_result = motor.initFOC();
