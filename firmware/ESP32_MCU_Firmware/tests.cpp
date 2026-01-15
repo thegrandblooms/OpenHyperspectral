@@ -422,18 +422,28 @@ void runMotorTest(MotorController& motorControl) {
         delay(10);
         loop_count++;
 
-        // Ultra-compact trajectory log every 10 loops (100ms) - data only
+        // Ultra-compact trajectory log every 10 loops (100ms) - with FOC diagnostics
         if (loop_count % 10 == 0) {
             unsigned long elapsed = millis() - start_time;
             float pos_error = motor.shaft_angle_sp - motor.shaft_angle;
+
+            // Read fault pin
+            pinMode(MOTOR_FAULT, INPUT_PULLUP);
+            bool fault_ok = digitalRead(MOTOR_FAULT);
+
             Serial.print(elapsed);
             Serial.print("ms ");
             Serial.print(radiansToDegrees(motor.shaft_angle), 1);
             Serial.print("° ");
             Serial.print(radiansToDegrees(motor.shaft_velocity), 0);
-            Serial.print("°/s Err:");
+            Serial.print("°/s E:");
             Serial.print(radiansToDegrees(pos_error), 1);
-            Serial.println("°");
+            Serial.print("° Vq:");
+            Serial.print(motor.voltage.q, 1);
+            Serial.print("V ");
+            Serial.print(fault_ok ? "Ft:OK" : "Ft:FAULT");
+            Serial.print(motor.enabled ? " En:Y" : " En:N");
+            Serial.println();
         }
 
         // Detailed [DIAG] logging removed - trajectory already shows progress
