@@ -228,13 +228,7 @@ void MT6701Sensor::resetRotationTracking() {
     angle_prev = getSensorAngle();
     // Note: timestamp management handled by base class on next update()
 
-    if (DEBUG_MOTOR) {
-        Serial.println("[MT6701] Rotation tracking reset to absolute mode");
-        Serial.print("  full_rotations = 0");
-        Serial.print(", angle_prev = ");
-        Serial.print(radiansToDegrees(angle_prev), 2);
-        Serial.println("°");
-    }
+    // Rotation tracking reset message removed - shown in calibration summary
 }
 
 int MT6701Sensor::needsSearch() {
@@ -253,13 +247,7 @@ int MT6701Sensor::needsSearch() {
         return 1;  // Force index search during calibration
     }
 
-    if (DEBUG_MOTOR) {
-        static unsigned long last_log = 0;
-        if (millis() - last_log > 5000) {
-            Serial.println("[MT6701] needsSearch() = 0 (absolute encoder)");
-            last_log = millis();
-        }
-    }
+    // Debug message suppressed - too verbose during calibration
 
     return 0;  // Normal operation: absolute encoder, no search needed
 }
@@ -871,7 +859,14 @@ bool MotorController::runManualCalibration() {
         Serial.print("  Initializing FOC...");
     }
 
+    // Temporarily suppress SimpleFOC's verbose "MOT:" messages
+    Stream* saved_monitor = motor.monitor_port;
+    motor.monitor_port = nullptr;
+
     int foc_result = motor.initFOC();
+
+    // Restore monitoring
+    motor.monitor_port = saved_monitor;
 
     // SMARTKNOB PATTERN: Trust SimpleFOC's initialization completely
     // Do NOT manually set shaft_angle - this creates mismatches with sensor state
@@ -1003,11 +998,7 @@ void MotorController::moveToPosition(float position_deg) {
     // Store target position (absolute coordinates 0-360°)
     target_position_deg = position_deg;
 
-    if (DEBUG_MOTOR) {
-        Serial.print("Moving to absolute position: ");
-        Serial.print(position_deg, 2);
-        Serial.println("°");
-    }
+    // Debug output removed - test harness already shows move commands
 }
 
 void MotorController::setVelocity(float velocity_deg_s) {
