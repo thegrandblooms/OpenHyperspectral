@@ -1062,6 +1062,97 @@ void runSimpleFOCDiagnostic(MotorController& motorControl) {
     Serial.println("  • If TEST 7 passes → FOC loop not applying correct voltages");
     Serial.println("\nReview output above to identify root cause.\n");
 
+    // TEST 8: Try different zero_electric_angle offsets
+    Serial.println("═══════════════════════════════════════════════════════════════════");
+    Serial.println("TEST 8: Zero Electric Angle Offset Search");
+    Serial.println("═══════════════════════════════════════════════════════════════════");
+    Serial.println("  Testing different zero_electric_angle offsets to find correct alignment...\n");
+
+    motorControl.enable();
+    delay(100);
+
+    float original_zero = motor.zero_electric_angle;
+    float best_offset = 0;
+    float best_movement = 0;
+
+    // Test offsets: 0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°
+    float offsets[] = {0, PI/4, PI/2, 3*PI/4, PI, 5*PI/4, 3*PI/2, 7*PI/4};
+    const char* offset_names[] = {"0°", "45°", "90°", "135°", "180°", "225°", "270°", "315°"};
+
+    for (int i = 0; i < 8; i++) {
+        // Set new zero_electric_angle
+        motor.zero_electric_angle = normalizeRadians(original_zero + offsets[i]);
+
+        // Read starting position
+        encoder.update();
+        float start_enc = encoder.getDegrees();
+
+        // Try to move +20° using velocity mode (simpler than position)
+        motor.controller = MotionControlType::velocity;
+        float target_vel = degreesToRadians(60.0);  // 60°/s
+
+        // Run for 500ms
+        for (int j = 0; j < 50; j++) {
+            motor.loopFOC();
+            motor.move(target_vel);
+            delay(10);
+        }
+
+        // Read final position
+        encoder.update();
+        float end_enc = encoder.getDegrees();
+        float movement = end_enc - start_enc;
+        if (movement < -180.0) movement += 360.0;
+        if (movement > 180.0) movement -= 360.0;
+
+        Serial.print("  Offset ");
+        Serial.print(offset_names[i]);
+        Serial.print(" (zero=");
+        Serial.print(radiansToDegrees(motor.zero_electric_angle), 1);
+        Serial.print("°): moved ");
+        Serial.print(movement, 1);
+        Serial.print("°");
+
+        if (movement > best_movement) {
+            best_movement = movement;
+            best_offset = offsets[i];
+            Serial.print(" ← BEST so far!");
+        }
+        Serial.println();
+
+        // Stop motor briefly
+        motor.move(0);
+        delay(200);
+    }
+
+    // Restore angle mode
+    motor.controller = MotionControlType::angle;
+
+    Serial.println();
+    if (best_movement > 10.0) {
+        Serial.print("  ✓ FOUND WORKING OFFSET: ");
+        Serial.print(radiansToDegrees(best_offset), 0);
+        Serial.println("°");
+        Serial.print("    Best movement: ");
+        Serial.print(best_movement, 1);
+        Serial.println("°");
+        Serial.print("    Recommended zero_electric_angle: ");
+        Serial.print(radiansToDegrees(normalizeRadians(original_zero + best_offset)), 1);
+        Serial.println("°");
+        Serial.println("\n  → Update calibration or add this offset to zero_electric_angle");
+
+        // Apply the best offset for user to test
+        motor.zero_electric_angle = normalizeRadians(original_zero + best_offset);
+        Serial.print("    Applied offset - run 'motor_test' to verify!\n");
+    } else {
+        Serial.println("  ✗ No offset produced significant movement.");
+        Serial.println("    → Issue may be sensor_direction (try toggling FORCE_SENSOR_DIRECTION_CW)");
+        Serial.println("    → Or try letting SimpleFOC do full auto-calibration");
+        motor.zero_electric_angle = original_zero;  // Restore original
+    }
+
+    Serial.println();
+
     // Disable motor
     motorControl.disable();
 }
