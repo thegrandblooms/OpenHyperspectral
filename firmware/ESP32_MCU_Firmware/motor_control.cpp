@@ -16,7 +16,8 @@ MT6701Sensor::MT6701Sensor(uint8_t address)
       filtered_y(0.0f),                    // Initialize to angle=0 (sin(0)=0)
       previous_degrees(0.0f),
       last_update_time(0),
-      force_needs_search(false) {
+      force_needs_search(false),
+      call_count(0) {
 }
 
 void MT6701Sensor::init() {
@@ -139,6 +140,9 @@ void MT6701Sensor::init() {
 }
 
 float MT6701Sensor::getSensorAngle() {
+    // Increment call counter for diagnostics
+    call_count++;
+
     // SMARTKNOB PATTERN: Cartesian filtering eliminates angle wraparound discontinuities
     //
     // Traditional approach:
