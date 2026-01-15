@@ -838,10 +838,17 @@ bool MotorController::runManualCalibration() {
 
     float zero_elec_angle = normalizeRadians(electrical_from_encoder - _PI_2);
 
+    // CRITICAL FIX: Add 180° offset to correct calibration
+    // Discovered through TEST 8 diagnostics - without this offset, the magnetic field
+    // pushes the rotor backward instead of forward, causing reversed/weak movement.
+    // This is likely due to a phase ordering or sensor polarity mismatch.
+    zero_elec_angle = normalizeRadians(zero_elec_angle + PI);
+
     if (DEBUG_MOTOR) {
         Serial.print(" ZeroAngle:");
         Serial.print(radiansToDegrees(zero_elec_angle), 1);
-        Serial.println("°");
+        Serial.print("° (with 180° offset)");
+        Serial.println("");
     }
 
     // Set calibration values
@@ -1197,7 +1204,13 @@ bool MotorController::autoTunePID(bool verbose) {
 float MotorController::getPosition() {
     // Return current position from SimpleFOC (absolute 0-360°)
     // SimpleFOC's shaft_angle is kept synchronized by loopFOC()
-    return radiansToDegrees(motor.shaft_angle);
+    // CRITICAL FIX: Normalize to 0-360° range
+    // SimpleFOC accumulates full rotations internally (e.g., -13076°)
+    // but for absolute encoder usage, we want the physical position (0-360°)
+    float degrees = radiansToDegrees(motor.shaft_angle);
+    degrees = fmod(degrees, 360.0f);
+    if (degrees < 0) degrees += 360.0f;
+    return degrees;
 }
 
 float MotorController::getAbsolutePositionDeg() {
