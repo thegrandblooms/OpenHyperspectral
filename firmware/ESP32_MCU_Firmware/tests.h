@@ -33,4 +33,9 @@ void runMotorTest(MotorController& motorControl);
 void runPositionSweepTest(MotorController& motorControl);  // 5-position precision test
 void runFullTest(MotorController& motorControl);
 
+//=============================================================================
+// DIAGNOSTIC TESTS
+//=============================================================================
+void runSimpleFOCDiagnostic(MotorController& motorControl);  // Root cause analysis for frozen shaft_angle
+
 #endif // TESTS_H

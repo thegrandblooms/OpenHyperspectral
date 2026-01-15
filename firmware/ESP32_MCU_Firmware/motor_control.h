@@ -132,6 +132,12 @@ public:
     bool isFieldGood();
     uint8_t getFieldStatus();
 
+    //=========================================================================
+    // DIAGNOSTICS
+    //=========================================================================
+    unsigned long getCallCount() { return call_count; }
+    void resetCallCount() { call_count = 0; }
+
 private:
     MT6701 encoder;                        // Hardware driver
 
@@ -151,6 +157,9 @@ private:
 
     // Calibration mode flag
     bool force_needs_search;               // Force needsSearch()=1 during calibration
+
+    // Diagnostic call counter
+    unsigned long call_count;              // Number of times getSensorAngle() has been called
 };
 
 //=============================================================================
@@ -220,6 +229,9 @@ public:
     void updateEncoder();  // Force encoder read
     uint16_t getRawEncoderCount();
     float getEncoderDegrees();  // Direct encoder read
+
+    // Diagnostic: Get sensor call count (for debugging SimpleFOC integration)
+    unsigned long getSensorCallCount() { return encoder.getCallCount(); }
 
     // Testing functions
     bool testDriverPhases();
