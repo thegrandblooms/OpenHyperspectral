@@ -793,6 +793,8 @@ bool MotorController::runManualCalibration() {
         Serial.print("°");
     }
 
+#if !USE_SIMPLEFOC_AUTO_CALIBRATION
+    // MANUAL CALIBRATION: Calculate zero_electric_angle ourselves
     // Calculate sensor direction
     // If sensor increased when rotating from 90° to 270° electrical, it's CW
     float angle_change = angle_at_3pi2 - angle_at_pi2;
@@ -843,6 +845,14 @@ bool MotorController::runManualCalibration() {
     // and zero_electric_angle was calculated with the correct direction
     motor.zero_electric_angle = zero_elec_angle;
     motor.sensor_direction = sensor_dir;
+#else
+    // AUTO CALIBRATION: Let SimpleFOC calculate zero_electric_angle during initFOC()
+    // Don't set zero_electric_angle or sensor_direction - SimpleFOC will do it
+    if (DEBUG_MOTOR) {
+        Serial.println("");
+        Serial.print("  Using SimpleFOC auto-calibration...");
+    }
+#endif
 
     // Restore voltage limit
     motor.voltage_limit = normal_voltage_limit;
@@ -853,19 +863,28 @@ bool MotorController::runManualCalibration() {
     // Reset to absolute encoder mode (full_rotations = 0) before initFOC().
     encoder.resetRotationTracking();
 
-    // Now call initFOC() which should skip alignment and succeed
+    // Now call initFOC()
     if (DEBUG_MOTOR) {
         Serial.print("  Initializing FOC...");
     }
 
-    // Temporarily suppress SimpleFOC's verbose "MOT:" messages
+#if !USE_SIMPLEFOC_AUTO_CALIBRATION
+    // Manual calibration: Suppress SimpleFOC's "MOT:" messages (we already calculated values)
     Print* saved_monitor = motor.monitor_port;
     motor.monitor_port = nullptr;
+#else
+    // Auto calibration: Show SimpleFOC's messages (to see what it calculates)
+    if (DEBUG_MOTOR) {
+        Serial.println("");  // New line for SimpleFOC messages
+    }
+#endif
 
     int foc_result = motor.initFOC();
 
+#if !USE_SIMPLEFOC_AUTO_CALIBRATION
     // Restore monitoring
     motor.monitor_port = saved_monitor;
+#endif
 
     // SMARTKNOB PATTERN: Trust SimpleFOC's initialization completely
     // Do NOT manually set shaft_angle - this creates mismatches with sensor state
@@ -875,7 +894,16 @@ bool MotorController::runManualCalibration() {
     // This matches the proven SmartKnob implementation pattern.
     if (foc_result == 1) {
         if (DEBUG_MOTOR) {
+#if USE_SIMPLEFOC_AUTO_CALIBRATION
+            // Show what SimpleFOC calculated
+            Serial.print(" ✓ | Dir:");
+            Serial.print(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
+            Serial.print(" ZeroAngle:");
+            Serial.print(radiansToDegrees(motor.zero_electric_angle), 1);
+            Serial.print("°");
+#else
             Serial.print(" ✓");
+#endif
         }
 
         // Run stabilization cycles to let sensor state settle

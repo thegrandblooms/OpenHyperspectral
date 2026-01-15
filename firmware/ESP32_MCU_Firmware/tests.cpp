@@ -431,13 +431,21 @@ void runMotorTest(MotorController& motorControl) {
             pinMode(MOTOR_FAULT, INPUT_PULLUP);
             bool fault_ok = digitalRead(MOTOR_FAULT);
 
+            // Calculate electrical angle (what SimpleFOC uses for commutation)
+            float elec_angle_deg = radiansToDegrees(motor.shaft_angle * POLE_PAIRS + motor.zero_electric_angle);
+            // Normalize to 0-360
+            while (elec_angle_deg < 0) elec_angle_deg += 360.0;
+            while (elec_angle_deg >= 360.0) elec_angle_deg -= 360.0;
+
             Serial.print(elapsed);
-            Serial.print("ms ");
+            Serial.print("ms FOC:");
             Serial.print(radiansToDegrees(motor.shaft_angle), 1);
-            Serial.print("° ");
+            Serial.print("° Vel:");
             Serial.print(radiansToDegrees(motor.shaft_velocity), 0);
             Serial.print("°/s E:");
             Serial.print(radiansToDegrees(pos_error), 1);
+            Serial.print("° | Elec:");
+            Serial.print(elec_angle_deg, 0);
             Serial.print("° Vq:");
             Serial.print(motor.voltage.q, 1);
             Serial.print("V ");
