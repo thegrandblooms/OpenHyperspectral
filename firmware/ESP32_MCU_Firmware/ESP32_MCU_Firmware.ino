@@ -283,26 +283,31 @@ void checkPositionReached() {
     static unsigned long at_target_start_time = 0;
     static unsigned long last_notification_time = 0;
     static bool notification_sent_for_this_move = false;
+    static float last_target_position = -999.0f;  // Track target to detect new moves
 
     // Hysteresis and cooldown constants
-    const unsigned long SETTLE_TIME_MS = 100;      // Must be at target for 100ms
-    const unsigned long NOTIFICATION_COOLDOWN_MS = 500;  // Min time between notifications
+    const unsigned long SETTLE_TIME_MS = 150;      // Must be at target for 150ms (increased for stability)
+    const unsigned long NOTIFICATION_COOLDOWN_MS = 1000;  // Min 1 second between notifications
 
     bool at_target = motorControl.isAtTarget();  // Uses ABSOLUTE ENCODER internally
+    float current_target = motorControl.getTargetPositionDeg();
     unsigned long now = millis();
+
+    // Reset notification flag ONLY when target changes (new move command)
+    // NOT when motor oscillates out of target zone
+    if (abs(current_target - last_target_position) > 0.1f) {
+        notification_sent_for_this_move = false;
+        last_target_position = current_target;
+        at_target_start_time = 0;  // Reset settle timer for new target
+    }
 
     // Track when we first entered at_target state
     if (at_target && !last_at_target) {
         at_target_start_time = now;
     }
 
-    // Reset notification flag when we leave target zone (preparing for next move)
-    if (!at_target) {
-        notification_sent_for_this_move = false;
-    }
-
     // Check if motor has settled at target
-    bool settled = at_target && (now - at_target_start_time >= SETTLE_TIME_MS);
+    bool settled = at_target && at_target_start_time > 0 && (now - at_target_start_time >= SETTLE_TIME_MS);
     bool cooldown_elapsed = (now - last_notification_time >= NOTIFICATION_COOLDOWN_MS);
 
     // Send ONE notification when motor first settles at target

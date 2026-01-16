@@ -1378,20 +1378,7 @@ void MotorController::update() {
 
     motor.move(normalized_target_rad);
 
-    // Optional: Log when target is reached (for debugging)
-    if (DEBUG_MOTOR && isAtTarget()) {
-        static unsigned long last_reached_log = 0;
-        if (millis() - last_reached_log > 2000) {  // Log every 2 seconds when at target
-            Serial.print("[AT_TARGET] Current: ");
-            Serial.print(radiansToDegrees(motor.shaft_angle), 2);
-            Serial.print("°, Target: ");
-            Serial.print(target_position_deg, 2);
-            Serial.print("°, Error: ");
-            Serial.print(abs(radiansToDegrees(motor.shaft_angle) - target_position_deg), 2);
-            Serial.print("°, Vel: ");
-            Serial.print(radiansToDegrees(motor.shaft_velocity), 2);
-            Serial.println("°/s");
-            last_reached_log = millis();
-        }
-    }
+    // NOTE: AT_TARGET debug removed from here - it was using raw shaft_angle
+    // which caused confusing duplicate logs with non-normalized angles.
+    // The isAtTarget() function already has proper normalized debug output.
 }
