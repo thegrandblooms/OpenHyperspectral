@@ -841,7 +841,7 @@ bool MotorController::runManualCalibration() {
     // - 225° offset gave 110.6° forward movement (best result)
     // This compensates for phase wiring order and sensor polarity.
     // 225° = PI + PI/4 = 5*PI/4
-    zero_elec_angle = normalizeRadians(zero_elec_angle + PI + _PI_4);
+    zero_elec_angle = normalizeRadians(zero_elec_angle + PI + (PI / 4.0f));
 
     if (DEBUG_MOTOR) {
         Serial.print(" ZeroAngle:");
