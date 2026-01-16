@@ -835,16 +835,18 @@ bool MotorController::runManualCalibration() {
 
     float zero_elec_angle = normalizeRadians(electrical_from_encoder - _PI_2);
 
-    // CRITICAL FIX: Add 180° offset to correct calibration
-    // Discovered through TEST 8 diagnostics - without this offset, the magnetic field
-    // pushes the rotor backward instead of forward, causing reversed/weak movement.
-    // This is likely due to a phase ordering or sensor polarity mismatch.
-    zero_elec_angle = normalizeRadians(zero_elec_angle + PI);
+    // CRITICAL FIX: Add 225° offset to correct calibration
+    // Discovered through TEST 8 diagnostics:
+    // - 180° offset gave wrong direction movement
+    // - 225° offset gave 110.6° forward movement (best result)
+    // This compensates for phase wiring order and sensor polarity.
+    // 225° = PI + PI/4 = 5*PI/4
+    zero_elec_angle = normalizeRadians(zero_elec_angle + PI + _PI_4);
 
     if (DEBUG_MOTOR) {
         Serial.print(" ZeroAngle:");
         Serial.print(radiansToDegrees(zero_elec_angle), 1);
-        Serial.print("° (with 180° offset)");
+        Serial.print("° (with 225° offset)");
         Serial.println("");
     }
 
