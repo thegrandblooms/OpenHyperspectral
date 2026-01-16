@@ -110,7 +110,8 @@ public:
     // This follows the standard SimpleFOC pattern used by SmartKnob
 
     int needsSearch() override;            // Return 0 normally, 1 during calibration
-    float getVelocity() override;          // Returns rad/s (with boundary crossing detection)
+    // NOTE: getVelocity() NOT overridden - base class calculates velocity correctly
+    // Our previous override was broken (previous_degrees == cached_degrees always)
 
     // Calibration mode control
     void setCalibrationMode(bool enabled) { force_needs_search = enabled; }

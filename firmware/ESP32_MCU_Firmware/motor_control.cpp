@@ -260,13 +260,10 @@ bool MT6701Sensor::isFieldGood() {
     return encoder.isFieldGood();
 }
 
-float MT6701Sensor::getVelocity() {
-    // SIMPLEFOC BOUNDARY: Return velocity in RADIANS/SECOND
-    // Calculate from degrees, then convert to radians
-
-    float velocity_deg_s = getDegreesPerSecond();
-    return degreesToRadians(velocity_deg_s);
-}
+// NOTE: getVelocity() NOT overridden - using SimpleFOC base class implementation
+// Our previous override was broken: previous_degrees was always set equal to
+// cached_degrees in getSensorAngle(), so velocity was always 0.
+// The base class correctly tracks angle_prev vs vel_angle_prev separately.
 
 //=============================================================================
 // DIRECT ENCODER ACCESS (Our preferred interface)
