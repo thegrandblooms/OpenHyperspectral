@@ -843,18 +843,70 @@ bool MotorController::runManualCalibration() {
     // 225° = PI + PI/4 = 5*PI/4
     zero_elec_angle = normalizeRadians(zero_elec_angle + PI + (PI / 4.0f));
 
+    // Set initial calibration values
+    motor.zero_electric_angle = zero_elec_angle;
+    motor.sensor_direction = sensor_dir;
+
+    // DIRECTION VERIFICATION: Test if motor moves in correct direction
+    // If not, add 180° to zero_electric_angle (phase inversion fix)
     if (DEBUG_MOTOR) {
         Serial.print(" ZeroAngle:");
         Serial.print(radiansToDegrees(zero_elec_angle), 1);
-        Serial.print("° (with 225° offset)");
-        Serial.println("");
+        Serial.print("°");
     }
 
-    // Set calibration values
-    // NOTE: sensor_dir was already overridden to CW if FORCE_SENSOR_DIRECTION_CW is enabled
-    // and zero_electric_angle was calculated with the correct direction
-    motor.zero_electric_angle = zero_elec_angle;
-    motor.sensor_direction = sensor_dir;
+    // Quick direction test: try to move +20° and check actual direction
+    encoder.update();
+    float start_angle = encoder.getSensorAngle();
+    float target_angle = start_angle + degreesToRadians(20.0f);  // Try to move +20°
+
+    // Run a few FOC loops with position target
+    motor.controller = MotionControlType::angle;
+    for (int i = 0; i < 50; i++) {  // ~500ms of movement attempt
+        motor.loopFOC();
+        motor.move(target_angle);
+        delay(10);
+    }
+
+    encoder.update();
+    float end_angle = encoder.getSensorAngle();
+    float actual_movement = end_angle - start_angle;
+
+    // Normalize movement to [-π, π]
+    while (actual_movement > PI) actual_movement -= TWO_PI;
+    while (actual_movement < -PI) actual_movement += TWO_PI;
+
+    float movement_deg = radiansToDegrees(actual_movement);
+
+    if (DEBUG_MOTOR) {
+        Serial.print(" DirTest:");
+        Serial.print(movement_deg, 1);
+        Serial.print("°");
+    }
+
+    // If motor moved significantly in WRONG direction, add 180° to fix
+    if (movement_deg < -5.0f) {  // Moved backward more than 5°
+        zero_elec_angle = normalizeRadians(zero_elec_angle + PI);
+        motor.zero_electric_angle = zero_elec_angle;
+
+        if (DEBUG_MOTOR) {
+            Serial.print(" [REVERSED! New:");
+            Serial.print(radiansToDegrees(zero_elec_angle), 1);
+            Serial.print("°]");
+        }
+    } else if (movement_deg > 5.0f) {
+        if (DEBUG_MOTOR) {
+            Serial.print(" [OK]");
+        }
+    } else {
+        if (DEBUG_MOTOR) {
+            Serial.print(" [WEAK]");
+        }
+    }
+
+    if (DEBUG_MOTOR) {
+        Serial.println("");
+    }
 #else
     // AUTO CALIBRATION: Let SimpleFOC calculate zero_electric_angle during initFOC()
     // Don't set zero_electric_angle or sensor_direction - SimpleFOC will do it
