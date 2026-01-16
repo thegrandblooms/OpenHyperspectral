@@ -1153,8 +1153,12 @@ void runSimpleFOCDiagnostic(MotorController& motorControl) {
 
     Serial.println();
 
-    // Disable motor
+    // Clean up: restore motor to known good state
+    motor.controller = MotionControlType::angle;
+    motor.zero_electric_angle = original_zero;  // Always restore original calibration
     motorControl.disable();
+
+    Serial.println("  Motor state restored. Run 'c' to recalibrate if needed.\n");
 }
 
 void runFullTest(MotorController& motorControl) {
