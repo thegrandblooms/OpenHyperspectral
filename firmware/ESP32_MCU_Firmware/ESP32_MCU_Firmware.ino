@@ -280,14 +280,39 @@ void processCommand() {
 
 void checkPositionReached() {
     static bool last_at_target = false;
-    bool at_target = motorControl.isAtTarget();  // Uses ABSOLUTE ENCODER internally
+    static unsigned long at_target_start_time = 0;
+    static unsigned long last_notification_time = 0;
+    static bool notification_sent_for_this_move = false;
 
-    // Detect transition to target reached
+    // Hysteresis and cooldown constants
+    const unsigned long SETTLE_TIME_MS = 100;      // Must be at target for 100ms
+    const unsigned long NOTIFICATION_COOLDOWN_MS = 500;  // Min time between notifications
+
+    bool at_target = motorControl.isAtTarget();  // Uses ABSOLUTE ENCODER internally
+    unsigned long now = millis();
+
+    // Track when we first entered at_target state
     if (at_target && !last_at_target) {
+        at_target_start_time = now;
+    }
+
+    // Reset notification flag when we leave target zone (preparing for next move)
+    if (!at_target) {
+        notification_sent_for_this_move = false;
+    }
+
+    // Check if motor has settled at target
+    bool settled = at_target && (now - at_target_start_time >= SETTLE_TIME_MS);
+    bool cooldown_elapsed = (now - last_notification_time >= NOTIFICATION_COOLDOWN_MS);
+
+    // Send ONE notification when motor first settles at target
+    if (settled && cooldown_elapsed && !notification_sent_for_this_move) {
         // Report ABSOLUTE ENCODER position (truth)
         motorControl.updateEncoder();
         float position = motorControl.getAbsolutePositionDeg();  // ABSOLUTE ENCODER
         comm.sendPositionReached(current_sequence_id, position);
+        last_notification_time = now;
+        notification_sent_for_this_move = true;
 
         if (DEBUG_SERIAL) {
             Serial.print("Position reached notification sent: seq=");
