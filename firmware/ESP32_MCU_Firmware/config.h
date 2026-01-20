@@ -192,6 +192,10 @@
 #define DEBUG_HEARTBEAT_DEFAULT  true           // Enable heartbeat messages (default)
 #define HEARTBEAT_INTERVAL_MS    10000          // Heartbeat message interval (10 seconds)
 
+// Binary protocol: Set to false to disable binary packet output (the ~��� gibberish)
+// When debugging with serial monitor, disable this to see only text output
+#define ENABLE_BINARY_PROTOCOL   false          // Disable binary packets for serial debugging
+
 // Legacy defines for backward compatibility during transition
 #define DEBUG_SERIAL     DEBUG_SERIAL_DEFAULT
 #define DEBUG_MOTOR      DEBUG_MOTOR_DEFAULT

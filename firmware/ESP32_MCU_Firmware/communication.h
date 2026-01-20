@@ -61,11 +61,18 @@ bool CommunicationManager::getCommandData(T* data) {
 
 template<typename T>
 void CommunicationManager::sendData(const T* data, uint16_t size) {
+#if ENABLE_BINARY_PROTOCOL
     // Copy data to transmit buffer
     memcpy(&transfer.packet.txBuff[0], data, size);
 
     // Send the data
     transfer.sendData(size);
+#else
+    // Binary protocol disabled - skip sending raw bytes
+    // This prevents the ~��� gibberish in serial monitor
+    (void)data;
+    (void)size;
+#endif
 }
 
 #endif // COMMUNICATION_H

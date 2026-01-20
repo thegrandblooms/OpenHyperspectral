@@ -1125,6 +1125,11 @@ void MotorController::moveToPosition(float position_deg) {
         return;
     }
 
+    // Normalize target position to 0-360° range
+    // This handles inputs like 720° (becomes 0°) or -90° (becomes 270°)
+    position_deg = fmod(position_deg, 360.0f);
+    if (position_deg < 0) position_deg += 360.0f;
+
     // Store target position (absolute coordinates 0-360°)
     target_position_deg = position_deg;
 
