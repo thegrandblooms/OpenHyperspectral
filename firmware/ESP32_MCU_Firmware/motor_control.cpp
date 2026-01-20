@@ -847,27 +847,31 @@ bool MotorController::runManualCalibration() {
     motor.zero_electric_angle = zero_elec_angle;
     motor.sensor_direction = sensor_dir;
 
-    // DIRECTION VERIFICATION: Test if motor moves in correct direction
-    // If not, add 180° to zero_electric_angle (phase inversion fix)
+    // DIRECTION VERIFICATION: Use setPhaseVoltage() to test direction
+    // (Don't use FOC loop - it can spin wildly with wrong calibration!)
     if (DEBUG_MOTOR) {
         Serial.print(" ZeroAngle:");
         Serial.print(radiansToDegrees(zero_elec_angle), 1);
         Serial.print("°");
     }
 
-    // Quick direction test: try to move +20° and check actual direction
+    // Get current encoder position
     encoder.update();
     float start_angle = encoder.getSensorAngle();
-    float target_angle = start_angle + degreesToRadians(20.0f);  // Try to move +20°
 
-    // Run a few FOC loops with position target
-    motor.controller = MotionControlType::angle;
-    for (int i = 0; i < 50; i++) {  // ~500ms of movement attempt
-        motor.loopFOC();
-        motor.move(target_angle);
-        delay(10);
+    // Apply voltage to create forward movement using calculated zero_electric_angle
+    // electrical_angle = mechanical_angle * pole_pairs + zero_electric_angle
+    // We want to apply field slightly ahead of current position to pull forward
+    float current_electrical = start_angle * POLE_PAIRS * (sensor_dir == Direction::CW ? 1 : -1) + zero_elec_angle;
+    float target_electrical = current_electrical + _PI_2;  // 90° ahead in electrical
+
+    // Apply voltage for 300ms
+    for (int i = 0; i < 6; i++) {
+        motor.setPhaseVoltage(6.0f, 0, target_electrical);
+        delay(50);
     }
 
+    // Check movement
     encoder.update();
     float end_angle = encoder.getSensorAngle();
     float actual_movement = end_angle - start_angle;
@@ -884,8 +888,8 @@ bool MotorController::runManualCalibration() {
         Serial.print("°");
     }
 
-    // If motor moved significantly in WRONG direction, add 180° to fix
-    if (movement_deg < -5.0f) {  // Moved backward more than 5°
+    // If motor moved in WRONG direction (negative), add 180° to fix
+    if (movement_deg < -3.0f) {  // Moved backward more than 3°
         zero_elec_angle = normalizeRadians(zero_elec_angle + PI);
         motor.zero_electric_angle = zero_elec_angle;
 
@@ -894,19 +898,56 @@ bool MotorController::runManualCalibration() {
             Serial.print(radiansToDegrees(zero_elec_angle), 1);
             Serial.print("°]");
         }
-    } else if (movement_deg > 5.0f) {
+    } else if (movement_deg > 3.0f) {
         if (DEBUG_MOTOR) {
             Serial.print(" [OK]");
         }
     } else {
-        if (DEBUG_MOTOR) {
-            Serial.print(" [WEAK]");
+        // Movement too small - try with 180° offset and see if that's better
+        float alt_zero = normalizeRadians(zero_elec_angle + PI);
+        float alt_electrical = start_angle * POLE_PAIRS * (sensor_dir == Direction::CW ? 1 : -1) + alt_zero;
+        float alt_target = alt_electrical + _PI_2;
+
+        encoder.update();
+        float alt_start = encoder.getSensorAngle();
+
+        for (int i = 0; i < 6; i++) {
+            motor.setPhaseVoltage(6.0f, 0, alt_target);
+            delay(50);
+        }
+
+        encoder.update();
+        float alt_end = encoder.getSensorAngle();
+        float alt_movement = alt_end - alt_start;
+        while (alt_movement > PI) alt_movement -= TWO_PI;
+        while (alt_movement < -PI) alt_movement += TWO_PI;
+
+        if (radiansToDegrees(alt_movement) > movement_deg + 5.0f) {
+            // Alternative offset works better
+            zero_elec_angle = alt_zero;
+            motor.zero_electric_angle = zero_elec_angle;
+            if (DEBUG_MOTOR) {
+                Serial.print(" [ALT BETTER:");
+                Serial.print(radiansToDegrees(zero_elec_angle), 1);
+                Serial.print("°]");
+            }
+        } else {
+            if (DEBUG_MOTOR) {
+                Serial.print(" [WEAK]");
+            }
         }
     }
+
+    // Disable motor phases before continuing
+    motor.setPhaseVoltage(0, 0, 0);
 
     if (DEBUG_MOTOR) {
         Serial.println("");
     }
+
+    // CRITICAL: Reset rotation tracking AFTER direction test
+    // The direction test moved the motor, corrupting full_rotations
+    encoder.resetRotationTracking();
 #else
     // AUTO CALIBRATION: Let SimpleFOC calculate zero_electric_angle during initFOC()
     // Don't set zero_electric_angle or sensor_direction - SimpleFOC will do it
