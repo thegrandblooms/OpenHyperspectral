@@ -1179,23 +1179,12 @@ void runFullTest(MotorController& motorControl) {
 
     delay(1000);
 
-    // Step 2: PID Auto-Tuning
-    // TEMPORARILY DISABLED: PID tuning has motor movement issues
-    // The tuner calls motor.move() without arguments, which doesn't work correctly
-    // See pid_auto_tuner.cpp:89 - needs to call motor.move(target_rad) instead
+    // Step 2: PID Tuning
+    // PID tuning is now done via Python script (motor_control/pid_tuner.py)
+    // This allows for better visualization and more sophisticated tuning algorithms
     Serial.println("\n=== Step 2: PID Tuning ===");
-    Serial.println("⚠ PID auto-tuning disabled (use 'pidtune' command to run separately)");
-
-    // Commented out PID tuning code:
-    /*
-    if (motorControl.autoTunePID(true)) {
-        Serial.println("✓ PID auto-tuning successful!");
-        Serial.println("Optimal PID parameters have been applied.");
-    } else {
-        Serial.println("✗ PID auto-tuning failed!");
-        Serial.println("Continuing with current PID values...");
-    }
-    */
+    Serial.println("PID tuning available via Python: python motor_control/pid_tuner.py <port>");
+    Serial.println("Modes: --mode step | autotune | sweep | manual");
 
     delay(1000);
 

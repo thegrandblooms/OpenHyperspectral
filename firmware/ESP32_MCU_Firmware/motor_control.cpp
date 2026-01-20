@@ -1,6 +1,5 @@
 #include "motor_control.h"
 #include "commands.h"  // Explicit include for state/mode definitions
-#include "pid_auto_tuner.h"  // PID auto-tuning functionality
 #include <Wire.h>      // I2C library for MT6701 encoder
 
 //=============================================================================
@@ -1246,56 +1245,35 @@ void MotorController::setCurrentPID(float p, float i, float d, float ramp) {
 }
 
 bool MotorController::autoTunePID(bool verbose) {
-    // Ensure motor is calibrated and enabled
-    if (!motor_calibrated) {
-        if (verbose) {
-            Serial.println("[TUNE] ERROR: Motor must be calibrated before PID tuning");
-        }
-        return false;
-    }
-
-    if (!motor_enabled) {
-        if (verbose) {
-            Serial.println("[TUNE] Enabling motor for tuning...");
-        }
-        enable();
-        delay(500);
-    }
-
+    // PID tuning has been moved to the Python script for better analysis and visualization
+    // Use: python motor_control/pid_tuner.py <port> --mode autotune
     if (verbose) {
-        Serial.println("[TUNE] Starting PID auto-tuning in position control mode...");
+        Serial.println("");
+        Serial.println("╔══════════════════════════════════════════════════════════════╗");
+        Serial.println("║  PID AUTO-TUNING NOW AVAILABLE VIA PYTHON                   ║");
+        Serial.println("╚══════════════════════════════════════════════════════════════╝");
+        Serial.println("");
+        Serial.println("The firmware-based PID tuner has been replaced with a more");
+        Serial.println("capable Python script that provides:");
+        Serial.println("  - Step response analysis with plotting");
+        Serial.println("  - Frequency response (Bode) testing");
+        Serial.println("  - Ziegler-Nichols auto-tuning");
+        Serial.println("  - Parameter sweep optimization");
+        Serial.println("  - Interactive manual tuning");
+        Serial.println("");
+        Serial.println("Usage:");
+        Serial.println("  python motor_control/pid_tuner.py <port> --mode autotune");
+        Serial.println("");
+        Serial.println("Modes:");
+        Serial.println("  step     - Step response test (default)");
+        Serial.println("  autotune - Ziegler-Nichols auto-tuning");
+        Serial.println("  sweep    - Parameter sweep optimization");
+        Serial.println("  manual   - Interactive tuning");
+        Serial.println("");
+        Serial.println("Use 'pid 0 <P> <I> <D> <ramp>' to manually set PID values.");
+        Serial.println("");
     }
-
-    // Create tuner and run tuning
-    PIDAutoTuner tuner(motor, encoder);
-    bool success = tuner.runTuning(verbose);
-
-    if (success) {
-        // Apply optimal PID parameters (tuner uses degrees)
-        float p, i, d, ramp_deg_s;
-        tuner.getOptimalPID(p, i, d, ramp_deg_s);
-
-        setPositionPID(p, i, d, ramp_deg_s);
-
-        if (verbose) {
-            Serial.println("[TUNE] Optimal PID parameters applied!");
-            Serial.println("[TUNE] To make permanent, update config.h:");
-            Serial.print("  #define PID_P_POSITION ");
-            Serial.println(p, 2);
-            Serial.print("  #define PID_I_POSITION ");
-            Serial.println(i, 2);
-            Serial.print("  #define PID_D_POSITION ");
-            Serial.println(d, 3);
-            Serial.print("  #define PID_RAMP_POSITION_DEG ");
-            Serial.println(ramp_deg_s, 1);
-        }
-    } else {
-        if (verbose) {
-            Serial.println("[TUNE] ERROR: PID tuning failed!");
-        }
-    }
-
-    return success;
+    return false;
 }
 
 float MotorController::getPosition() {
