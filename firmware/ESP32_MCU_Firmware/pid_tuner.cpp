@@ -339,16 +339,33 @@ StepMetrics PIDAutoTuner::runStepTest(float step_size_deg, bool verbose) {
     StepMetrics metrics;
     memset(&metrics, 0, sizeof(metrics));
 
-    // Get starting position
+    // Get starting position from encoder (0-360°)
     sensor.update();
     float start_pos = sensor.getDegrees();
     float target_pos = normalizeAngle(start_pos + step_size_deg);
 
-    // Command the step (SimpleFOC uses radians)
-    float target_rad = target_pos * DEG_TO_RAD;
-    motor.move(target_rad);
+    // CRITICAL: Calculate target relative to motor.shaft_angle, not absolute
+    // motor.shaft_angle can be any value (e.g., -302.3°), not just 0-360°
+    // We need to normalize the target to be within ±π of current position
+    float current_rad = motor.shaft_angle;
+    float target_deg_normalized = target_pos;
 
-    // Sample position at 1kHz
+    // Convert target to radians
+    float target_rad_absolute = target_deg_normalized * DEG_TO_RAD;
+
+    // Normalize current angle to 0-2π for comparison
+    float current_rad_normalized = fmod(current_rad, TWO_PI);
+    if (current_rad_normalized < 0) current_rad_normalized += TWO_PI;
+
+    // Calculate error in radians (shortest path)
+    float error_rad = target_rad_absolute - current_rad_normalized;
+    while (error_rad > PI) error_rad -= TWO_PI;
+    while (error_rad < -PI) error_rad += TWO_PI;
+
+    // Target is current position + error (this stays in motor's coordinate system)
+    float target_rad = current_rad + error_rad;
+
+    // Sample position
     sample_count = 0;
     unsigned long start_time = millis();
     unsigned long sample_time = start_time;
