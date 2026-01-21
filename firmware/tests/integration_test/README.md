@@ -1,6 +1,6 @@
 # Integration Test for Motor Control System
 
-This test verifies the complete motor control system with encoder feedback, including PID auto-tuning.
+This test verifies the complete motor control system with encoder feedback.
 
 ## Hardware Setup
 
@@ -28,8 +28,6 @@ This test verifies the complete motor control system with encoder feedback, incl
 3. Select correct COM port
 4. Click Upload
 
-**Note**: The sketch includes `pid_auto_tuner.h` and `pid_auto_tuner.cpp` - Arduino IDE will automatically compile these files as they're in the same directory.
-
 ## Usage Workflow
 
 ### 1. Open Serial Monitor
@@ -42,37 +40,41 @@ Follow this sequence for best results:
 
 ```
 Step 1: c         → Run motor/encoder calibration (REQUIRED)
-Step 2: p         → Auto-tune PID parameters (HIGHLY RECOMMENDED)
+Step 2: e         → Enable motor
 Step 3: t         → Run automated position tests
 ```
 
-### 3. Available Commands
+### 3. PID Tuning (via Python)
+
+For PID tuning, use the Python script which provides better analysis and visualization:
+
+```bash
+# Install dependencies
+pip install pyserial matplotlib numpy
+
+# Run PID tuning
+python motor_control/pid_tuner.py /dev/ttyUSB0 --mode autotune --plot
+```
+
+Available tuning modes:
+- `step` - Step response analysis with plotting
+- `autotune` - Ziegler-Nichols auto-tuning
+- `sweep` - Parameter sweep optimization
+- `manual` - Interactive tuning
+
+### 4. Available Commands
 
 | Command | Description |
 |---------|-------------|
 | `h` or `help` | Show help menu |
 | `c` or `calibrate` | Run motor/encoder calibration |
-| `p` or `pidtune` | Run PID auto-tuning |
 | `e` or `enable` | Enable motor |
 | `d` or `disable` | Disable motor (emergency stop) |
 | `t` or `test` | Run automated test sequence |
 | `s` or `status` | Show current motor/encoder status |
 | `r` or `results` | Show test results |
-| `m <angle>` | Move to angle in radians (e.g., `m 3.14`) |
-
-## PID Auto-Tuning
-
-The auto-tuning process:
-1. Starts with conservative PID values (P=2.0)
-2. Tests motor response at multiple positions (0°, 90°, 180°, 270°, 360°)
-3. Incrementally increases P gain until optimal response
-4. Adds D gain to reduce overshoot
-5. Adds I gain to eliminate steady-state error
-6. Applies optimal values automatically
-
-**Duration**: 2-5 minutes depending on motor response
-
-**Output**: Displays optimal PID values and instructions to update `config.h` for permanent storage.
+| `m <angle>` | Move to angle in degrees (e.g., `m 90`) |
+| `pid 0 <P> <I> <D> <ramp>` | Set position PID parameters |
 
 ## Safety Features
 
@@ -87,20 +89,19 @@ The auto-tuning process:
 - Oscillation detector acts as automatic safety net
 
 ### Default Conservative PID
-- System starts with P=2.0 (very conservative)
-- Prevents wild movements on first power-up
-- May be slow - run PID tuning for optimal performance
+- System starts with P=20.0, I=0.0, D=0.0 (config.h defaults)
+- Run PID tuning for optimal performance
 
 ## Troubleshooting
 
 ### "Commands not recognized"
 - Check Serial Monitor line ending is set to **Newline** or **Both NL & CR**
 - Look for `[CMD] Received:` debug output showing what was received
-- Commands are case-insensitive (`P`, `p`, `PIDTUNE` all work)
+- Commands are case-insensitive
 
 ### "Motor oscillates wildly"
 - Emergency stop: Press `d`
-- Run PID auto-tuning: `p`
+- Reduce P gain or add D gain
 - Check mechanical connections for obstructions
 - Verify encoder is reading correctly: `s` for status
 
@@ -110,74 +111,41 @@ The auto-tuning process:
 - Check motor enable pin (GPIO15)
 - View detailed debug output in Serial Monitor
 
-### "PID tuning fails"
-- Ensure motor is calibrated first: `c`
-- Check motor can move freely (no obstructions)
-- Verify adequate power supply (12V, 2A+)
-- Try lowering initial P value if motor is very responsive
-
 ### "Test sequence fails"
-- Run PID tuning first: `p`
-- Conservative default PID may be too slow for tests
-- Check position tolerance settings (currently 0.1 rad)
+- Run PID tuning first via Python script
+- Check position tolerance settings (currently 0.5°)
 
 ## Expected Performance
 
 With properly tuned PID:
-- **Overshoot**: < 0.1 rad (5.7°)
+- **Overshoot**: < 5°
 - **Settling time**: 1-2 seconds
-- **Steady-state error**: < 0.01 rad (0.57°)
-- **Repeatability**: ±0.02 rad (±1.1°)
+- **Steady-state error**: < 0.5°
+- **Repeatability**: ±1°
 
 ## Files in this Directory
 
 | File | Description |
 |------|-------------|
 | `integration_test.ino` | Main test sketch |
-| `pid_auto_tuner.h` | PID auto-tuner class definition |
-| `pid_auto_tuner.cpp` | PID auto-tuner implementation |
 | `README.md` | This file |
-
-**Note**: `pid_auto_tuner.*` files are copies from `../ESP32_MCU_Firmware/` for Arduino IDE compatibility.
 
 ## Making PID Values Permanent
 
-After successful tuning, the test will display:
+After tuning with the Python script, update `firmware/ESP32_MCU_Firmware/config.h`:
 
+```cpp
+#define PID_P_POSITION   <tuned_value>
+#define PID_I_POSITION   <tuned_value>
+#define PID_D_POSITION   <tuned_value>
+#define PID_RAMP_POSITION_DEG <tuned_value>
 ```
-To make these values permanent, update config.h:
-  #define PID_P_POSITION 6.40
-  #define PID_I_POSITION 0.20
-  #define PID_D_POSITION 0.150
-```
 
-Edit `firmware/ESP32_MCU_Firmware/config.h` with these values, then recompile/upload your main firmware.
-
-## Example Session
-
-```
-> c
-[Calibration runs...]
-CALIBRATION SUCCESSFUL!
-Run 'p' to auto-tune PID...
-
-> p
-[PID tuning runs for 2-3 minutes...]
-TUNING COMPLETE!
-Optimal PID: P=6.40, I=0.20, D=0.150
-
-> t
-[Test sequence runs...]
-Test 1/7: Moving to 0.00 rad... PASS
-Test 2/7: Moving to 1.57 rad... PASS
-...
-Tests Passed: 7 / 7
-Average Error: 0.0067 rad (0.38°)
-```
+Then recompile and upload the firmware.
 
 ## Support
 
 For issues or questions, check:
-- Firmware documentation: `firmware/PID_TUNING_FIRMWARE.md`
 - Main motor control code: `firmware/ESP32_MCU_Firmware/motor_control.cpp`
+- PID tuning script: `motor_control/pid_tuner.py`
 - SimpleFOC documentation: https://docs.simplefoc.com/

@@ -211,6 +211,11 @@ public:
     void setCurrentPID(float p, float i, float d, float ramp);
     bool autoTunePID(bool verbose = false);
 
+    // NVS storage (persists calibration + PID across power cycles)
+    bool saveToNVS();
+    bool loadFromNVS();
+    bool hasNVSData();
+
     // Status getters
     float getPosition();  // Current position (absolute 0-360°)
     float getAbsolutePositionDeg();  // Alias for getPosition()

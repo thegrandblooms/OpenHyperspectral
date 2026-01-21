@@ -1,6 +1,7 @@
 #include "motor_control.h"
 #include "commands.h"  // Explicit include for state/mode definitions
-#include "pid_auto_tuner.h"  // PID auto-tuning functionality
+#include "nvs_storage.h"  // NVS storage for calibration/PID persistence
+#include "pid_tuner.h"    // Firmware-based PID auto-tuner
 #include <Wire.h>      // I2C library for MT6701 encoder
 
 //=============================================================================
@@ -1246,14 +1247,16 @@ void MotorController::setCurrentPID(float p, float i, float d, float ramp) {
 }
 
 bool MotorController::autoTunePID(bool verbose) {
-    // Ensure motor is calibrated and enabled
+    // Ensure motor is calibrated
     if (!motor_calibrated) {
         if (verbose) {
             Serial.println("[TUNE] ERROR: Motor must be calibrated before PID tuning");
+            Serial.println("       Run 'c' or 'calibrate' first.");
         }
         return false;
     }
 
+    // Ensure motor is enabled
     if (!motor_enabled) {
         if (verbose) {
             Serial.println("[TUNE] Enabling motor for tuning...");
@@ -1262,40 +1265,98 @@ bool MotorController::autoTunePID(bool verbose) {
         delay(500);
     }
 
-    if (verbose) {
-        Serial.println("[TUNE] Starting PID auto-tuning in position control mode...");
-    }
-
-    // Create tuner and run tuning
+    // Run firmware-based PID tuning
     PIDAutoTuner tuner(motor, encoder);
     bool success = tuner.runTuning(verbose);
 
     if (success) {
-        // Apply optimal PID parameters (tuner uses degrees)
-        float p, i, d, ramp_deg_s;
-        tuner.getOptimalPID(p, i, d, ramp_deg_s);
+        // Get optimal parameters
+        float p, i, d, ramp;
+        tuner.getOptimalPID(p, i, d, ramp);
 
-        setPositionPID(p, i, d, ramp_deg_s);
+        // Apply to motor
+        setPositionPID(p, i, d, ramp);
 
+        // Save to NVS for persistence
         if (verbose) {
-            Serial.println("[TUNE] Optimal PID parameters applied!");
-            Serial.println("[TUNE] To make permanent, update config.h:");
-            Serial.print("  #define PID_P_POSITION ");
-            Serial.println(p, 2);
-            Serial.print("  #define PID_I_POSITION ");
-            Serial.println(i, 2);
-            Serial.print("  #define PID_D_POSITION ");
-            Serial.println(d, 3);
-            Serial.print("  #define PID_RAMP_POSITION_DEG ");
-            Serial.println(ramp_deg_s, 1);
+            Serial.println("\nSaving tuned parameters to NVS...");
         }
-    } else {
-        if (verbose) {
-            Serial.println("[TUNE] ERROR: PID tuning failed!");
+        if (saveToNVS()) {
+            if (verbose) {
+                Serial.println("Parameters saved! Will be loaded on next boot.");
+            }
+        } else {
+            if (verbose) {
+                Serial.println("Warning: Failed to save to NVS");
+            }
         }
     }
 
     return success;
+}
+
+//=============================================================================
+// NVS STORAGE METHODS
+//=============================================================================
+
+bool MotorController::saveToNVS() {
+    CalibrationData data;
+
+    // Calibration data
+    data.zero_electric_angle = motor.zero_electric_angle;
+    data.sensor_direction = (motor.sensor_direction == Direction::CW) ? 1 : -1;
+
+    // Position PID
+    data.pos_p = motor.P_angle.P;
+    data.pos_i = motor.P_angle.I;
+    data.pos_d = motor.P_angle.D;
+    data.pos_ramp = radiansToDegrees(motor.P_angle.output_ramp);
+
+    // Velocity PID
+    data.vel_p = motor.PID_velocity.P;
+    data.vel_i = motor.PID_velocity.I;
+    data.vel_d = motor.PID_velocity.D;
+    data.vel_ramp = motor.PID_velocity.output_ramp;
+
+    return nvsStorage.save(data);
+}
+
+bool MotorController::loadFromNVS() {
+    CalibrationData data;
+
+    if (!nvsStorage.load(data)) {
+        return false;
+    }
+
+    // Apply calibration data
+    motor.zero_electric_angle = data.zero_electric_angle;
+    motor.sensor_direction = (data.sensor_direction == 1) ? Direction::CW : Direction::CCW;
+
+    // Apply position PID
+    setPositionPID(data.pos_p, data.pos_i, data.pos_d, data.pos_ramp);
+
+    // Apply velocity PID
+    setVelocityPID(data.vel_p, data.vel_i, data.vel_d, data.vel_ramp);
+
+    if (DEBUG_MOTOR) {
+        Serial.println("[NVS] Loaded calibration and PID from storage");
+        Serial.print("  ZeroAngle: ");
+        Serial.print(radiansToDegrees(data.zero_electric_angle), 1);
+        Serial.print("deg, Dir: ");
+        Serial.println(data.sensor_direction == 1 ? "CW" : "CCW");
+        Serial.print("  PosPID: P=");
+        Serial.print(data.pos_p, 2);
+        Serial.print(" I=");
+        Serial.print(data.pos_i, 3);
+        Serial.print(" D=");
+        Serial.println(data.pos_d, 4);
+    }
+
+    return true;
+}
+
+bool MotorController::hasNVSData() {
+    return nvsStorage.hasValidData();
 }
 
 float MotorController::getPosition() {

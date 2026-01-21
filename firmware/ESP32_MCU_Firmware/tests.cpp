@@ -129,8 +129,8 @@ void printHelp() {
     Serial.println("Motor Control:");
     Serial.println("  e, enable      - Enable motor");
     Serial.println("  d, disable     - Disable motor");
-    Serial.println("  c, calibrate   - Run motor calibration");
-    Serial.println("  p, pidtune     - Run PID auto-tuning (after calibration)");
+    Serial.println("  c, calibrate   - Run motor calibration (saves to NVS)");
+    Serial.println("  p, pidtune     - Run PID auto-tuning (saves to NVS)");
     Serial.println("  home           - Log current position (absolute encoders don't need homing)");
     Serial.println("  stop           - Stop motor movement");
     Serial.println("  m <angle>      - Move to absolute angle (e.g., 'm 90' for 90 degrees absolute)");
@@ -138,20 +138,21 @@ void printHelp() {
     Serial.println("  a <accel>      - Set acceleration (e.g., 'a 50.0' deg/s²)");
     Serial.println("  mode <0-2>     - Set control mode (0=position, 1=velocity, 2=torque)");
     Serial.println("");
+    Serial.println("NVS Storage (persistent settings):");
+    Serial.println("  nvs            - Show saved calibration/PID data");
+    Serial.println("  nvs_clear      - Clear saved data (forces recalibration)");
+    Serial.println("  nvs_save       - Manually save current settings to NVS");
+    Serial.println("");
     Serial.println("Testing:");
     Serial.println("  phase_test     - Test each driver phase output (HARDWARE DIAGNOSTIC)");
     Serial.println("  test           - Run full test (calibration + motor test)");
     Serial.println("  motor_test     - Diagnostic test with detailed logging (USE THIS FIRST)");
     Serial.println("  position_sweep - Test 5 precise positions (±30° safe range)");
     Serial.println("  encoder_test   - Test encoder readings (press any key to stop)");
-    Serial.println("  diag           - *** SimpleFOC root cause analysis (frozen shaft_angle) ***");
+    Serial.println("  diag           - SimpleFOC root cause analysis");
     Serial.println("");
     Serial.println("Debug:");
     Serial.println("  debug <0/1>    - Toggle debug verbosity (0=quiet, 1=verbose)");
-    Serial.println("");
-    Serial.println("\nBinary Protocol Commands:");
-    Serial.println("  The controller also accepts binary commands via SerialTransfer");
-    Serial.println("  Use the Python/PC software for full protocol communication");
     Serial.println("\n");
 }
 
@@ -1179,23 +1180,12 @@ void runFullTest(MotorController& motorControl) {
 
     delay(1000);
 
-    // Step 2: PID Auto-Tuning
-    // TEMPORARILY DISABLED: PID tuning has motor movement issues
-    // The tuner calls motor.move() without arguments, which doesn't work correctly
-    // See pid_auto_tuner.cpp:89 - needs to call motor.move(target_rad) instead
+    // Step 2: PID Tuning
+    // PID tuning is now done via Python script (motor_control/pid_tuner.py)
+    // This allows for better visualization and more sophisticated tuning algorithms
     Serial.println("\n=== Step 2: PID Tuning ===");
-    Serial.println("⚠ PID auto-tuning disabled (use 'pidtune' command to run separately)");
-
-    // Commented out PID tuning code:
-    /*
-    if (motorControl.autoTunePID(true)) {
-        Serial.println("✓ PID auto-tuning successful!");
-        Serial.println("Optimal PID parameters have been applied.");
-    } else {
-        Serial.println("✗ PID auto-tuning failed!");
-        Serial.println("Continuing with current PID values...");
-    }
-    */
+    Serial.println("PID tuning available via Python: python motor_control/pid_tuner.py <port>");
+    Serial.println("Modes: --mode step | autotune | sweep | manual");
 
     delay(1000);
 
