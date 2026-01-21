@@ -2,6 +2,10 @@
 #include "motor_control.h"
 #include "config.h"
 
+// Static buffer definitions (allocated once in global memory, not on stack)
+float PIDAutoTuner::position_buffer[TUNE_BUFFER_SIZE];
+unsigned long PIDAutoTuner::time_buffer[TUNE_BUFFER_SIZE];
+
 PIDAutoTuner::PIDAutoTuner(BLDCMotor& motor, MT6701Sensor& sensor)
     : motor(motor), sensor(sensor), sample_count(0) {
     // Initialize with defaults
