@@ -30,8 +30,7 @@ class MT6701Sensor;
 
 // Step test parameters
 #define TUNE_STEP_SIZE_DEG      30.0f    // Step size for testing (degrees)
-#define TUNE_SETTLE_TIME_MS     2000     // Time to wait for settling (ms)
-#define TUNE_SAMPLE_INTERVAL_MS 1        // Sample every 1ms (1kHz)
+#define TUNE_SETTLE_TIME_MS     3000     // Time to wait for settling (ms)
 
 // Tolerances
 #define TUNE_POSITION_TOL_DEG   0.5f     // Target reached threshold
@@ -57,8 +56,10 @@ class MT6701Sensor;
 #define TUNE_P_MARGIN           0.8f     // Use 80% of best P (stability margin)
 #define TUNE_TARGET_ERROR_DEG   0.2f     // Target steady-state error
 
-// Sample buffer size (2 seconds at 1kHz)
-#define TUNE_BUFFER_SIZE        2000
+// Sample buffer size - REDUCED to avoid stack overflow
+// 500 samples at 10ms interval = 5 seconds of data (plenty for step response)
+#define TUNE_BUFFER_SIZE        500
+#define TUNE_SAMPLE_INTERVAL_MS 10       // Sample every 10ms (100Hz) - changed from 1ms
 
 //=============================================================================
 // DATA STRUCTURES
@@ -131,9 +132,10 @@ private:
     PIDParams best_params;
     StepMetrics best_metrics;
 
-    // Sample buffer
-    float position_buffer[TUNE_BUFFER_SIZE];
-    unsigned long time_buffer[TUNE_BUFFER_SIZE];
+    // Sample buffer - STATIC to avoid stack overflow
+    // These are allocated once in global memory, not on stack
+    static float position_buffer[TUNE_BUFFER_SIZE];
+    static unsigned long time_buffer[TUNE_BUFFER_SIZE];
     int sample_count;
 
     // Internal methods

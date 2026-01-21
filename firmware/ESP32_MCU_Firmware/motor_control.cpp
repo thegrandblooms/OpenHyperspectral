@@ -1119,9 +1119,17 @@ void MotorController::setHome() {
 }
 
 void MotorController::moveToPosition(float position_deg) {
+    // Auto-enable if calibrated but not enabled
+    if (!motor_enabled && motor_calibrated) {
+        if (DEBUG_MOTOR) {
+            Serial.println("[AUTO] Enabling motor for move command");
+        }
+        enable();
+    }
+
     if (!motor_enabled) {
         if (DEBUG_MOTOR) {
-            Serial.println("Cannot move - motor not enabled");
+            Serial.println("Cannot move - motor not calibrated. Run 'c' first.");
         }
         return;
     }
@@ -1133,8 +1141,6 @@ void MotorController::moveToPosition(float position_deg) {
 
     // Store target position (absolute coordinates 0-360°)
     target_position_deg = position_deg;
-
-    // Debug output removed - test harness already shows move commands
 }
 
 void MotorController::setVelocity(float velocity_deg_s) {
@@ -1328,31 +1334,47 @@ bool MotorController::loadFromNVS() {
         return false;
     }
 
-    // Apply calibration data
+    // Apply calibration data BEFORE initFOC
     motor.zero_electric_angle = data.zero_electric_angle;
     motor.sensor_direction = (data.sensor_direction == 1) ? Direction::CW : Direction::CCW;
 
-    // Apply position PID
+    // Apply PID parameters
     setPositionPID(data.pos_p, data.pos_i, data.pos_d, data.pos_ramp);
-
-    // Apply velocity PID
     setVelocityPID(data.vel_p, data.vel_i, data.vel_d, data.vel_ramp);
 
-    if (DEBUG_MOTOR) {
-        Serial.println("[NVS] Loaded calibration and PID from storage");
-        Serial.print("  ZeroAngle: ");
-        Serial.print(radiansToDegrees(data.zero_electric_angle), 1);
-        Serial.print("deg, Dir: ");
-        Serial.println(data.sensor_direction == 1 ? "CW" : "CCW");
-        Serial.print("  PosPID: P=");
-        Serial.print(data.pos_p, 2);
-        Serial.print(" I=");
-        Serial.print(data.pos_i, 3);
-        Serial.print(" D=");
-        Serial.println(data.pos_d, 4);
-    }
+    // Initialize FOC with loaded calibration (skip sensor alignment)
+    int foc_result = motor.initFOC();
 
-    return true;
+    if (foc_result == 1) {
+        // Mark motor as calibrated
+        motor_calibrated = true;
+
+        // Run a few stabilization cycles
+        for (int i = 0; i < 100; i++) {
+            motor.loopFOC();
+            delay(1);
+        }
+
+        if (DEBUG_MOTOR) {
+            Serial.println("[NVS] Loaded calibration and PID from storage");
+            Serial.print("  ZeroAngle: ");
+            Serial.print(radiansToDegrees(data.zero_electric_angle), 1);
+            Serial.print("deg, Dir: ");
+            Serial.println(data.sensor_direction == 1 ? "CW" : "CCW");
+            Serial.print("  PosPID: P=");
+            Serial.print(data.pos_p, 2);
+            Serial.print(" I=");
+            Serial.print(data.pos_i, 3);
+            Serial.print(" D=");
+            Serial.println(data.pos_d, 4);
+        }
+        return true;
+    } else {
+        if (DEBUG_MOTOR) {
+            Serial.println("[NVS] Failed to initialize FOC with loaded data");
+        }
+        return false;
+    }
 }
 
 bool MotorController::hasNVSData() {
@@ -1440,21 +1462,22 @@ bool MotorController::isAtTarget() {
     bool at_target = (position_error_deg < POSITION_TOLERANCE_DEG) &&
                      (velocity_deg_s < VELOCITY_THRESHOLD_DEG);
 
-    if (DEBUG_MOTOR && at_target) {
-        static unsigned long last_debug = 0;
-        if (millis() - last_debug > 1000) {  // Debug once per second
-            Serial.print("[AT_TARGET] Current: ");
-            Serial.print(current_position_deg, 2);
-            Serial.print("°, Target: ");
-            Serial.print(target_position_deg, 2);
-            Serial.print("°, Error: ");
+    // Only print debug ONCE when first reaching target (not repeatedly)
+    static bool was_at_target = false;
+    static float last_logged_target = -999.0f;
+
+    if (at_target && !was_at_target && DEBUG_MOTOR) {
+        // Only log if this is a new target (avoid spam when idle at 0)
+        if (abs(target_position_deg - last_logged_target) > 0.1f) {
+            Serial.print("[AT_TARGET] Reached ");
+            Serial.print(target_position_deg, 1);
+            Serial.print("° (error: ");
             Serial.print(position_error_deg, 2);
-            Serial.print("°, Vel: ");
-            Serial.print(velocity_deg_s, 2);
-            Serial.println("°/s");
-            last_debug = millis();
+            Serial.println("°)");
+            last_logged_target = target_position_deg;
         }
     }
+    was_at_target = at_target;
 
     return at_target;
 }
