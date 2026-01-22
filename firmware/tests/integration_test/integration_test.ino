@@ -24,7 +24,6 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <SimpleFOC.h>
-#include "pid_auto_tuner.h"
 
 // Hardware configuration (from motor_firmware config.h)
 #define MOTOR_ENABLE     15

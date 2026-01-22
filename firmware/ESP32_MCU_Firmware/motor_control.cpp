@@ -1,6 +1,7 @@
 #include "motor_control.h"
 #include "commands.h"  // Explicit include for state/mode definitions
-#include "pid_auto_tuner.h"  // PID auto-tuning functionality
+#include "nvs_storage.h"  // NVS storage for calibration/PID persistence
+#include "pid_tuner.h"    // Firmware-based PID auto-tuner
 #include <Wire.h>      // I2C library for MT6701 encoder
 
 //=============================================================================
@@ -1118,9 +1119,17 @@ void MotorController::setHome() {
 }
 
 void MotorController::moveToPosition(float position_deg) {
+    // Auto-enable if calibrated but not enabled
+    if (!motor_enabled && motor_calibrated) {
+        if (DEBUG_MOTOR) {
+            Serial.println("[AUTO] Enabling motor for move command");
+        }
+        enable();
+    }
+
     if (!motor_enabled) {
         if (DEBUG_MOTOR) {
-            Serial.println("Cannot move - motor not enabled");
+            Serial.println("Cannot move - motor not calibrated. Run 'c' first.");
         }
         return;
     }
@@ -1132,8 +1141,6 @@ void MotorController::moveToPosition(float position_deg) {
 
     // Store target position (absolute coordinates 0-360°)
     target_position_deg = position_deg;
-
-    // Debug output removed - test harness already shows move commands
 }
 
 void MotorController::setVelocity(float velocity_deg_s) {
@@ -1246,14 +1253,16 @@ void MotorController::setCurrentPID(float p, float i, float d, float ramp) {
 }
 
 bool MotorController::autoTunePID(bool verbose) {
-    // Ensure motor is calibrated and enabled
+    // Ensure motor is calibrated
     if (!motor_calibrated) {
         if (verbose) {
             Serial.println("[TUNE] ERROR: Motor must be calibrated before PID tuning");
+            Serial.println("       Run 'c' or 'calibrate' first.");
         }
         return false;
     }
 
+    // Ensure motor is enabled
     if (!motor_enabled) {
         if (verbose) {
             Serial.println("[TUNE] Enabling motor for tuning...");
@@ -1262,40 +1271,114 @@ bool MotorController::autoTunePID(bool verbose) {
         delay(500);
     }
 
-    if (verbose) {
-        Serial.println("[TUNE] Starting PID auto-tuning in position control mode...");
-    }
-
-    // Create tuner and run tuning
+    // Run firmware-based PID tuning
     PIDAutoTuner tuner(motor, encoder);
     bool success = tuner.runTuning(verbose);
 
     if (success) {
-        // Apply optimal PID parameters (tuner uses degrees)
-        float p, i, d, ramp_deg_s;
-        tuner.getOptimalPID(p, i, d, ramp_deg_s);
+        // Get optimal parameters
+        float p, i, d, ramp;
+        tuner.getOptimalPID(p, i, d, ramp);
 
-        setPositionPID(p, i, d, ramp_deg_s);
+        // Apply to motor
+        setPositionPID(p, i, d, ramp);
 
+        // Save to NVS for persistence
         if (verbose) {
-            Serial.println("[TUNE] Optimal PID parameters applied!");
-            Serial.println("[TUNE] To make permanent, update config.h:");
-            Serial.print("  #define PID_P_POSITION ");
-            Serial.println(p, 2);
-            Serial.print("  #define PID_I_POSITION ");
-            Serial.println(i, 2);
-            Serial.print("  #define PID_D_POSITION ");
-            Serial.println(d, 3);
-            Serial.print("  #define PID_RAMP_POSITION_DEG ");
-            Serial.println(ramp_deg_s, 1);
+            Serial.println("\nSaving tuned parameters to NVS...");
         }
-    } else {
-        if (verbose) {
-            Serial.println("[TUNE] ERROR: PID tuning failed!");
+        if (saveToNVS()) {
+            if (verbose) {
+                Serial.println("Parameters saved! Will be loaded on next boot.");
+            }
+        } else {
+            if (verbose) {
+                Serial.println("Warning: Failed to save to NVS");
+            }
         }
     }
 
     return success;
+}
+
+//=============================================================================
+// NVS STORAGE METHODS
+//=============================================================================
+
+bool MotorController::saveToNVS() {
+    CalibrationData data;
+
+    // Calibration data
+    data.zero_electric_angle = motor.zero_electric_angle;
+    data.sensor_direction = (motor.sensor_direction == Direction::CW) ? 1 : -1;
+
+    // Position PID
+    data.pos_p = motor.P_angle.P;
+    data.pos_i = motor.P_angle.I;
+    data.pos_d = motor.P_angle.D;
+    data.pos_ramp = radiansToDegrees(motor.P_angle.output_ramp);
+
+    // Velocity PID
+    data.vel_p = motor.PID_velocity.P;
+    data.vel_i = motor.PID_velocity.I;
+    data.vel_d = motor.PID_velocity.D;
+    data.vel_ramp = motor.PID_velocity.output_ramp;
+
+    return nvsStorage.save(data);
+}
+
+bool MotorController::loadFromNVS() {
+    CalibrationData data;
+
+    if (!nvsStorage.load(data)) {
+        return false;
+    }
+
+    // Apply calibration data BEFORE initFOC
+    motor.zero_electric_angle = data.zero_electric_angle;
+    motor.sensor_direction = (data.sensor_direction == 1) ? Direction::CW : Direction::CCW;
+
+    // Apply PID parameters
+    setPositionPID(data.pos_p, data.pos_i, data.pos_d, data.pos_ramp);
+    setVelocityPID(data.vel_p, data.vel_i, data.vel_d, data.vel_ramp);
+
+    // Initialize FOC with loaded calibration (skip sensor alignment)
+    int foc_result = motor.initFOC();
+
+    if (foc_result == 1) {
+        // Mark motor as calibrated
+        motor_calibrated = true;
+
+        // Run a few stabilization cycles
+        for (int i = 0; i < 100; i++) {
+            motor.loopFOC();
+            delay(1);
+        }
+
+        if (DEBUG_MOTOR) {
+            Serial.println("[NVS] Loaded calibration and PID from storage");
+            Serial.print("  ZeroAngle: ");
+            Serial.print(radiansToDegrees(data.zero_electric_angle), 1);
+            Serial.print("deg, Dir: ");
+            Serial.println(data.sensor_direction == 1 ? "CW" : "CCW");
+            Serial.print("  PosPID: P=");
+            Serial.print(data.pos_p, 2);
+            Serial.print(" I=");
+            Serial.print(data.pos_i, 3);
+            Serial.print(" D=");
+            Serial.println(data.pos_d, 4);
+        }
+        return true;
+    } else {
+        if (DEBUG_MOTOR) {
+            Serial.println("[NVS] Failed to initialize FOC with loaded data");
+        }
+        return false;
+    }
+}
+
+bool MotorController::hasNVSData() {
+    return nvsStorage.hasValidData();
 }
 
 float MotorController::getPosition() {
@@ -1379,21 +1462,22 @@ bool MotorController::isAtTarget() {
     bool at_target = (position_error_deg < POSITION_TOLERANCE_DEG) &&
                      (velocity_deg_s < VELOCITY_THRESHOLD_DEG);
 
-    if (DEBUG_MOTOR && at_target) {
-        static unsigned long last_debug = 0;
-        if (millis() - last_debug > 1000) {  // Debug once per second
-            Serial.print("[AT_TARGET] Current: ");
-            Serial.print(current_position_deg, 2);
-            Serial.print("°, Target: ");
-            Serial.print(target_position_deg, 2);
-            Serial.print("°, Error: ");
+    // Only print debug ONCE when first reaching target (not repeatedly)
+    static bool was_at_target = false;
+    static float last_logged_target = -999.0f;
+
+    if (at_target && !was_at_target && DEBUG_MOTOR) {
+        // Only log if this is a new target (avoid spam when idle at 0)
+        if (abs(target_position_deg - last_logged_target) > 0.1f) {
+            Serial.print("[AT_TARGET] Reached ");
+            Serial.print(target_position_deg, 1);
+            Serial.print("° (error: ");
             Serial.print(position_error_deg, 2);
-            Serial.print("°, Vel: ");
-            Serial.print(velocity_deg_s, 2);
-            Serial.println("°/s");
-            last_debug = millis();
+            Serial.println("°)");
+            last_logged_target = target_position_deg;
         }
     }
+    was_at_target = at_target;
 
     return at_target;
 }
@@ -1438,6 +1522,20 @@ void MotorController::update() {
     // Do NOT call encoder.update() manually here - it breaks the control loop!
     motor.loopFOC();
 
+    // DEBUG: Check if motor.enabled is actually true
+    static unsigned long last_move_debug = 0;
+    if (millis() - last_move_debug > 2000) {
+        last_move_debug = millis();
+        Serial.print("[UPDATE_DBG] shaft_angle=");
+        Serial.print(radiansToDegrees(motor.shaft_angle), 1);
+        Serial.print("° target=");
+        Serial.print(target_position_deg, 1);
+        Serial.print("° motor.enabled=");
+        Serial.print(motor.enabled ? "Y" : "N");
+        Serial.print(" Vq=");
+        Serial.println(motor.voltage.q, 2);
+    }
+
     // NOTE: No angle normalization needed here!
     // FORCE_SENSOR_DIRECTION_CW=true in config.h forces calibration to use CW direction
     // This ensures shaft_angle is always positive (0-2π range) even if physical sensor is CCW
@@ -1473,6 +1571,21 @@ void MotorController::update() {
 
     // Calculate normalized target that's closest to current position
     float normalized_target_rad = current_rad + error_rad;
+
+    // DEBUG: Show what we're passing to motor.move()
+    static unsigned long last_target_debug = 0;
+    if (millis() - last_target_debug > 2000) {
+        last_target_debug = millis();
+        Serial.print("[MOVE_DBG] current=");
+        Serial.print(radiansToDegrees(current_rad), 1);
+        Serial.print("° target_deg=");
+        Serial.print(target_position_deg, 1);
+        Serial.print("° error=");
+        Serial.print(radiansToDegrees(error_rad), 2);
+        Serial.print("° move(");
+        Serial.print(radiansToDegrees(normalized_target_rad), 1);
+        Serial.println("°)");
+    }
 
     motor.move(normalized_target_rad);
 
