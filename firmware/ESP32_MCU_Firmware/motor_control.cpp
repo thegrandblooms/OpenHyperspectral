@@ -1522,20 +1522,6 @@ void MotorController::update() {
     // Do NOT call encoder.update() manually here - it breaks the control loop!
     motor.loopFOC();
 
-    // DEBUG: Check if motor.enabled is actually true
-    static unsigned long last_move_debug = 0;
-    if (millis() - last_move_debug > 2000) {
-        last_move_debug = millis();
-        Serial.print("[UPDATE_DBG] shaft_angle=");
-        Serial.print(radiansToDegrees(motor.shaft_angle), 1);
-        Serial.print("° target=");
-        Serial.print(target_position_deg, 1);
-        Serial.print("° motor.enabled=");
-        Serial.print(motor.enabled ? "Y" : "N");
-        Serial.print(" Vq=");
-        Serial.println(motor.voltage.q, 2);
-    }
-
     // NOTE: No angle normalization needed here!
     // FORCE_SENSOR_DIRECTION_CW=true in config.h forces calibration to use CW direction
     // This ensures shaft_angle is always positive (0-2π range) even if physical sensor is CCW
@@ -1571,21 +1557,6 @@ void MotorController::update() {
 
     // Calculate normalized target that's closest to current position
     float normalized_target_rad = current_rad + error_rad;
-
-    // DEBUG: Show what we're passing to motor.move()
-    static unsigned long last_target_debug = 0;
-    if (millis() - last_target_debug > 2000) {
-        last_target_debug = millis();
-        Serial.print("[MOVE_DBG] current=");
-        Serial.print(radiansToDegrees(current_rad), 1);
-        Serial.print("° target_deg=");
-        Serial.print(target_position_deg, 1);
-        Serial.print("° error=");
-        Serial.print(radiansToDegrees(error_rad), 2);
-        Serial.print("° move(");
-        Serial.print(radiansToDegrees(normalized_target_rad), 1);
-        Serial.println("°)");
-    }
 
     motor.move(normalized_target_rad);
 
