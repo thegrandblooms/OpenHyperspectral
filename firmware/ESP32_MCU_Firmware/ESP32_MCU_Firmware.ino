@@ -22,7 +22,6 @@
 #include "commands.h"
 #include "communication.h"
 #include "motor_control.h"
-#include "nvs_storage.h"  // NVS storage for calibration/PID persistence
 #include "tests.h"  // Test and diagnostic functions
 
 //=============================================================================
@@ -378,12 +377,6 @@ void processSerialCommand(String cmd) {
         Serial.println("Running motor calibration...");
         if (motorControl.calibrate()) {
             Serial.println("Calibration successful!");
-            Serial.println("Saving to NVS...");
-            if (motorControl.saveToNVS()) {
-                Serial.println("Calibration saved! Will be loaded on next boot.");
-            } else {
-                Serial.println("Warning: Failed to save to NVS");
-            }
         } else {
             Serial.println("Calibration failed!");
         }
@@ -481,25 +474,6 @@ void processSerialCommand(String cmd) {
     else if (command == "diag" || command == "diagnostic" || command == "foc_diag") {
         runSimpleFOCDiagnostic(motorControl);
     }
-    else if (command == "nvs") {
-        nvsStorage.printStoredData();
-    }
-    else if (command == "nvs_clear") {
-        Serial.println("Clearing NVS calibration data...");
-        if (nvsStorage.clear()) {
-            Serial.println("NVS data cleared. Recalibration required on next boot.");
-        } else {
-            Serial.println("Failed to clear NVS data.");
-        }
-    }
-    else if (command == "nvs_save") {
-        Serial.println("Saving current settings to NVS...");
-        if (motorControl.saveToNVS()) {
-            Serial.println("Settings saved successfully!");
-        } else {
-            Serial.println("Failed to save settings.");
-        }
-    }
     else if (command == "debug") {
         if (args.length() > 0) {
             int level = args.toInt();
@@ -593,14 +567,6 @@ void setup() {
     comm.begin(SERIAL_BAUD);
     Serial.println("[OK]   Communication initialized");
 
-    // Initialize NVS storage
-    Serial.println("[INIT] Initializing NVS storage...");
-    if (nvsStorage.begin()) {
-        Serial.println("[OK]   NVS storage initialized");
-    } else {
-        Serial.println("[WARN] NVS initialization failed");
-    }
-
     // Initialize motor controller
     Serial.println("[INIT] Initializing motor controller...");
     Serial.print("[INFO] Motor config: ");
@@ -612,18 +578,14 @@ void setup() {
     motorControl.begin();
     Serial.println("[OK]   Motor controller initialized");
 
-    // Try to load calibration from NVS
-    if (motorControl.hasNVSData()) {
-        Serial.println("[INIT] Found saved calibration in NVS");
-        if (motorControl.loadFromNVS()) {
-            Serial.println("[OK]   Calibration loaded from NVS");
-            Serial.println("[INFO] Motor ready - run 'c' to recalibrate if needed");
-        } else {
-            Serial.println("[WARN] Failed to load NVS data - calibration required");
-        }
-    } else {
-        Serial.println("[INFO] No saved calibration - run 'c' to calibrate");
-    }
+    // Optional: Run automatic calibration on startup
+    // Uncomment if you want automatic calibration
+    // Serial.println("[INIT] Running motor calibration...");
+    // if (motorControl.calibrate()) {
+    //     Serial.println("[OK]   Calibration successful");
+    // } else {
+    //     Serial.println("[WARN] Calibration failed - please calibrate manually");
+    // }
 
     Serial.println();
     Serial.println("╔════════════════════════════════════════════════════════════════╗");
