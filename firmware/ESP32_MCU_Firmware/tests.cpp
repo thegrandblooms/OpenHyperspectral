@@ -953,13 +953,11 @@ void runSimpleFOCDiagnostic(MotorController& motorControl) {
     Serial.print(encoder.getDegrees(), 1);
     Serial.println("°");
 
-    // Reset sensor's full_rotation counter by re-initializing
-    motor.sensor->update();
-    float mech_angle = motor.sensor->getMechanicalAngle();  // 0 to 2π only
-    motor.shaft_angle = mech_angle;
-    // Also need to update sensor's internal state
-    motor.sensor->full_rotations = 0;
-    motor.sensor->angle_prev = mech_angle;
+    // Reset sensor's full_rotation counter using proper method
+    encoder.resetRotationTracking();  // Clears full_rotations and resets angle_prev
+    encoder.update();
+    float mech_angle = encoder.getMechanicalAngle();  // 0 to 2π only
+    motor.shaft_angle = mech_angle;  // Sync motor's shaft_angle to current position
 
     Serial.print("  After reset:  shaft_angle=");
     Serial.print(radiansToDegrees(motor.shaft_angle), 1);
