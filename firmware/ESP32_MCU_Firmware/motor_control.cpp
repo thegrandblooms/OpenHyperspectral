@@ -316,6 +316,7 @@ MotorController::MotorController()
       prev_encoder_rad(0.0f),
       move_start_time(0),
       move_timeout_printed(true),  // Start as true so we don't print before first move
+      at_target_printed(true),     // Start as true so we don't print before first move
       last_target_for_timeout(-999.0f) {
 }
 
@@ -1156,9 +1157,10 @@ void MotorController::moveToPosition(float position_deg) {
 
     // Detect new move command (target changed)
     if (abs(position_deg - last_target_for_timeout) > 0.1f) {
-        // New move - reset timeout tracking
+        // New move - reset timeout tracking and AT_TARGET flag
         move_start_time = millis();
         move_timeout_printed = false;
+        at_target_printed = false;  // Reset so we print once when target reached
         last_target_for_timeout = position_deg;
     }
 
@@ -1411,20 +1413,18 @@ bool MotorController::isAtTarget() {
     bool at_target = (position_error_deg < POSITION_TOLERANCE_DEG) &&
                      (velocity_deg_s < VELOCITY_THRESHOLD_DEG);
 
-    if (DEBUG_MOTOR && at_target) {
-        static unsigned long last_debug = 0;
-        if (millis() - last_debug > 1000) {  // Debug once per second
-            Serial.print("[AT_TARGET] Current: ");
-            Serial.print(current_position_deg, 2);
-            Serial.print("°, Target: ");
-            Serial.print(target_position_deg, 2);
-            Serial.print("°, Error: ");
-            Serial.print(position_error_deg, 2);
-            Serial.print("°, Vel: ");
-            Serial.print(velocity_deg_s, 2);
-            Serial.println("°/s");
-            last_debug = millis();
-        }
+    // Print AT_TARGET only ONCE per move command (not every second)
+    if (DEBUG_MOTOR && at_target && !at_target_printed) {
+        at_target_printed = true;  // Only print once until next move command
+        Serial.print("[AT_TARGET] Current: ");
+        Serial.print(current_position_deg, 2);
+        Serial.print("°, Target: ");
+        Serial.print(target_position_deg, 2);
+        Serial.print("°, Error: ");
+        Serial.print(position_error_deg, 2);
+        Serial.print("°, Vel: ");
+        Serial.print(velocity_deg_s, 2);
+        Serial.println("°/s");
     }
 
     return at_target;
