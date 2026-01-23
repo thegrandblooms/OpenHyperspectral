@@ -253,6 +253,10 @@ private:
     bool motor_calibrated;
     float target_position_deg;  // Absolute position (0-360°)
 
+    // Continuous angle tracking (handles 0°/360° boundary)
+    float continuous_position_rad;  // Position without wraparound (can be < 0 or > 2π)
+    float prev_encoder_rad;         // Previous encoder reading for wraparound detection
+
     // Move timeout tracking
     unsigned long move_start_time;      // When current move started (millis)
     bool move_timeout_printed;          // Flag to only print timeout once per move

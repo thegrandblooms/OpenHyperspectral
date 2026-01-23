@@ -312,6 +312,8 @@ MotorController::MotorController()
       motor_enabled(false),
       motor_calibrated(false),
       target_position_deg(0.0f),
+      continuous_position_rad(0.0f),
+      prev_encoder_rad(0.0f),
       move_start_time(0),
       move_timeout_printed(true),  // Start as true so we don't print before first move
       last_target_for_timeout(-999.0f) {
@@ -1082,9 +1084,18 @@ void MotorController::enable() {
     motor.enable();
     motor_enabled = true;
 
+    // Initialize continuous position tracking from absolute encoder
+    float encoder_rad = encoder.getSensorAngle();
+    continuous_position_rad = encoder_rad;
+    prev_encoder_rad = encoder_rad;
+    motor.shaft_angle = encoder_rad;
+
+    // Also initialize target to current position to prevent immediate movement
+    target_position_deg = radiansToDegrees(encoder_rad);
+
     if (DEBUG_MOTOR) {
         Serial.print("✓ Motor enabled at ");
-        Serial.print(radiansToDegrees(motor.shaft_angle), 1);
+        Serial.print(radiansToDegrees(encoder_rad), 1);
         Serial.println("°");
     }
 }
@@ -1458,24 +1469,47 @@ void MotorController::update() {
     // loopFOC() reads sensor and calculates electrical angle for proper commutation
     motor.loopFOC();
 
-    // ABSOLUTE ENCODER AS GROUND TRUTH
-    // SimpleFOC's shaft_angle can diverge from reality due to full_rotations corruption.
-    // For absolute encoders (like MT6701), we ALWAYS know the true position (0-2π).
-    // Force SimpleFOC's shaft_angle to match our encoder BEFORE position control.
-    // This ensures the position PID uses the correct current position.
-    float encoder_rad = encoder.getSensorAngle();  // TRUE position from hardware (0-2π)
-    motor.shaft_angle = encoder_rad;  // SYNC: Force SimpleFOC to match absolute encoder
+    // CONTINUOUS ANGLE TRACKING (handles 0°/360° boundary correctly)
+    // The absolute encoder always reads 0-2π, but when crossing the boundary,
+    // we need to maintain a continuous angle for position control.
+    // Otherwise, SimpleFOC's PID sees huge jumps when encoder wraps.
+    float encoder_rad = encoder.getSensorAngle();  // Raw position from hardware (0-2π)
 
-    float current_rad = encoder_rad;
+    // Detect wraparound: if encoder jumped by more than π, it wrapped
+    float delta = encoder_rad - prev_encoder_rad;
+    if (delta > PI) {
+        // Wrapped from ~0 to ~2π (e.g., 0.1 → 6.2), motor went negative
+        delta -= TWO_PI;
+    } else if (delta < -PI) {
+        // Wrapped from ~2π to ~0 (e.g., 6.2 → 0.1), motor went positive
+        delta += TWO_PI;
+    }
+
+    // Update continuous position (can be < 0 or > 2π)
+    continuous_position_rad += delta;
+    prev_encoder_rad = encoder_rad;
+
+    // Use continuous position for SimpleFOC (prevents PID jumps at boundary)
+    motor.shaft_angle = continuous_position_rad;
+
+    // For target calculation, use the wrapped encoder value (0-2π) but calculate
+    // error using continuous position so we move the shortest path
     float target_rad = degreesToRadians(target_position_deg);
 
+    // Calculate error relative to continuous position
+    // First, find where target would be relative to our continuous position
+    float current_wrapped = fmod(continuous_position_rad, TWO_PI);
+    if (current_wrapped < 0) current_wrapped += TWO_PI;
+
+    float error_rad = target_rad - current_wrapped;
+
     // Normalize error to [-π, +π] (shortest path)
-    float error_rad = target_rad - current_rad;
     while (error_rad > PI) error_rad -= TWO_PI;
     while (error_rad < -PI) error_rad += TWO_PI;
 
-    // Calculate normalized target that's closest to current position
-    float normalized_target_rad = current_rad + error_rad;
+    // Calculate normalized target relative to continuous position
+    // This ensures smooth movement across the 0°/360° boundary
+    float normalized_target_rad = continuous_position_rad + error_rad;
 
     motor.move(normalized_target_rad);
 
