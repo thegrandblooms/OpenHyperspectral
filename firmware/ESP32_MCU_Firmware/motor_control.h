@@ -253,6 +253,12 @@ private:
     bool motor_calibrated;
     float target_position_deg;  // Absolute position (0-360°)
 
+    // Move timeout tracking
+    unsigned long move_start_time;      // When current move started (millis)
+    bool move_timeout_printed;          // Flag to only print timeout once per move
+    float last_target_for_timeout;      // Track target to detect new moves
+    static constexpr unsigned long MOVE_TIMEOUT_MS = 1000;  // 1 second timeout
+
     // Calibration helpers
     bool runCalibration();
     bool runManualCalibration();
