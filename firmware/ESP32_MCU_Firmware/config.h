@@ -57,12 +57,12 @@
 //
 // Physical relationship can be CCW, but we override to CW for correct angle math.
 // SimpleFOC expects shaft_angle in 0-2π range; CCW creates negative angles.
-#define FORCE_SENSOR_DIRECTION_CW true  // ENABLED: Fixes negative shaft_angle bug
+#define FORCE_SENSOR_DIRECTION_CW false  // DISABLED: Let SimpleFOC auto-detect
 
 // Calibration method selection
 // false = Use manual calibration (calculates zero_electric_angle ourselves)
 // true  = Let SimpleFOC auto-calibrate (runs alignment and calculates offset)
-#define USE_SIMPLEFOC_AUTO_CALIBRATION false  // Try true if manual calibration fails
+#define USE_SIMPLEFOC_AUTO_CALIBRATION true  // ENABLED: Use SimpleFOC's proven calibration
 
 //=============================================================================
 // MOTION CONTROL PARAMETERS
