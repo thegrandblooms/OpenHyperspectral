@@ -952,9 +952,9 @@ bool MotorController::runManualCalibration() {
     // AUTO CALIBRATION: Let SimpleFOC calculate zero_electric_angle during initFOC()
     // CRITICAL: Reset calibration state to force fresh calibration
     // Without this, SimpleFOC skips calibration ("Skip dir calib", "Skip offset calib")
-    // SimpleFOC uses Direction::UNKNOWN (0) and NOT_SET (1000.0f) as "uncalibrated" markers
+    // SimpleFOC uses Direction::UNKNOWN and NOT_SET (-12345.0f) as "uncalibrated" markers
     motor.sensor_direction = Direction::UNKNOWN;
-    motor.zero_electric_angle = 1000.0f;  // NOT_SET value in SimpleFOC
+    motor.zero_electric_angle = -12345.0f;  // NOT_SET value in SimpleFOC (NOT 1000.0f!)
 
     if (DEBUG_MOTOR) {
         Serial.println("");
