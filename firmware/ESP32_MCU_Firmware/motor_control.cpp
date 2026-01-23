@@ -1455,36 +1455,18 @@ void MotorController::update() {
     }
 
     // SIMPLEFOC: Run FOC algorithm (current control)
-    // NOTE: SimpleFOC automatically calls sensor->update() inside loopFOC()
-    // Do NOT call encoder.update() manually here - it breaks the control loop!
+    // loopFOC() reads sensor and calculates electrical angle for proper commutation
     motor.loopFOC();
 
-    // NOTE: No angle normalization needed here!
-    // FORCE_SENSOR_DIRECTION_CW=true in config.h forces calibration to use CW direction
-    // This ensures shaft_angle is always positive (0-2π range) even if physical sensor is CCW
-    // Normalizing here would create discontinuities and break velocity estimation
+    // ABSOLUTE ENCODER AS GROUND TRUTH
+    // SimpleFOC's shaft_angle can diverge from reality due to full_rotations corruption.
+    // For absolute encoders (like MT6701), we ALWAYS know the true position (0-2π).
+    // Force SimpleFOC's shaft_angle to match our encoder BEFORE position control.
+    // This ensures the position PID uses the correct current position.
+    float encoder_rad = encoder.getSensorAngle();  // TRUE position from hardware (0-2π)
+    motor.shaft_angle = encoder_rad;  // SYNC: Force SimpleFOC to match absolute encoder
 
-    // DIAGNOSTIC: Verbose shaft_angle logging disabled - too noisy during tests
-    // Enable this manually when debugging shaft_angle calculation issues
-    // if (DEBUG_MOTOR) {
-    //     static unsigned long last_debug = 0;
-    //     if (millis() - last_debug > 500) {  // Log every 500ms
-    //         Serial.print("[DIAG_shaft_angle] shaft_angle: ");
-    //         Serial.print(radiansToDegrees(motor.shaft_angle), 2);
-    //         Serial.print("° | sensor_direction: ");
-    //         Serial.print(motor.sensor_direction == Direction::CW ? "CW(+1)" : "CCW(-1)");
-    //         Serial.print(" | sensor_offset: ");
-    //         Serial.print(radiansToDegrees(motor.sensor_offset), 2);
-    //         Serial.println("°");
-    //         last_debug = millis();
-    //     }
-    // }
-
-    // SIMPLEFOC: Run motion control (position control)
-    // CRITICAL: SimpleFOC's position PID doesn't normalize angle errors for absolute encoders!
-    // We must normalize the target to be within ±π of current position (shortest path)
-    // Otherwise SimpleFOC can calculate the wrong direction for wraparound cases
-    float current_rad = motor.shaft_angle;
+    float current_rad = encoder_rad;
     float target_rad = degreesToRadians(target_position_deg);
 
     // Normalize error to [-π, +π] (shortest path)
