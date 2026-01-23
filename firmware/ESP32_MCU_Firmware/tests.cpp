@@ -700,465 +700,353 @@ void runPositionSweepTest(MotorController& motorControl) {
 }
 
 //=============================================================================
-// SIMPLEFOC DIAGNOSTIC TEST - Root cause analysis for frozen shaft_angle
+// SIMPLEFOC DIAGNOSTIC TEST - Root cause analysis for motor control issues
 //=============================================================================
 
 void runSimpleFOCDiagnostic(MotorController& motorControl) {
-    Serial.println("\n╔════════════════════════════════════════════════════════════════╗");
-    Serial.println("║       SimpleFOC Diagnostic Test - Root Cause Analysis          ║");
-    Serial.println("╚════════════════════════════════════════════════════════════════╝");
-    Serial.println("\nThis test diagnoses why motor.shaft_angle is frozen during move()");
-    Serial.println("Testing each theory from dev_log_8 systematically.\n");
+    Serial.println("\n══════════════════════════════════════════════════════════════");
+    Serial.println("        SimpleFOC Diagnostic - Root Cause Analysis");
+    Serial.println("══════════════════════════════════════════════════════════════\n");
 
     BLDCMotor& motor = motorControl.getMotor();
     MT6701Sensor& encoder = motorControl.getEncoder();
 
-    // Ensure motor is calibrated
     if (!motorControl.isCalibrated()) {
         Serial.println("✗ Motor not calibrated! Run 'c' first.");
         return;
     }
 
-    Serial.println("═══════════════════════════════════════════════════════════════════");
-    Serial.println("TEST 1: SimpleFOC Control Mode Verification");
-    Serial.println("═══════════════════════════════════════════════════════════════════");
+    // Store results for summary
+    bool test2_pass = false, test3_pass = false, test4_pass = false;
+    bool test5_offset_found = false, test6_pass = false, test7_pass = false;
+    float test6_movement = 0, test7_movement = 0;
+    float best_offset_deg = 0;
 
-    Serial.print("  motor.controller = ");
-    switch (motor.controller) {
-        case MotionControlType::torque: Serial.println("torque"); break;
-        case MotionControlType::velocity: Serial.println("velocity"); break;
-        case MotionControlType::angle: Serial.println("angle ✓"); break;
-        case MotionControlType::velocity_openloop: Serial.println("velocity_openloop"); break;
-        case MotionControlType::angle_openloop: Serial.println("angle_openloop"); break;
-        default: Serial.println("UNKNOWN ✗"); break;
-    }
-
-    Serial.print("  motor.torque_controller = ");
-    switch (motor.torque_controller) {
-        case TorqueControlType::voltage: Serial.println("voltage ✓"); break;
-        case TorqueControlType::dc_current: Serial.println("dc_current"); break;
-        case TorqueControlType::foc_current: Serial.println("foc_current"); break;
-        default: Serial.println("UNKNOWN ✗"); break;
-    }
-
-    Serial.print("  motor.enabled = ");
-    Serial.println(motor.enabled ? "YES" : "NO");
-
-    Serial.print("  motor.sensor_direction = ");
-    Serial.println(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
-
-    Serial.print("  motor.zero_electric_angle = ");
-    Serial.print(radiansToDegrees(motor.zero_electric_angle), 1);
-    Serial.println("°");
-
-    Serial.print("  motor.voltage_limit = ");
+    //-------------------------------------------------------------------------
+    // TEST 1: Config (quick sanity check)
+    //-------------------------------------------------------------------------
+    Serial.println("─── T1: Config ───────────────────────────────────────────────");
+    Serial.print("  Mode:");
+    Serial.print(motor.controller == MotionControlType::angle ? "angle✓" : "OTHER");
+    Serial.print(" Dir:");
+    Serial.print(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
+    Serial.print(" Vlim:");
     Serial.print(motor.voltage_limit, 1);
-    Serial.println("V");
+    Serial.print("V Zero:");
+    Serial.print(radiansToDegrees(motor.zero_electric_angle), 1);
+    Serial.print("° Sensor:");
+    Serial.println(motor.sensor ? "✓" : "✗");
 
-    Serial.print("  motor.sensor linked = ");
-    Serial.println(motor.sensor ? "YES ✓" : "NO ✗");
-
-    delay(500);
-
-    Serial.println("\n═══════════════════════════════════════════════════════════════════");
-    Serial.println("TEST 2: Sensor Call Verification (is getSensorAngle() being called?)");
-    Serial.println("═══════════════════════════════════════════════════════════════════");
-
-    // Enable motor
+    //-------------------------------------------------------------------------
+    // TEST 2: Sensor calls (verify SimpleFOC reads sensor)
+    //-------------------------------------------------------------------------
+    Serial.println("\n─── T2: Sensor Calls ─────────────────────────────────────────");
     motorControl.enable();
-    delay(100);
+    delay(50);
 
-    // Reset call counter
     encoder.resetCallCount();
-    unsigned long calls_before = encoder.getCallCount();
-
-    Serial.print("  Calls before loopFOC(): ");
-    Serial.println(calls_before);
-
-    // Run loopFOC() 100 times
-    Serial.print("  Running motor.loopFOC() 100 times... ");
     for (int i = 0; i < 100; i++) {
         motor.loopFOC();
         delayMicroseconds(100);
     }
+    unsigned long calls_made = encoder.getCallCount();
+    test2_pass = calls_made >= 100;
 
-    unsigned long calls_after = encoder.getCallCount();
-    Serial.print("done\n  Calls after loopFOC(): ");
-    Serial.println(calls_after);
-
-    unsigned long calls_made = calls_after - calls_before;
-    Serial.print("  getSensorAngle() called: ");
+    Serial.print("  loopFOC()x100 → ");
     Serial.print(calls_made);
-    Serial.println(" times");
+    Serial.print(" sensor calls: ");
+    Serial.println(test2_pass ? "✓" : "✗");
 
-    if (calls_made >= 100) {
-        Serial.println("  ✓ PASS: SimpleFOC IS calling getSensorAngle()");
-    } else if (calls_made > 0) {
-        Serial.println("  ⚠ PARTIAL: SimpleFOC calling sensor, but less than expected");
-    } else {
-        Serial.println("  ✗ FAIL: SimpleFOC NOT calling getSensorAngle()!");
-        Serial.println("    → This is the root cause! Sensor not being read.");
+    if (!test2_pass) {
+        Serial.println("  ✗ FATAL: Sensor not being read! Check motor.linkSensor()");
+        motorControl.disable();
+        return;
     }
 
-    delay(500);
-
-    Serial.println("\n═══════════════════════════════════════════════════════════════════");
-    Serial.println("TEST 3: shaft_angle Update Verification");
-    Serial.println("═══════════════════════════════════════════════════════════════════");
-
-    // Read shaft_angle before and after loopFOC while physically moving motor
-    Serial.println("  NOTE: Manually rotate motor shaft during this test!");
-    Serial.println("  Reading shaft_angle before/after loopFOC()...");
-    delay(2000);  // Give user time to prepare
-
-    float shaft_before = motor.shaft_angle;
-    Serial.print("  shaft_angle before: ");
-    Serial.print(radiansToDegrees(shaft_before), 2);
-    Serial.println("°");
-
-    // Run loopFOC multiple times
-    for (int i = 0; i < 50; i++) {
-        motor.loopFOC();
-        delay(20);
-    }
-
-    float shaft_after = motor.shaft_angle;
-    Serial.print("  shaft_angle after:  ");
-    Serial.print(radiansToDegrees(shaft_after), 2);
-    Serial.println("°");
-
-    float shaft_change = abs(radiansToDegrees(shaft_after - shaft_before));
-    Serial.print("  Change: ");
-    Serial.print(shaft_change, 2);
-    Serial.println("°");
-
-    if (shaft_change > 1.0) {
-        Serial.println("  ✓ PASS: shaft_angle IS updating from sensor");
-    } else {
-        Serial.println("  ⚠ shaft_angle barely changed (did you rotate the motor?)");
-    }
-
-    delay(500);
-
-    Serial.println("\n═══════════════════════════════════════════════════════════════════");
-    Serial.println("TEST 4: Position Control with Detailed Logging");
-    Serial.println("═══════════════════════════════════════════════════════════════════");
-
-    // Get current position and target +30°
-    float start_pos = radiansToDegrees(motor.shaft_angle);
-    float target_pos = start_pos + 30.0;
-    if (target_pos >= 360.0) target_pos -= 360.0;
-
-    Serial.print("  Current position: ");
-    Serial.print(start_pos, 1);
-    Serial.println("°");
-    Serial.print("  Target position:  ");
-    Serial.print(target_pos, 1);
-    Serial.println("°");
-
-    motorControl.moveToPosition(target_pos);
-
-    Serial.println("\n  Time  | shaft_angle | velocity  | Vq    | sensor_calls | Δshaft");
-    Serial.println("  ------|-------------|-----------|-------|--------------|-------");
-
-    float prev_shaft = motor.shaft_angle;
-    encoder.resetCallCount();
-    unsigned long start_time = millis();
-
-    for (int i = 0; i < 30; i++) {  // 3 seconds
-        motorControl.update();
-        delay(100);
-
-        float curr_shaft = motor.shaft_angle;
-        float shaft_delta = radiansToDegrees(curr_shaft - prev_shaft);
-        unsigned long elapsed = millis() - start_time;
-
-        Serial.print("  ");
-        Serial.print(elapsed);
-        Serial.print("ms | ");
-        Serial.print(radiansToDegrees(curr_shaft), 1);
-        Serial.print("°     | ");
-        Serial.print(radiansToDegrees(motor.shaft_velocity), 1);
-        Serial.print("°/s  | ");
-        Serial.print(motor.voltage.q, 1);
-        Serial.print("V  | ");
-        Serial.print(encoder.getCallCount());
-        Serial.print("          | ");
-        Serial.print(shaft_delta, 2);
-        Serial.println("°");
-
-        prev_shaft = curr_shaft;
-    }
-
-    Serial.print("\n  Total getSensorAngle() calls: ");
-    Serial.println(encoder.getCallCount());
-
-    delay(500);
-
-    Serial.println("\n═══════════════════════════════════════════════════════════════════");
-    Serial.println("TEST 5: Velocity Mode Test");
-    Serial.println("═══════════════════════════════════════════════════════════════════");
-
-    // Switch to velocity mode
-    Serial.println("  Switching to velocity control mode...");
-    motor.controller = MotionControlType::velocity;
-
-    float target_velocity = degreesToRadians(60.0);  // 60°/s = 10 RPM
-    Serial.print("  Target velocity: 60°/s (");
-    Serial.print(target_velocity, 2);
-    Serial.println(" rad/s)");
-
-    start_time = millis();
-    encoder.resetCallCount();
-    float start_shaft = motor.shaft_angle;
-
-    Serial.println("\n  Time  | shaft_angle | velocity  | Vq    | movement");
-    Serial.println("  ------|-------------|-----------|-------|----------");
-
-    for (int i = 0; i < 20; i++) {  // 2 seconds
-        motor.loopFOC();
-        motor.move(target_velocity);
-        delay(100);
-
-        float movement = radiansToDegrees(motor.shaft_angle - start_shaft);
-        unsigned long elapsed = millis() - start_time;
-
-        Serial.print("  ");
-        Serial.print(elapsed);
-        Serial.print("ms | ");
-        Serial.print(radiansToDegrees(motor.shaft_angle), 1);
-        Serial.print("°     | ");
-        Serial.print(radiansToDegrees(motor.shaft_velocity), 1);
-        Serial.print("°/s  | ");
-        Serial.print(motor.voltage.q, 1);
-        Serial.print("V  | ");
-        Serial.print(movement, 1);
-        Serial.println("°");
-    }
-
-    float total_movement = abs(radiansToDegrees(motor.shaft_angle - start_shaft));
-    Serial.print("\n  Total movement in velocity mode: ");
-    Serial.print(total_movement, 1);
-    Serial.println("°");
-
-    if (total_movement > 30.0) {
-        Serial.println("  ✓ PASS: Motor moves in velocity mode!");
-        Serial.println("    → Issue is specific to position (angle) mode");
-    } else {
-        Serial.println("  ✗ FAIL: Motor doesn't move in velocity mode either");
-        Serial.println("    → Issue is in loopFOC() or sensor");
-    }
-
-    // Restore angle mode
-    motor.controller = MotionControlType::angle;
-
-    delay(500);
-
-    Serial.println("\n═══════════════════════════════════════════════════════════════════");
-    Serial.println("TEST 6: Open-Loop Mode Test (bypasses sensor)");
-    Serial.println("═══════════════════════════════════════════════════════════════════");
-
-    Serial.println("  Switching to open-loop angle mode (no sensor feedback)...");
+    //-------------------------------------------------------------------------
+    // TEST 3: Open-loop (verify hardware works, bypasses FOC)
+    //-------------------------------------------------------------------------
+    Serial.println("\n─── T3: Open-Loop Hardware Test ──────────────────────────────");
     motor.controller = MotionControlType::angle_openloop;
-
-    start_shaft = motor.shaft_angle;
+    float start_shaft = motor.shaft_angle;
     float openloop_target = start_shaft + degreesToRadians(30.0);
 
-    Serial.print("  Commanding +30° open-loop rotation...\n");
-
-    start_time = millis();
     for (int i = 0; i < 20; i++) {
         motor.loopFOC();
         motor.move(openloop_target);
         delay(100);
     }
 
-    // Read encoder directly
     encoder.update();
     float encoder_movement = abs(encoder.getDegrees() - radiansToDegrees(start_shaft));
     if (encoder_movement > 180.0) encoder_movement = 360.0 - encoder_movement;
+    test3_pass = encoder_movement > 10.0;
 
-    Serial.print("  Encoder shows movement: ");
+    Serial.print("  Open-loop +30° → encoder moved ");
     Serial.print(encoder_movement, 1);
-    Serial.println("°");
+    Serial.print("°: ");
+    Serial.println(test3_pass ? "✓ HW OK" : "✗ check wiring/power");
 
-    if (encoder_movement > 10.0) {
-        Serial.println("  ✓ PASS: Motor moves in open-loop mode!");
-        Serial.println("    → Hardware is working, issue is closed-loop sensor feedback");
-    } else {
-        Serial.println("  ✗ FAIL: Motor doesn't move in open-loop either");
-        Serial.println("    → Check hardware (driver, wiring, power)");
-    }
-
-    // Restore angle mode
     motor.controller = MotionControlType::angle;
 
-    delay(500);
+    if (!test3_pass) {
+        Serial.println("  ✗ FATAL: Motor doesn't move! Check driver, wiring, power.");
+        motorControl.disable();
+        return;
+    }
 
-    Serial.println("\n═══════════════════════════════════════════════════════════════════");
-    Serial.println("TEST 7: Direct setPhaseVoltage() Rotation (like calibration)");
-    Serial.println("═══════════════════════════════════════════════════════════════════");
-
-    Serial.println("  This replicates what works during calibration...");
-
+    //-------------------------------------------------------------------------
+    // TEST 4: setPhaseVoltage (verify driver phases work)
+    //-------------------------------------------------------------------------
+    Serial.println("\n─── T4: Phase Voltage Test ───────────────────────────────────");
     encoder.update();
     float start_enc = encoder.getDegrees();
 
-    Serial.print("  Starting encoder position: ");
-    Serial.print(start_enc, 1);
-    Serial.println("°");
-
-    Serial.println("  Rotating electrical angle 0° → 90° → 180° → 270° → 360°...\n");
-
     float test_angles[] = {0, _PI_2, PI, _3PI_2, _2PI};
+    Serial.print("  Elec: ");
     for (int i = 0; i < 5; i++) {
         motor.setPhaseVoltage(6.0, 0, test_angles[i]);
-        delay(500);
-
+        delay(300);
         encoder.update();
-        float pos = encoder.getDegrees();
-        float movement = pos - start_enc;
+        float movement = encoder.getDegrees() - start_enc;
         if (movement < -180.0) movement += 360.0;
         if (movement > 180.0) movement -= 360.0;
 
-        Serial.print("  Elec angle ");
-        Serial.print(radiansToDegrees(test_angles[i]), 0);
-        Serial.print("°: Encoder=");
-        Serial.print(pos, 1);
-        Serial.print("° (moved ");
-        Serial.print(movement, 1);
-        Serial.println("°)");
+        Serial.print(int(radiansToDegrees(test_angles[i])));
+        Serial.print("°→");
+        Serial.print(movement, 0);
+        Serial.print(" ");
     }
+    Serial.println();
 
-    // Stop voltage
     motor.setPhaseVoltage(0, 0, 0);
-
     encoder.update();
-    float final_enc = encoder.getDegrees();
-    total_movement = abs(final_enc - start_enc);
-    if (total_movement > 180.0) total_movement = 360.0 - total_movement;
+    float phase_movement = abs(encoder.getDegrees() - start_enc);
+    if (phase_movement > 180.0) phase_movement = 360.0 - phase_movement;
+    test4_pass = phase_movement > 5.0;
 
-    Serial.print("\n  Total movement with setPhaseVoltage(): ");
-    Serial.print(total_movement, 1);
-    Serial.println("°");
+    Serial.print("  Total: ");
+    Serial.print(phase_movement, 1);
+    Serial.print("°: ");
+    Serial.println(test4_pass ? "✓ driver OK" : "✗ check driver");
 
-    if (total_movement > 5.0) {
-        Serial.println("  ✓ PASS: setPhaseVoltage() moves motor!");
-        Serial.println("    → Hardware works, SimpleFOC FOC loop has issue");
-    } else {
-        Serial.println("  ✗ FAIL: setPhaseVoltage() doesn't move motor");
-        Serial.println("    → Check driver enable, power supply");
-    }
-
-    Serial.println("\n═══════════════════════════════════════════════════════════════════");
-    Serial.println("                         SUMMARY");
-    Serial.println("═══════════════════════════════════════════════════════════════════");
-
-    Serial.println("\nDiagnostic complete. Based on results above:");
-    Serial.println("  • If TEST 2 failed → SimpleFOC not reading sensor");
-    Serial.println("  • If TEST 4 shows Δshaft=0 → shaft_angle not updating from sensor");
-    Serial.println("  • If TEST 5 passes but TEST 4 fails → Position PID issue");
-    Serial.println("  • If TEST 6 passes → Closed-loop feedback issue");
-    Serial.println("  • If TEST 7 passes → FOC loop not applying correct voltages");
-    Serial.println("\nReview output above to identify root cause.\n");
-
-    // TEST 8: Try different zero_electric_angle offsets
-    Serial.println("═══════════════════════════════════════════════════════════════════");
-    Serial.println("TEST 8: Zero Electric Angle Offset Search");
-    Serial.println("═══════════════════════════════════════════════════════════════════");
-    Serial.println("  Testing different zero_electric_angle offsets to find correct alignment...\n");
-
+    //-------------------------------------------------------------------------
+    // TEST 5: Zero Angle Offset Search (CRITICAL - do this early!)
+    //-------------------------------------------------------------------------
+    Serial.println("\n─── T5: Zero Angle Offset Search (CRITICAL) ──────────────────");
+    Serial.println("  Finding correct electrical alignment...");
     motorControl.enable();
-    delay(100);
+    delay(50);
 
     float original_zero = motor.zero_electric_angle;
     float best_offset = 0;
     float best_movement = 0;
 
-    // Test offsets: 0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°
     float offsets[] = {0, PI/4, PI/2, 3*PI/4, PI, 5*PI/4, 3*PI/2, 7*PI/4};
-    const char* offset_names[] = {"0°", "45°", "90°", "135°", "180°", "225°", "270°", "315°"};
+    int offset_degs[] = {0, 45, 90, 135, 180, 225, 270, 315};
 
+    Serial.print("  ");
     for (int i = 0; i < 8; i++) {
-        // Set new zero_electric_angle
         motor.zero_electric_angle = normalizeRadians(original_zero + offsets[i]);
-
-        // Read starting position
         encoder.update();
-        float start_enc = encoder.getDegrees();
+        start_enc = encoder.getDegrees();
 
-        // Try to move +20° using velocity mode (simpler than position)
         motor.controller = MotionControlType::velocity;
-        float target_vel = degreesToRadians(60.0);  // 60°/s
-
-        // Run for 500ms
+        float target_vel = degreesToRadians(60.0);
         for (int j = 0; j < 50; j++) {
             motor.loopFOC();
             motor.move(target_vel);
             delay(10);
         }
 
-        // Read final position
         encoder.update();
-        float end_enc = encoder.getDegrees();
-        float movement = end_enc - start_enc;
+        float movement = encoder.getDegrees() - start_enc;
         if (movement < -180.0) movement += 360.0;
         if (movement > 180.0) movement -= 360.0;
-
-        Serial.print("  Offset ");
-        Serial.print(offset_names[i]);
-        Serial.print(" (zero=");
-        Serial.print(radiansToDegrees(motor.zero_electric_angle), 1);
-        Serial.print("°): moved ");
-        Serial.print(movement, 1);
-        Serial.print("°");
 
         if (movement > best_movement) {
             best_movement = movement;
             best_offset = offsets[i];
-            Serial.print(" ← BEST so far!");
         }
-        Serial.println();
 
-        // Stop motor briefly
+        Serial.print(offset_degs[i]);
+        Serial.print("°:");
+        Serial.print(movement, 0);
+        Serial.print(" ");
+
         motor.move(0);
-        delay(200);
+        delay(100);
     }
-
-    // Restore angle mode
-    motor.controller = MotionControlType::angle;
-
     Serial.println();
-    if (best_movement > 10.0) {
-        Serial.print("  ✓ FOUND WORKING OFFSET: ");
-        Serial.print(radiansToDegrees(best_offset), 0);
-        Serial.println("°");
-        Serial.print("    Best movement: ");
-        Serial.print(best_movement, 1);
-        Serial.println("°");
-        Serial.print("    Recommended zero_electric_angle: ");
-        Serial.print(radiansToDegrees(normalizeRadians(original_zero + best_offset)), 1);
-        Serial.println("°");
-        Serial.println("\n  → Update calibration or add this offset to zero_electric_angle");
 
-        // Apply the best offset for user to test
+    motor.controller = MotionControlType::angle;
+    test5_offset_found = best_movement > 10.0;
+    best_offset_deg = radiansToDegrees(best_offset);
+
+    if (test5_offset_found) {
         motor.zero_electric_angle = normalizeRadians(original_zero + best_offset);
-        Serial.print("    Applied offset - run 'motor_test' to verify!\n");
+        Serial.print("  ✓ Best offset: ");
+        Serial.print(best_offset_deg, 0);
+        Serial.print("° (moved ");
+        Serial.print(best_movement, 1);
+        Serial.print("°) → zero=");
+        Serial.print(radiansToDegrees(motor.zero_electric_angle), 1);
+        Serial.println("° APPLIED");
     } else {
-        Serial.println("  ✗ No offset produced significant movement.");
-        Serial.println("    → Issue may be sensor_direction (try toggling FORCE_SENSOR_DIRECTION_CW)");
-        Serial.println("    → Or try letting SimpleFOC do full auto-calibration");
-        motor.zero_electric_angle = original_zero;  // Restore original
+        Serial.println("  ✗ No offset worked! Try toggling FORCE_SENSOR_DIRECTION_CW");
+        motor.zero_electric_angle = original_zero;
     }
 
-    Serial.println();
+    //-------------------------------------------------------------------------
+    // TEST 6: Position Control (with corrected offset)
+    //-------------------------------------------------------------------------
+    Serial.println("\n─── T6: Position Control (+30°) ──────────────────────────────");
+    float start_pos = radiansToDegrees(motor.shaft_angle);
+    float target_pos = start_pos + 30.0;
+    if (target_pos >= 360.0) target_pos -= 360.0;
 
-    // Clean up: restore motor to known good state
+    Serial.print("  ");
+    Serial.print(start_pos, 1);
+    Serial.print("° → ");
+    Serial.print(target_pos, 1);
+    Serial.println("°");
+    Serial.println("  Time   | Pos°   | Vel°/s | Vq   | Δ°");
+
+    motorControl.moveToPosition(target_pos);
+    float prev_shaft = motor.shaft_angle;
+    unsigned long start_time = millis();
+
+    // 8 samples over 2.4 seconds (every 300ms)
+    for (int i = 0; i < 8; i++) {
+        for (int j = 0; j < 3; j++) {
+            motorControl.update();
+            delay(100);
+        }
+
+        float curr_shaft = motor.shaft_angle;
+        float shaft_delta = radiansToDegrees(curr_shaft - prev_shaft);
+        unsigned long elapsed = millis() - start_time;
+
+        Serial.print("  ");
+        if (elapsed < 1000) Serial.print(" ");
+        Serial.print(elapsed);
+        Serial.print("ms | ");
+        Serial.print(radiansToDegrees(curr_shaft), 1);
+        Serial.print(" | ");
+        Serial.print(radiansToDegrees(motor.shaft_velocity), 1);
+        Serial.print(" | ");
+        Serial.print(motor.voltage.q, 1);
+        Serial.print(" | ");
+        if (shaft_delta >= 0) Serial.print("+");
+        Serial.println(shaft_delta, 1);
+
+        prev_shaft = curr_shaft;
+    }
+
+    test6_movement = abs(radiansToDegrees(motor.shaft_angle) - start_pos);
+    if (test6_movement > 180.0) test6_movement = 360.0 - test6_movement;
+    test6_pass = test6_movement > 20.0;
+
+    Serial.print("  Total: ");
+    Serial.print(test6_movement, 1);
+    Serial.print("° ");
+    Serial.println(test6_pass ? "✓" : "✗ stalled");
+
+    //-------------------------------------------------------------------------
+    // TEST 7: Velocity Mode (with corrected offset)
+    //-------------------------------------------------------------------------
+    Serial.println("\n─── T7: Velocity Mode (60°/s) ────────────────────────────────");
+    motor.controller = MotionControlType::velocity;
+    float target_velocity = degreesToRadians(60.0);
+    start_shaft = motor.shaft_angle;
+    start_time = millis();
+
+    Serial.println("  Time   | Pos°   | Vel°/s | Vq   | Move°");
+
+    // 8 samples over 1.6 seconds
+    for (int i = 0; i < 8; i++) {
+        for (int j = 0; j < 2; j++) {
+            motor.loopFOC();
+            motor.move(target_velocity);
+            delay(100);
+        }
+
+        float movement = radiansToDegrees(motor.shaft_angle - start_shaft);
+        unsigned long elapsed = millis() - start_time;
+
+        Serial.print("  ");
+        if (elapsed < 1000) Serial.print(" ");
+        Serial.print(elapsed);
+        Serial.print("ms | ");
+        Serial.print(radiansToDegrees(motor.shaft_angle), 1);
+        Serial.print(" | ");
+        Serial.print(radiansToDegrees(motor.shaft_velocity), 1);
+        Serial.print(" | ");
+        Serial.print(motor.voltage.q, 1);
+        Serial.print(" | ");
+        Serial.println(movement, 1);
+    }
+
+    test7_movement = abs(radiansToDegrees(motor.shaft_angle - start_shaft));
+    test7_pass = test7_movement > 20.0;
+
+    Serial.print("  Total: ");
+    Serial.print(test7_movement, 1);
+    Serial.print("° ");
+    Serial.println(test7_pass ? "✓" : "✗ slow");
+
     motor.controller = MotionControlType::angle;
-    motor.zero_electric_angle = original_zero;  // Always restore original calibration
-    motorControl.disable();
 
-    Serial.println("  Motor state restored. Run 'c' to recalibrate if needed.\n");
+    //-------------------------------------------------------------------------
+    // SUMMARY
+    //-------------------------------------------------------------------------
+    Serial.println("\n══════════════════════════════════════════════════════════════");
+    Serial.println("                         SUMMARY");
+    Serial.println("══════════════════════════════════════════════════════════════");
+    Serial.print("  T2 Sensor:    ");
+    Serial.println(test2_pass ? "✓" : "✗");
+    Serial.print("  T3 Open-loop: ");
+    Serial.println(test3_pass ? "✓ hardware OK" : "✗");
+    Serial.print("  T4 Phases:    ");
+    Serial.println(test4_pass ? "✓ driver OK" : "✗");
+    Serial.print("  T5 Offset:    ");
+    if (test5_offset_found) {
+        Serial.print("✓ found ");
+        Serial.print(best_offset_deg, 0);
+        Serial.println("°");
+    } else {
+        Serial.println("✗ none worked");
+    }
+    Serial.print("  T6 Position:  ");
+    Serial.print(test6_movement, 1);
+    Serial.print("° ");
+    Serial.println(test6_pass ? "✓" : "✗");
+    Serial.print("  T7 Velocity:  ");
+    Serial.print(test7_movement, 1);
+    Serial.print("° ");
+    Serial.println(test7_pass ? "✓" : "✗");
+
+    Serial.println("\nDiagnosis:");
+    if (!test3_pass) {
+        Serial.println("  → Hardware issue: check motor wiring, driver, power");
+    } else if (!test5_offset_found) {
+        Serial.println("  → Try toggling FORCE_SENSOR_DIRECTION_CW in config.h");
+    } else if (!test6_pass && !test7_pass) {
+        Serial.println("  → Closed-loop failing - check PID gains");
+    } else if (test6_pass && test7_pass) {
+        Serial.println("  → Motor working! Zero offset applied for this session.");
+        Serial.println("  → To make permanent: update calibration or config");
+    } else {
+        Serial.println("  → Partial success - check PID tuning");
+    }
+
+    // Cleanup - keep the good offset if found
+    motor.controller = MotionControlType::angle;
+    if (!test5_offset_found) {
+        motor.zero_electric_angle = original_zero;
+    }
+    motorControl.disable();
+    Serial.println("\nMotor disabled. Run 'motor_test' to verify, 'c' to recalibrate.\n");
 }
 
 void runFullTest(MotorController& motorControl) {
