@@ -938,34 +938,14 @@ void runSimpleFOCDiagnostic(MotorController& motorControl) {
     }
 
     //-------------------------------------------------------------------------
-    // IMPORTANT: Reset SimpleFOC state before T6/T7
-    // The sensor tracks full_rotations which accumulates during T5
+    // NOTE: Don't try to reset SimpleFOC state - it manages continuous angles.
+    // Our position control already normalizes errors to ±180° (shortest path).
+    // Just sync with current position and let SimpleFOC do its thing.
     //-------------------------------------------------------------------------
-    Serial.println("\n  [Resetting SimpleFOC state...]");
-
-    // Debug: show current state before reset
-    encoder.update();
-    Serial.print("  Before reset: shaft_angle=");
+    motor.loopFOC();  // Sync sensor state
+    Serial.print("\n  Current shaft_angle: ");
     Serial.print(radiansToDegrees(motor.shaft_angle), 1);
-    Serial.print("° sensor.getAngle()=");
-    Serial.print(radiansToDegrees(motor.sensor->getAngle()), 1);
-    Serial.print("° encoder=");
-    Serial.print(encoder.getDegrees(), 1);
     Serial.println("°");
-
-    // Reset sensor's full_rotation counter using proper method
-    encoder.resetRotationTracking();  // Clears full_rotations and resets angle_prev
-
-    // CRITICAL: Let SimpleFOC recalculate shaft_angle - don't manually assign!
-    // SimpleFOC calculates: shaft_angle = sensor_direction * sensor->getAngle()
-    // If we manually set shaft_angle, loopFOC() will immediately overwrite it.
-    // Instead, run loopFOC() to sync, then read the result.
-    motor.loopFOC();  // This updates shaft_angle correctly with sensor_direction
-
-    Serial.print("  After reset:  shaft_angle=");
-    Serial.print(radiansToDegrees(motor.shaft_angle), 1);
-    Serial.print("° (SimpleFOC calculated)");
-    Serial.println("");
 
     //-------------------------------------------------------------------------
     // TEST 6: Position Control (with corrected offset)
