@@ -27,11 +27,14 @@ void printStatus(MotorController& motorControl);
 // MOTOR TESTS
 //=============================================================================
 void runEncoderTest(MotorController& motorControl);
-void runPhaseTest(MotorController& motorControl);     // Test each driver phase individually
-void runAlignmentTest(MotorController& motorControl);  // Diagnostic test BEFORE calibration
+void runPhaseTest(MotorController& motorControl);
+void runAlignmentTest(MotorController& motorControl);
 void runMotorTest(MotorController& motorControl);
-void runPositionSweepTest(MotorController& motorControl);  // 5-position precision test
+void runPositionSweepTest(MotorController& motorControl);
 void runFullTest(MotorController& motorControl);
+
+// Diagnostic helper
+void logMotorState(MotorController& motorControl, const char* context);
 
 //=============================================================================
 // DIAGNOSTIC TESTS

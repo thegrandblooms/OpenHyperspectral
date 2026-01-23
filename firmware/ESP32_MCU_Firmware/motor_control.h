@@ -234,10 +234,6 @@ public:
     // Diagnostic: Get sensor call count (for debugging SimpleFOC integration)
     unsigned long getSensorCallCount() { return encoder.getCallCount(); }
 
-    // Testing functions
-    bool testDriverPhases();
-    bool testMotorAlignment();
-
     // Direct motor access for tests
     BLDCMotor& getMotor() { return motor; }
     MT6701Sensor& getEncoder() { return encoder; }
