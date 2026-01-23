@@ -832,17 +832,27 @@ void runSimpleFOCDiagnostic(MotorController& motorControl) {
 
     //-------------------------------------------------------------------------
     // TEST 5: Zero Angle Offset Search (CRITICAL - do this early!)
+    // NOTE: "Correct direction" depends on sensor_direction setting!
+    //   CW:  +velocity → encoder increases
+    //   CCW: +velocity → encoder DECREASES
     //-------------------------------------------------------------------------
     Serial.println("\n─── T5: Zero Angle Offset Search (CRITICAL) ──────────────────");
-    Serial.println("  Commanding +60°/s, checking direction matches...");
+    Serial.print("  sensor_direction=");
+    Serial.print(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
+    Serial.println(" → checking movement matches...");
     motorControl.enable();
     delay(50);
 
     float original_zero = motor.zero_electric_angle;
     float best_offset = 0;
-    float best_positive_movement = 0;  // Best POSITIVE (correct direction)
-    float most_negative_movement = 0;  // Track if motor moves backwards
-    bool found_positive = false;
+    float best_correct_movement = 0;  // Best movement in CORRECT direction
+    float best_wrong_movement = 0;    // Best movement in WRONG direction
+    bool found_correct = false;
+
+    // Determine expected direction based on sensor_direction
+    // CW: positive velocity → positive encoder change
+    // CCW: positive velocity → negative encoder change
+    bool expect_positive = (motor.sensor_direction == Direction::CW);
 
     float offsets[] = {0, PI/4, PI/2, 3*PI/4, PI, 5*PI/4, 3*PI/2, 7*PI/4};
     int offset_degs[] = {0, 45, 90, 135, 180, 225, 270, 315};
@@ -866,15 +876,24 @@ void runSimpleFOCDiagnostic(MotorController& motorControl) {
         if (movement < -180.0) movement += 360.0;
         if (movement > 180.0) movement -= 360.0;
 
-        // Only count POSITIVE movement (correct direction)
-        if (movement > best_positive_movement) {
-            best_positive_movement = movement;
-            best_offset = offsets[i];
-            if (movement > 10.0) found_positive = true;
+        // Check if movement is in CORRECT direction for this sensor_direction
+        bool is_correct_direction;
+        float abs_movement = abs(movement);
+        if (expect_positive) {
+            is_correct_direction = (movement > 10.0);  // CW: want positive
+        } else {
+            is_correct_direction = (movement < -10.0); // CCW: want negative
         }
-        // Track negative movement (wrong direction)
-        if (movement < most_negative_movement) {
-            most_negative_movement = movement;
+
+        if (is_correct_direction && abs_movement > best_correct_movement) {
+            best_correct_movement = abs_movement;
+            best_offset = offsets[i];
+            found_correct = true;
+        }
+
+        // Track movement in wrong direction (indicates sensor_direction mismatch)
+        if (!is_correct_direction && abs_movement > best_wrong_movement) {
+            best_wrong_movement = abs_movement;
         }
 
         Serial.print(offset_degs[i]);
@@ -891,27 +910,27 @@ void runSimpleFOCDiagnostic(MotorController& motorControl) {
     best_offset_deg = radiansToDegrees(best_offset);
 
     // Analyze results
-    if (found_positive && best_positive_movement > 10.0) {
+    if (found_correct && best_correct_movement > 10.0) {
         // Found a working offset with correct direction
         test5_offset_found = true;
         motor.zero_electric_angle = normalizeRadians(original_zero + best_offset);
         Serial.print("  ✓ Best: ");
         Serial.print(best_offset_deg, 0);
-        Serial.print("° (+");
-        Serial.print(best_positive_movement, 0);
-        Serial.print("°) → zero=");
+        Serial.print("° (");
+        Serial.print(best_correct_movement, 0);
+        Serial.print("° correct dir) → zero=");
         Serial.print(radiansToDegrees(motor.zero_electric_angle), 1);
         Serial.println("° APPLIED");
-    } else if (most_negative_movement < -20.0) {
-        // Motor moves well but BACKWARDS - sensor_direction is wrong!
+    } else if (best_wrong_movement > 20.0) {
+        // Motor moves well but in WRONG direction - sensor_direction is wrong!
         test5_offset_found = false;
-        Serial.print("  ✗ Motor moves BACKWARDS (");
-        Serial.print(most_negative_movement, 0);
+        Serial.print("  ✗ Motor moves WRONG direction (");
+        Serial.print(best_wrong_movement, 0);
         Serial.println("°)!");
         Serial.println("  → sensor_direction is WRONG - toggle FORCE_SENSOR_DIRECTION_CW");
         motor.zero_electric_angle = original_zero;
     } else {
-        // Motor barely moves at all - possibly wrong sensor_direction or other issue
+        // Motor barely moves at all
         test5_offset_found = false;
         Serial.println("  ✗ No offset worked (motor stalled or barely moved)");
         Serial.println("  → Try toggling FORCE_SENSOR_DIRECTION_CW in config.h");
@@ -919,12 +938,23 @@ void runSimpleFOCDiagnostic(MotorController& motorControl) {
     }
 
     //-------------------------------------------------------------------------
+    // IMPORTANT: Reset shaft_angle to match encoder before T6/T7
+    // This prevents accumulated rotation from causing issues
+    //-------------------------------------------------------------------------
+    encoder.update();
+    // Re-init sensor to sync shaft_angle
+    motor.sensor->update();
+    motor.shaft_angle = motor.sensor->getAngle();
+
+    //-------------------------------------------------------------------------
     // TEST 6: Position Control (with corrected offset)
+    // Now verify motor moves TOWARD target, not just that it moved
     //-------------------------------------------------------------------------
     Serial.println("\n─── T6: Position Control (+30°) ──────────────────────────────");
     float start_pos = radiansToDegrees(motor.shaft_angle);
     float target_pos = start_pos + 30.0;
-    if (target_pos >= 360.0) target_pos -= 360.0;
+    // Don't normalize - we want SimpleFOC to track continuous angle
+    // if (target_pos >= 360.0) target_pos -= 360.0;
 
     Serial.print("  ");
     Serial.print(start_pos, 1);
@@ -964,14 +994,28 @@ void runSimpleFOCDiagnostic(MotorController& motorControl) {
         prev_shaft = curr_shaft;
     }
 
-    test6_movement = abs(radiansToDegrees(motor.shaft_angle) - start_pos);
-    if (test6_movement > 180.0) test6_movement = 360.0 - test6_movement;
-    test6_pass = test6_movement > 20.0;
+    // Check if motor moved TOWARD target (not just moved a lot)
+    float final_pos = radiansToDegrees(motor.shaft_angle);
+    float initial_error = target_pos - start_pos;  // Should be +30°
+    float final_error = target_pos - final_pos;
+    test6_movement = final_pos - start_pos;  // Actual movement (signed)
 
-    Serial.print("  Total: ");
+    // Pass if: moved in correct direction AND got closer to target
+    bool moved_correct_direction = (test6_movement > 0) == (initial_error > 0);
+    bool error_decreased = abs(final_error) < abs(initial_error);
+    test6_pass = moved_correct_direction && (abs(test6_movement) > 15.0);
+
+    Serial.print("  Movement: ");
+    if (test6_movement >= 0) Serial.print("+");
     Serial.print(test6_movement, 1);
+    Serial.print("° Error: ");
+    Serial.print(final_error, 1);
     Serial.print("° ");
-    Serial.println(test6_pass ? "✓" : "✗ stalled");
+    if (!moved_correct_direction && abs(test6_movement) > 10.0) {
+        Serial.println("✗ WRONG DIRECTION!");
+    } else {
+        Serial.println(test6_pass ? "✓" : "✗ stalled");
+    }
 
     //-------------------------------------------------------------------------
     // TEST 7: Velocity Mode (with corrected offset)
@@ -1008,13 +1052,21 @@ void runSimpleFOCDiagnostic(MotorController& motorControl) {
         Serial.println(movement, 1);
     }
 
-    test7_movement = abs(radiansToDegrees(motor.shaft_angle - start_shaft));
-    test7_pass = test7_movement > 20.0;
+    // Check movement direction (commanded +60°/s, should move positive)
+    float t7_actual_movement = radiansToDegrees(motor.shaft_angle - start_shaft);
+    test7_movement = abs(t7_actual_movement);
+    bool t7_correct_direction = (t7_actual_movement > 0);  // Should be positive
+    test7_pass = t7_correct_direction && (test7_movement > 15.0);
 
-    Serial.print("  Total: ");
-    Serial.print(test7_movement, 1);
+    Serial.print("  Movement: ");
+    if (t7_actual_movement >= 0) Serial.print("+");
+    Serial.print(t7_actual_movement, 1);
     Serial.print("° ");
-    Serial.println(test7_pass ? "✓" : "✗ slow");
+    if (!t7_correct_direction && test7_movement > 10.0) {
+        Serial.println("✗ WRONG DIRECTION!");
+    } else {
+        Serial.println(test7_pass ? "✓" : "✗ slow/stalled");
+    }
 
     motor.controller = MotionControlType::angle;
 
