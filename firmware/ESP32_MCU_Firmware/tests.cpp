@@ -938,13 +938,34 @@ void runSimpleFOCDiagnostic(MotorController& motorControl) {
     }
 
     //-------------------------------------------------------------------------
-    // IMPORTANT: Reset shaft_angle to match encoder before T6/T7
-    // This prevents accumulated rotation from causing issues
+    // IMPORTANT: Reset SimpleFOC state before T6/T7
+    // The sensor tracks full_rotations which accumulates during T5
     //-------------------------------------------------------------------------
+    Serial.println("\n  [Resetting SimpleFOC state...]");
+
+    // Debug: show current state before reset
     encoder.update();
-    // Re-init sensor to sync shaft_angle
+    Serial.print("  Before reset: shaft_angle=");
+    Serial.print(radiansToDegrees(motor.shaft_angle), 1);
+    Serial.print("° sensor.getAngle()=");
+    Serial.print(radiansToDegrees(motor.sensor->getAngle()), 1);
+    Serial.print("° encoder=");
+    Serial.print(encoder.getDegrees(), 1);
+    Serial.println("°");
+
+    // Reset sensor's full_rotation counter by re-initializing
     motor.sensor->update();
-    motor.shaft_angle = motor.sensor->getAngle();
+    float mech_angle = motor.sensor->getMechanicalAngle();  // 0 to 2π only
+    motor.shaft_angle = mech_angle;
+    // Also need to update sensor's internal state
+    motor.sensor->full_rotations = 0;
+    motor.sensor->angle_prev = mech_angle;
+
+    Serial.print("  After reset:  shaft_angle=");
+    Serial.print(radiansToDegrees(motor.shaft_angle), 1);
+    Serial.print("° mech_angle=");
+    Serial.print(radiansToDegrees(mech_angle), 1);
+    Serial.println("°");
 
     //-------------------------------------------------------------------------
     // TEST 6: Position Control (with corrected offset)
