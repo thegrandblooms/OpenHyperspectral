@@ -955,15 +955,17 @@ void runSimpleFOCDiagnostic(MotorController& motorControl) {
 
     // Reset sensor's full_rotation counter using proper method
     encoder.resetRotationTracking();  // Clears full_rotations and resets angle_prev
-    encoder.update();
-    float mech_angle = encoder.getMechanicalAngle();  // 0 to 2π only
-    motor.shaft_angle = mech_angle;  // Sync motor's shaft_angle to current position
+
+    // CRITICAL: Let SimpleFOC recalculate shaft_angle - don't manually assign!
+    // SimpleFOC calculates: shaft_angle = sensor_direction * sensor->getAngle()
+    // If we manually set shaft_angle, loopFOC() will immediately overwrite it.
+    // Instead, run loopFOC() to sync, then read the result.
+    motor.loopFOC();  // This updates shaft_angle correctly with sensor_direction
 
     Serial.print("  After reset:  shaft_angle=");
     Serial.print(radiansToDegrees(motor.shaft_angle), 1);
-    Serial.print("° mech_angle=");
-    Serial.print(radiansToDegrees(mech_angle), 1);
-    Serial.println("°");
+    Serial.print("° (SimpleFOC calculated)");
+    Serial.println("");
 
     //-------------------------------------------------------------------------
     // TEST 6: Position Control (with corrected offset)
