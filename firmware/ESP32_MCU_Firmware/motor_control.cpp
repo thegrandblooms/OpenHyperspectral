@@ -311,7 +311,10 @@ MotorController::MotorController()
       encoder(ENCODER_I2C_ADDR),
       motor_enabled(false),
       motor_calibrated(false),
-      target_position_deg(0.0f) {
+      target_position_deg(0.0f),
+      move_start_time(0),
+      move_timeout_printed(true),  // Start as true so we don't print before first move
+      last_target_for_timeout(-999.0f) {
 }
 
 void MotorController::begin() {
@@ -1085,6 +1088,10 @@ void MotorController::disable() {
     motor.disable();
     motor_enabled = false;
 
+    // Reset timeout tracking
+    move_start_time = 0;
+    move_timeout_printed = true;
+
     if (DEBUG_MOTOR) {
         Serial.println("Motor disabled");
     }
@@ -1094,6 +1101,10 @@ void MotorController::stop() {
     // Emergency stop - disable motor immediately
     motor.disable();
     motor_enabled = false;
+
+    // Reset timeout tracking
+    move_start_time = 0;
+    move_timeout_printed = true;
 
     if (DEBUG_MOTOR) {
         Serial.println("Motor stopped (emergency)");
@@ -1126,6 +1137,14 @@ void MotorController::moveToPosition(float position_deg) {
     // This handles inputs like 720° (becomes 0°) or -90° (becomes 270°)
     position_deg = fmod(position_deg, 360.0f);
     if (position_deg < 0) position_deg += 360.0f;
+
+    // Detect new move command (target changed)
+    if (abs(position_deg - last_target_for_timeout) > 0.1f) {
+        // New move - reset timeout tracking
+        move_start_time = millis();
+        move_timeout_printed = false;
+        last_target_for_timeout = position_deg;
+    }
 
     // Store target position (absolute coordinates 0-360°)
     target_position_deg = position_deg;
@@ -1476,4 +1495,57 @@ void MotorController::update() {
     // NOTE: AT_TARGET debug removed from here - it was using raw shaft_angle
     // which caused confusing duplicate logs with non-normalized angles.
     // The isAtTarget() function already has proper normalized debug output.
+
+    // Move timeout detection - print diagnostic if move takes too long
+    if (motor_enabled && move_start_time > 0 && !move_timeout_printed) {
+        bool at_target = isAtTarget();
+
+        if (at_target) {
+            // Move completed - reset timeout tracking
+            move_timeout_printed = true;
+        } else if (millis() - move_start_time > MOVE_TIMEOUT_MS) {
+            // Move timed out - print diagnostic and set flag
+            move_timeout_printed = true;
+
+            // Get comprehensive state for diagnostic
+            float enc_deg = encoder.getDegrees();
+            float foc_deg = radiansToDegrees(motor.shaft_angle);
+            // Normalize FOC to 0-360
+            foc_deg = fmod(foc_deg, 360.0f);
+            if (foc_deg < 0) foc_deg += 360.0f;
+
+            float vel_deg_s = radiansToDegrees(motor.shaft_velocity);
+            float pos_error = abs(enc_deg - target_position_deg);
+            if (pos_error > 180.0f) pos_error = 360.0f - pos_error;
+
+            // Compact diagnostic output (2 lines max)
+            Serial.print("[MOVE_TIMEOUT] Target:");
+            Serial.print(target_position_deg, 1);
+            Serial.print("° Enc:");
+            Serial.print(enc_deg, 1);
+            Serial.print("° FOC:");
+            Serial.print(foc_deg, 1);
+            Serial.print("° Err:");
+            Serial.print(pos_error, 1);
+            Serial.print("° Vel:");
+            Serial.print(vel_deg_s, 1);
+            Serial.print("°/s Vq:");
+            Serial.print(motor.voltage.q, 2);
+            Serial.println("V");
+
+            // Second line with more diagnostic info
+            Serial.print("  Dir:");
+            Serial.print(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
+            Serial.print(" Zero:");
+            Serial.print(radiansToDegrees(motor.zero_electric_angle), 1);
+            Serial.print("° Raw:");
+            Serial.print(encoder.getRawCount());
+            Serial.print(" Field:");
+            uint8_t field = encoder.getFieldStatus();
+            Serial.print(field == 0 ? "OK" : (field == 1 ? "STRONG" : (field == 2 ? "WEAK" : "?")));
+            Serial.print(" Δ(Enc-FOC):");
+            Serial.print(enc_deg - foc_deg, 1);
+            Serial.println("°");
+        }
+    }
 }
