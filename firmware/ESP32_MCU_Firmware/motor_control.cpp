@@ -250,9 +250,6 @@ int MT6701Sensor::needsSearch() {
         }
         return 1;  // Force index search during calibration
     }
-
-    // Debug message suppressed - too verbose during calibration
-
     return 0;  // Normal operation: absolute encoder, no search needed
 }
 
@@ -365,10 +362,10 @@ void MotorController::begin() {
         Serial.println("[MOTOR] Driver linked to motor");
     }
 
-    // Set motor limits (CRITICAL FOR GIMBAL MOTORS)
+    // Set motor limits
     // SIMPLEFOC BOUNDARY: convert degrees to radians
-    // Voltage limit: Research shows 6V is optimal for gimbal motors (prevents overshoot/cogging)
-    motor.voltage_limit = VOLTAGE_LIMIT_GIMBAL;  // 6V for smooth gimbal operation (was 9.6V)
+    // Voltage limit: 6V usually optimal for gimbal motors (prevents overshoot/cogging)
+    motor.voltage_limit = VOLTAGE_LIMIT_GIMBAL;
     motor.current_limit = CURRENT_LIMIT;
     motor.velocity_limit = degreesToRadians(MAX_VELOCITY_DEG);
 
