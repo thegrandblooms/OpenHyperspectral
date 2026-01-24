@@ -372,16 +372,18 @@ void runSimpleFOCDiagnostic(MotorController& mc) {
     Serial.printf("loopFOC()x100 → %lu calls: %s\n\n", calls, t2_pass ? "OK" : "FAIL");
     if (!t2_pass) { mc.disable(); return; }
 
-    // T3: Open-loop
+    // T3: Open-loop (use encoder as ground truth, not shaft_angle)
     Serial.println("--- T3: Open-Loop Test ---");
+    encoder.update();
+    float start_enc_deg = encoder.getDegrees();  // Use encoder, not shaft_angle
     motor.controller = MotionControlType::angle_openloop;
-    float start_shaft = motor.shaft_angle;
-    float ol_target = start_shaft + degreesToRadians(30.0);
+    float ol_target = motor.shaft_angle + degreesToRadians(30.0);
     for (int i = 0; i < 20; i++) { motor.loopFOC(); motor.move(ol_target); delay(100); }
     encoder.update();
-    float enc_move = abs(encoder.getDegrees() - radiansToDegrees(start_shaft));
-    if (enc_move > 180) enc_move = 360 - enc_move;
-    t3_pass = enc_move > 10;
+    float enc_move = encoder.getDegrees() - start_enc_deg;
+    if (enc_move < -180) enc_move += 360;
+    if (enc_move > 180) enc_move -= 360;
+    t3_pass = abs(enc_move) > 10;
     motor.controller = MotionControlType::angle;
     Serial.printf("Moved %.1f°: %s\n\n", enc_move, t3_pass ? "HW OK" : "FAIL - check wiring");
     if (!t3_pass) { mc.disable(); return; }
