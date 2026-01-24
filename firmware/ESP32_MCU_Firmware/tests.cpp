@@ -503,7 +503,7 @@ void runSimpleFOCDiagnostic(MotorController& mc) {
     // T7: Velocity Mode
     Serial.println("\n--- T7: Velocity Mode (60°/s) ---");
     motor.controller = MotionControlType::velocity;
-    start_shaft = motor.shaft_angle;
+    float start_shaft = motor.shaft_angle;
     t0 = millis();
 
     for (int i = 0; i < 8; i++) {
