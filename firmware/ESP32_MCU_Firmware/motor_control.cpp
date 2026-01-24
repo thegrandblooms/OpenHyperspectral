@@ -314,6 +314,7 @@ MotorController::MotorController()
       continuous_position_rad(0.0f),
       prev_encoder_rad(0.0f),
       move_start_time(0),
+      settling_start_time(0),
       move_timeout_printed(true),  // Start as true so we don't print before first move
       at_target_printed(true),     // Start as true so we don't print before first move
       last_target_for_timeout(-999.0f) {
@@ -1209,6 +1210,31 @@ void MotorController::update() {
     // Otherwise, SimpleFOC's PID sees huge jumps when encoder wraps.
     float encoder_rad = encoder.getSensorAngle();  // Raw position from hardware (0-2π)
 
+    // AUTO-SYNC: Check if continuous position has drifted from encoder
+    // This can happen after diag tests or other operations that spin the motor
+    float continuous_wrapped = fmod(continuous_position_rad, TWO_PI);
+    if (continuous_wrapped < 0) continuous_wrapped += TWO_PI;
+    float tracking_error = abs(encoder_rad - continuous_wrapped);
+    if (tracking_error > PI) tracking_error = TWO_PI - tracking_error;  // Shortest path
+
+    if (tracking_error > degreesToRadians(MAX_TRACKING_ERROR_DEG)) {
+        // Resync: set continuous position to match encoder
+        // Preserve the "direction" by finding closest equivalent
+        float offset = encoder_rad - continuous_wrapped;
+        if (offset > PI) offset -= TWO_PI;
+        if (offset < -PI) offset += TWO_PI;
+        continuous_position_rad += offset;
+        prev_encoder_rad = encoder_rad;
+
+        if (DEBUG_MOTOR) {
+            Serial.print("[SYNC] Tracking error ");
+            Serial.print(radiansToDegrees(tracking_error), 1);
+            Serial.print("° > ");
+            Serial.print(MAX_TRACKING_ERROR_DEG, 0);
+            Serial.println("° - resynced to encoder");
+        }
+    }
+
     // Detect wraparound: if encoder jumped by more than π, it wrapped
     float delta = encoder_rad - prev_encoder_rad;
     if (delta > PI) {
@@ -1251,56 +1277,65 @@ void MotorController::update() {
     // which caused confusing duplicate logs with non-normalized angles.
     // The isAtTarget() function already has proper normalized debug output.
 
-    // Move timeout detection - print diagnostic if move takes too long
+    // Move timeout detection with settling awareness
     if (motor_enabled && move_start_time > 0 && !move_timeout_printed) {
         bool at_target = isAtTarget();
 
         if (at_target) {
             // Move completed - reset timeout tracking
             move_timeout_printed = true;
-        } else if (millis() - move_start_time > MOVE_TIMEOUT_MS) {
-            // Move timed out - print diagnostic and set flag
-            move_timeout_printed = true;
-
-            // Get comprehensive state for diagnostic
+            settling_start_time = 0;
+        } else {
+            // Check if we're "close enough" (settling)
             float enc_deg = encoder.getDegrees();
-            float foc_deg = radiansToDegrees(motor.shaft_angle);
-            // Normalize FOC to 0-360
-            foc_deg = fmod(foc_deg, 360.0f);
-            if (foc_deg < 0) foc_deg += 360.0f;
-
-            float vel_deg_s = radiansToDegrees(motor.shaft_velocity);
+            float vel_deg_s = abs(radiansToDegrees(motor.shaft_velocity));
             float pos_error = abs(enc_deg - target_position_deg);
             if (pos_error > 180.0f) pos_error = 360.0f - pos_error;
 
-            // Compact diagnostic output (2 lines max)
-            Serial.print("[MOVE_TIMEOUT] Target:");
-            Serial.print(target_position_deg, 1);
-            Serial.print("° Enc:");
-            Serial.print(enc_deg, 1);
-            Serial.print("° FOC:");
-            Serial.print(foc_deg, 1);
-            Serial.print("° Err:");
-            Serial.print(pos_error, 1);
-            Serial.print("° Vel:");
-            Serial.print(vel_deg_s, 1);
-            Serial.print("°/s Vq:");
-            Serial.print(motor.voltage.q, 2);
-            Serial.println("V");
+            bool is_settling = (pos_error < SETTLING_ERROR_DEG) && (vel_deg_s < SETTLING_VEL_DEG_S);
 
-            // Second line with more diagnostic info
-            Serial.print("  Dir:");
-            Serial.print(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
-            Serial.print(" Zero:");
-            Serial.print(radiansToDegrees(motor.zero_electric_angle), 1);
-            Serial.print("° Raw:");
-            Serial.print(encoder.getRawCount());
-            Serial.print(" Field:");
-            uint8_t field = encoder.getFieldStatus();
-            Serial.print(field == 0 ? "OK" : (field == 1 ? "STRONG" : (field == 2 ? "WEAK" : "?")));
-            Serial.print(" Δ(Enc-FOC):");
-            Serial.print(enc_deg - foc_deg, 1);
-            Serial.println("°");
+            if (is_settling) {
+                // Start or continue settling timer
+                if (settling_start_time == 0) {
+                    settling_start_time = millis();
+                } else if (millis() - settling_start_time > SETTLING_TIME_MS) {
+                    // Settled! Consider this a success, not a timeout
+                    move_timeout_printed = true;  // Don't print timeout
+                    settling_start_time = 0;
+                }
+            } else {
+                // Not close enough - reset settling timer
+                settling_start_time = 0;
+
+                // Check for hard timeout (truly stuck)
+                if (millis() - move_start_time > MOVE_TIMEOUT_MS) {
+                    move_timeout_printed = true;
+
+                    float foc_deg = radiansToDegrees(motor.shaft_angle);
+                    foc_deg = fmod(foc_deg, 360.0f);
+                    if (foc_deg < 0) foc_deg += 360.0f;
+
+                    Serial.print("[MOVE_TIMEOUT] Target:");
+                    Serial.print(target_position_deg, 1);
+                    Serial.print("° Enc:");
+                    Serial.print(enc_deg, 1);
+                    Serial.print("° Err:");
+                    Serial.print(pos_error, 1);
+                    Serial.print("° Vel:");
+                    Serial.print(vel_deg_s, 1);
+                    Serial.print("°/s Vq:");
+                    Serial.print(motor.voltage.q, 2);
+                    Serial.println("V");
+
+                    Serial.print("  Dir:");
+                    Serial.print(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
+                    Serial.print(" Zero:");
+                    Serial.print(radiansToDegrees(motor.zero_electric_angle), 1);
+                    Serial.print("° Δ(Enc-FOC):");
+                    Serial.print(enc_deg - foc_deg, 1);
+                    Serial.println("°");
+                }
+            }
         }
     }
 }

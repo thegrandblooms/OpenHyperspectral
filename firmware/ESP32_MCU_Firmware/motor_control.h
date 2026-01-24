@@ -253,12 +253,19 @@ private:
     float continuous_position_rad;  // Position without wraparound (can be < 0 or > 2π)
     float prev_encoder_rad;         // Previous encoder reading for wraparound detection
 
-    // Move timeout tracking
+    // Move timeout and settling tracking
     unsigned long move_start_time;      // When current move started (millis)
+    unsigned long settling_start_time;  // When we entered "close enough" state
     bool move_timeout_printed;          // Flag to only print timeout once per move
     bool at_target_printed;             // Flag to only print AT_TARGET once per move
     float last_target_for_timeout;      // Track target to detect new moves
-    static constexpr unsigned long MOVE_TIMEOUT_MS = 1000;  // 1 second timeout
+    static constexpr unsigned long MOVE_TIMEOUT_MS = 3000;   // 3 second hard timeout
+    static constexpr unsigned long SETTLING_TIME_MS = 200;   // 200ms settling window
+    static constexpr float SETTLING_ERROR_DEG = 1.0f;        // Consider "close" if < 1°
+    static constexpr float SETTLING_VEL_DEG_S = 5.0f;        // And velocity < 5°/s
+
+    // Auto-sync: resync SimpleFOC to encoder if they drift apart
+    static constexpr float MAX_TRACKING_ERROR_DEG = 5.0f;    // Resync if error > 5°
 
     // Calibration helpers
     bool runCalibration();
