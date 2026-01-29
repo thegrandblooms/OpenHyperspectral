@@ -150,6 +150,27 @@
 #define VELOCITY_THRESHOLD 0.01         // Velocity threshold (rad/s) - for SimpleFOC
 
 //=============================================================================
+// ENCODER FILTERING (MT6701 Absolute Encoder)
+//=============================================================================
+// The encoder uses Cartesian filtering to eliminate 0°/360° discontinuities.
+// Filter coefficient controls responsiveness vs noise rejection.
+//
+// FILTER_ALPHA values:
+//   0.0 = Maximum smoothing (slow response, very stable)
+//   0.4 = Default - balanced smoothing and response
+//   0.8 = Fast response with light smoothing
+//   1.0 = No filtering (direct encoder reading, fastest response)
+//
+// For high-precision servo control where encoder is "source of truth",
+// use higher alpha (0.8-1.0) or enable direct mode.
+#define ENCODER_FILTER_ALPHA     0.8f   // Filter coefficient (0.0-1.0) - increased from 0.4 for faster response
+
+// Direct encoder mode bypasses ALL filtering for maximum precision
+// Use this when you need the absolute lowest latency and trust your encoder signal
+// Note: May show more noise but gives true encoder position
+#define ENCODER_DIRECT_MODE      false  // Set true to bypass Cartesian filtering entirely
+
+//=============================================================================
 // SYSTEM TIMING
 //=============================================================================
 #define LOOP_FREQUENCY_HZ 1000          // Main loop frequency (Hz)
