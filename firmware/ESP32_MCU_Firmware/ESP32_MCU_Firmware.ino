@@ -507,6 +507,92 @@ void processSerialCommand(String cmd) {
             Serial.println("  2 = Heartbeat only");
         }
     }
+    // =========================================================================
+    // ENCODER FILTER CONFIGURATION (for precision servo tuning)
+    // =========================================================================
+    else if (command == "filter") {
+        MT6701Sensor& encoder = motorControl.getEncoder();
+        if (args.length() > 0) {
+            float alpha = args.toFloat();
+            if (alpha >= 0.0f && alpha <= 1.0f) {
+                encoder.setFilterAlpha(alpha);
+                Serial.print("Filter alpha set to: ");
+                Serial.println(alpha, 2);
+                Serial.println("  0.0 = Maximum smoothing (slow response)");
+                Serial.println("  0.4 = Default balanced");
+                Serial.println("  0.8 = Fast response");
+                Serial.println("  1.0 = No filtering");
+            } else {
+                Serial.println("Error: Alpha must be between 0.0 and 1.0");
+            }
+        } else {
+            Serial.println("\n=== Encoder Filter Settings ===");
+            Serial.print("Filter alpha: ");
+            Serial.println(encoder.getFilterAlpha(), 2);
+            Serial.print("Direct mode:  ");
+            Serial.println(encoder.isDirectMode() ? "ENABLED (bypassing filter)" : "DISABLED (using Cartesian filter)");
+            Serial.println("\nUsage: filter <alpha>  (0.0 to 1.0)");
+            Serial.println("  Lower = more smoothing, slower response");
+            Serial.println("  Higher = less smoothing, faster response");
+        }
+    }
+    else if (command == "direct") {
+        MT6701Sensor& encoder = motorControl.getEncoder();
+        if (args.length() > 0) {
+            int mode = args.toInt();
+            encoder.setDirectMode(mode != 0);
+            Serial.print("Direct encoder mode: ");
+            Serial.println(encoder.isDirectMode() ? "ENABLED" : "DISABLED");
+            if (encoder.isDirectMode()) {
+                Serial.println("  Encoder readings now bypass ALL filtering");
+                Serial.println("  Use for maximum precision (may be noisier)");
+            } else {
+                Serial.println("  Encoder readings now use Cartesian filtering");
+                Serial.println("  Use for smoother motion (slight latency)");
+            }
+        } else {
+            Serial.println("\n=== Direct Encoder Mode ===");
+            Serial.print("Current mode: ");
+            Serial.println(encoder.isDirectMode() ? "DIRECT (no filtering)" : "FILTERED (Cartesian)");
+            Serial.println("\nUsage: direct <0|1>");
+            Serial.println("  0 = Use Cartesian filtering (smoother, slight latency)");
+            Serial.println("  1 = Direct encoder reading (precise, may be noisier)");
+        }
+    }
+    else if (command == "encoder" || command == "enc") {
+        // Quick encoder status for tuning
+        MT6701Sensor& encoder = motorControl.getEncoder();
+        motorControl.updateEncoder();
+
+        Serial.println("\n=== Encoder Status ===");
+        Serial.print("Raw count:     ");
+        Serial.print(encoder.getRawCount());
+        Serial.print(" / 16383 (");
+        Serial.print((encoder.getRawCount() * 100.0f) / 16383.0f, 1);
+        Serial.println("%)");
+        Serial.print("Raw radians:   ");
+        Serial.print(encoder.getRawRadians(), 4);
+        Serial.println(" rad");
+        Serial.print("Filtered rad:  ");
+        Serial.print(encoder.getSensorAngle(), 4);
+        Serial.println(" rad");
+        Serial.print("Degrees:       ");
+        Serial.print(encoder.getDegrees(), 2);
+        Serial.println("°");
+        Serial.print("Velocity:      ");
+        Serial.print(encoder.getDegreesPerSecond(), 2);
+        Serial.println("°/s");
+        Serial.print("Field status:  ");
+        uint8_t field = encoder.getFieldStatus();
+        if (field == 0x00) Serial.println("GOOD");
+        else if (field == 0x01) Serial.println("TOO STRONG");
+        else if (field == 0x02) Serial.println("TOO WEAK");
+        else Serial.println("UNKNOWN");
+        Serial.print("Filter alpha:  ");
+        Serial.println(encoder.getFilterAlpha(), 2);
+        Serial.print("Direct mode:   ");
+        Serial.println(encoder.isDirectMode() ? "YES" : "NO");
+    }
     else {
         Serial.print("Unknown command: '");
         Serial.print(cmd);

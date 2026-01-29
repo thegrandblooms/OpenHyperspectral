@@ -11,8 +11,14 @@ MT6701Sensor::MT6701Sensor(uint8_t address)
       cached_raw_count(0),
       cached_degrees(0.0f),
       cached_radians(0.0f),
+      raw_radians(0.0f),
       filtered_x(1.0f),                    // Initialize to angle=0 (cos(0)=1)
       filtered_y(0.0f),                    // Initialize to angle=0 (sin(0)=0)
+      filter_alpha(ENCODER_FILTER_ALPHA),  // Use config value
+      direct_mode(ENCODER_DIRECT_MODE),    // Use config value
+      prev_raw_radians(0.0f),
+      prev_velocity_time_us(0),
+      cached_velocity_rad_s(0.0f),
       previous_degrees(0.0f),
       last_update_time(0),
       force_needs_search(false),
@@ -112,13 +118,19 @@ void MT6701Sensor::init() {
     // Initialize cached values and Cartesian filter
     cached_raw_count = encoder.readRawAngle();
     cached_degrees = rawToDegrees(cached_raw_count);
-    cached_radians = degreesToRadians(cached_degrees);
+    raw_radians = degreesToRadians(cached_degrees);
+    cached_radians = raw_radians;
     previous_degrees = cached_degrees;
     last_update_time = micros();
 
+    // Initialize velocity tracking
+    prev_raw_radians = raw_radians;
+    prev_velocity_time_us = micros();
+    cached_velocity_rad_s = 0.0f;
+
     // Initialize Cartesian filter to current position
-    filtered_x = cos(cached_radians);
-    filtered_y = sin(cached_radians);
+    filtered_x = cos(raw_radians);
+    filtered_y = sin(raw_radians);
 
     if (DEBUG_MOTOR) {
         Serial.println("[MT6701] Initial values cached:");
@@ -128,8 +140,16 @@ void MT6701Sensor::init() {
         Serial.print(cached_degrees, 2);
         Serial.println("°");
         Serial.print("  Radians: ");
-        Serial.print(cached_radians, 4);
+        Serial.print(raw_radians, 4);
         Serial.println(" rad");
+        Serial.print("  Filter mode: ");
+        if (direct_mode) {
+            Serial.println("DIRECT (no filtering)");
+        } else {
+            Serial.print("Cartesian (alpha=");
+            Serial.print(filter_alpha, 2);
+            Serial.println(")");
+        }
         Serial.print("  Cartesian filter initialized: (x=");
         Serial.print(filtered_x, 4);
         Serial.print(", y=");
@@ -142,9 +162,60 @@ float MT6701Sensor::getSensorAngle() {
     // Increment call counter for diagnostics
     call_count++;
 
-    // SMARTKNOB PATTERN: Cartesian filtering eliminates angle wraparound discontinuities
-    //
-    // Traditional approach:
+    // Read raw encoder count (closest to hardware)
+    cached_raw_count = encoder.readRawAngle();
+
+    // Convert to radians (raw reading, not yet filtered)
+    raw_radians = degreesToRadians(rawToDegrees(cached_raw_count));
+
+    // =========================================================================
+    // VELOCITY CALCULATION (always uses raw readings for accuracy)
+    // =========================================================================
+    unsigned long current_time_us = micros();
+    unsigned long dt_us = current_time_us - prev_velocity_time_us;
+
+    if (dt_us > 0) {
+        // Calculate angle delta with wraparound handling
+        float delta_rad = raw_radians - prev_raw_radians;
+
+        // Handle wraparound (crossing 0/2π boundary)
+        if (delta_rad > PI) {
+            delta_rad -= 2.0f * PI;
+        } else if (delta_rad < -PI) {
+            delta_rad += 2.0f * PI;
+        }
+
+        // Calculate velocity (rad/s)
+        float dt_s = dt_us / 1000000.0f;
+        if (dt_s > 0.0001f) {  // Avoid division by zero
+            cached_velocity_rad_s = delta_rad / dt_s;
+        }
+
+        // Update previous values for next iteration
+        prev_raw_radians = raw_radians;
+        prev_velocity_time_us = current_time_us;
+    }
+
+    // =========================================================================
+    // DIRECT MODE: Bypass filtering for maximum precision
+    // =========================================================================
+    if (direct_mode) {
+        // No filtering - return raw encoder reading directly
+        cached_radians = raw_radians;
+        cached_degrees = radiansToDegrees(raw_radians);
+
+        // Still update Cartesian filter state (in case mode is switched)
+        filtered_x = cos(raw_radians);
+        filtered_y = sin(raw_radians);
+
+        last_update_time = micros();
+        return cached_radians;
+    }
+
+    // =========================================================================
+    // CARTESIAN FILTERING (SmartKnob pattern)
+    // =========================================================================
+    // Traditional approach fails at 0°/360° boundary:
     //   Raw: 359.95° → 0.02° → 359.98° → 0.01° (discontinuous!)
     //   Filter: ???  (can't average 359.95° and 0.02° meaningfully)
     //
@@ -155,20 +226,15 @@ float MT6701Sensor::getSensorAngle() {
     // This prevents velocity jumps and hunting at angle boundaries.
     // See: https://github.com/scottbez1/smartknob/blob/master/firmware/src/mt6701_sensor.cpp
 
-    // Read raw encoder count (closest to hardware)
-    cached_raw_count = encoder.readRawAngle();
-
-    // Convert to radians (raw reading, not yet filtered)
-    float raw_radians = degreesToRadians(rawToDegrees(cached_raw_count));
-
     // Convert angle to Cartesian coordinates
     float new_x = cos(raw_radians);
     float new_y = sin(raw_radians);
 
     // Apply exponential moving average filter to x and y components
-    // alpha = 0.4: 40% new value, 60% previous value (smooths jitter while staying responsive)
-    filtered_x = new_x * FILTER_ALPHA + filtered_x * (1.0f - FILTER_ALPHA);
-    filtered_y = new_y * FILTER_ALPHA + filtered_y * (1.0f - FILTER_ALPHA);
+    // Higher alpha = faster response, less smoothing
+    // Lower alpha = slower response, more smoothing
+    filtered_x = new_x * filter_alpha + filtered_x * (1.0f - filter_alpha);
+    filtered_y = new_y * filter_alpha + filtered_y * (1.0f - filter_alpha);
 
     // Convert filtered Cartesian coordinates back to angle
     // atan2 handles all quadrants correctly and returns -π to π
@@ -183,37 +249,14 @@ float MT6701Sensor::getSensorAngle() {
     cached_degrees = radiansToDegrees(filtered_radians);
     cached_radians = filtered_radians;
 
-    // Update previous values for our velocity calculation
-    previous_degrees = cached_degrees;
-
     // Update timestamp
     last_update_time = micros();
-
-    // DEBUG: Verbose sensor logging disabled - too noisy during tests
-    // Enable this manually when debugging sensor filter issues
-    // if (DEBUG_MOTOR) {
-    //     static unsigned long last_debug_print = 0;
-    //     if (millis() - last_debug_print > 1000) {
-    //         Serial.print("[SENSOR] getSensorAngle() - Raw: ");
-    //         Serial.print(cached_raw_count);
-    //         Serial.print(", Raw°: ");
-    //         Serial.print(radiansToDegrees(raw_radians), 2);
-    //         Serial.print("°, Filtered°: ");
-    //         Serial.print(cached_degrees, 2);
-    //         Serial.print("° (x=");
-    //         Serial.print(filtered_x, 3);
-    //         Serial.print(", y=");
-    //         Serial.print(filtered_y, 3);
-    //         Serial.println(")");
-    //         last_debug_print = millis();
-    //     }
-    // }
 
     // Return filtered angle in radians (SimpleFOC expects this)
     // Base class Sensor::update() will handle:
     // - Rotation tracking (angle_prev, full_rotations)
     // - Wraparound detection
-    // - Velocity calculation
+    // - Velocity calculation (though we also track our own)
     return cached_radians;
 }
 
@@ -274,26 +317,39 @@ float MT6701Sensor::getDegrees() {
 }
 
 float MT6701Sensor::getDegreesPerSecond() {
-    // Calculate velocity from angle changes in DEGREES
-    float angle_diff_deg = cached_degrees - previous_degrees;
+    // Return cached velocity converted to degrees/second
+    // Velocity is calculated from raw (unfiltered) readings in getSensorAngle()
+    return radiansToDegrees(cached_velocity_rad_s);
+}
 
-    // Handle wraparound (crossing 0/360° boundary)
-    if (angle_diff_deg > 180.0f) {
-        angle_diff_deg -= 360.0f;
-    } else if (angle_diff_deg < -180.0f) {
-        angle_diff_deg += 360.0f;
+float MT6701Sensor::getRawRadians() {
+    // Return unfiltered encoder reading (always available)
+    return raw_radians;
+}
+
+void MT6701Sensor::setFilterAlpha(float alpha) {
+    // Clamp alpha to valid range [0.0, 1.0]
+    filter_alpha = constrain(alpha, 0.0f, 1.0f);
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[MT6701] Filter alpha set to: ");
+        Serial.println(filter_alpha, 2);
+    }
+}
+
+void MT6701Sensor::setDirectMode(bool enabled) {
+    direct_mode = enabled;
+
+    if (DEBUG_MOTOR) {
+        Serial.print("[MT6701] Direct mode: ");
+        Serial.println(enabled ? "ENABLED (no filtering)" : "DISABLED (Cartesian filtering)");
     }
 
-    // Calculate time difference (convert microseconds to seconds)
-    unsigned long current_time = micros();
-    float dt = (current_time - last_update_time) / 1000000.0f;
-
-    // Avoid division by zero
-    if (dt < 0.000001f) {
-        return 0.0f;
+    // If switching to filtered mode, reinitialize filter to current position
+    if (!enabled) {
+        filtered_x = cos(raw_radians);
+        filtered_y = sin(raw_radians);
     }
-
-    return angle_diff_deg / dt;
 }
 
 uint8_t MT6701Sensor::getFieldStatus() {
