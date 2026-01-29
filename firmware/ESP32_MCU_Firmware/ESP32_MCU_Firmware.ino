@@ -621,6 +621,12 @@ void checkSerialInput() {
 //=============================================================================
 
 void setup() {
+    // VERY EARLY DEBUG - always runs regardless of DEBUG_SERIAL
+    Serial.begin(115200);
+    delay(100);  // Give serial time to initialize
+    Serial.println("\n\n[BOOT] ESP32 starting...");
+    Serial.flush();  // Force output
+
     // Initialize debug serial if enabled
     if (DEBUG_SERIAL) {
         Serial.begin(SERIAL_BAUD);
