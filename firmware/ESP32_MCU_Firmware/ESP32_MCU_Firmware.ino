@@ -35,11 +35,9 @@ MotorController motorControl;
 uint16_t current_sequence_id = 0;
 unsigned long last_update_time = 0;
 unsigned long last_status_print = 0;
-unsigned long last_heartbeat = 0;
 
-// Debug control (runtime toggleable)
-bool debug_heartbeat_enabled = DEBUG_HEARTBEAT;
-bool debug_detailed_status_enabled = DEBUG_SERIAL;
+// Debug control (runtime toggleable via 'debug' command)
+bool debug_status_enabled = DEBUG_SERIAL;
 
 // Serial command buffer for interactive testing
 String serialCommandBuffer = "";
@@ -475,34 +473,11 @@ void processSerialCommand(String cmd) {
     else if (command == "debug") {
         if (args.length() > 0) {
             int level = args.toInt();
-            if (level == 0) {
-                // Quiet mode - disable heartbeat and detailed status
-                debug_heartbeat_enabled = false;
-                debug_detailed_status_enabled = false;
-                Serial.println("Debug mode: QUIET (heartbeat and detailed status disabled)");
-            } else if (level == 1) {
-                // Verbose mode - enable heartbeat and detailed status
-                debug_heartbeat_enabled = true;
-                debug_detailed_status_enabled = true;
-                Serial.println("Debug mode: VERBOSE (heartbeat and detailed status enabled)");
-            } else if (level == 2) {
-                // Heartbeat only
-                debug_heartbeat_enabled = true;
-                debug_detailed_status_enabled = false;
-                Serial.println("Debug mode: HEARTBEAT ONLY");
-            } else {
-                Serial.println("Error: Debug level must be 0 (quiet), 1 (verbose), or 2 (heartbeat only)");
-            }
+            debug_status_enabled = (level != 0);
+            Serial.printf("Status output: %s\n", debug_status_enabled ? "ON" : "OFF");
         } else {
-            Serial.println("\n=== Debug Status ===");
-            Serial.print("Heartbeat (every 1s):         ");
-            Serial.println(debug_heartbeat_enabled ? "ENABLED" : "DISABLED");
-            Serial.print("Detailed Status (every 10s):  ");
-            Serial.println(debug_detailed_status_enabled ? "ENABLED" : "DISABLED");
-            Serial.println("\nUsage: debug <level>");
-            Serial.println("  0 = Quiet (all debug output off)");
-            Serial.println("  1 = Verbose (all debug output on)");
-            Serial.println("  2 = Heartbeat only");
+            Serial.printf("Status output: %s (debug 0/1 to toggle)\n",
+                debug_status_enabled ? "ON" : "OFF");
         }
     }
     else {
@@ -601,7 +576,6 @@ void setup() {
     Serial.println();
 
     last_update_time = micros();
-    last_heartbeat = millis();
 }
 
 //=============================================================================
@@ -627,20 +601,12 @@ void loop() {
         checkPositionReached();
     }
 
-    // Periodic heartbeat message (toggle with 'debug' command)
-    if (debug_heartbeat_enabled && (millis() - last_heartbeat > HEARTBEAT_INTERVAL_MS)) {
-        last_heartbeat = millis();
-
-        // CRITICAL: Force fresh encoder read from MT6701 via I2C
-        // This reads the ABSOLUTE ENCODER - the truth source for position
+    // Periodic status output (toggle with 'debug' command)
+    // Shows: Encoder position (hardware truth) | SimpleFOC state | Motor state
+    if (debug_status_enabled && (millis() - last_status_print > 10000)) {
+        last_status_print = millis();
         motorControl.updateEncoder();
 
-        // Read all values (grouped by source)
-        uint16_t raw_enc = motorControl.getRawEncoderCount();           // ABSOLUTE ENCODER raw
-        float enc_deg = motorControl.getAbsolutePositionDeg();          // ABSOLUTE ENCODER (TRUTH)
-        float foc_deg = motorControl.getCurrentPositionDeg();           // SimpleFOC internal state
-
-        // Compact heartbeat format: all data on one line
         const char* state_str = "?";
         switch (motorControl.getState()) {
             case STATE_IDLE: state_str = "IDLE"; break;
@@ -648,59 +614,16 @@ void loop() {
             case STATE_ERROR: state_str = "ERR"; break;
             case STATE_CALIBRATING: state_str = "CAL"; break;
         }
-        Serial.print("[HB] ");
-        Serial.print(millis() / 1000);
-        Serial.print("s | Enc:");
-        Serial.print(enc_deg, 1);
-        Serial.print("° FOC:");
-        Serial.print(foc_deg, 1);
-        Serial.print("° Δ:");
-        Serial.print(enc_deg - foc_deg, 1);
-        Serial.print("° Raw:");
-        Serial.print(raw_enc);
-        Serial.print(" | ");
-        Serial.print(state_str);
-        Serial.print(" En:");
-        Serial.println(motorControl.isEnabled() ? "Y" : "N");
-    }
 
-    // Periodic detailed status printing (toggle with 'debug' command)
-    if (debug_detailed_status_enabled && (millis() - last_status_print > 10000)) {
-        last_status_print = millis();
-
-        // CRITICAL: Force fresh encoder read from ABSOLUTE ENCODER
-        motorControl.updateEncoder();
-
-        // Compact detailed status: 2 lines with all data
-        const char* state_str = "?";
-        switch (motorControl.getState()) {
-            case STATE_IDLE: state_str = "IDLE"; break;
-            case STATE_MOVING: state_str = "MOVING"; break;
-            case STATE_ERROR: state_str = "ERROR"; break;
-            case STATE_CALIBRATING: state_str = "CALIBRATING"; break;
-        }
-        Serial.print("[STATUS] MT6701: Raw=");
-        Serial.print(motorControl.getRawEncoderCount());
-        Serial.print(" Pos=");
-        Serial.print(motorControl.getAbsolutePositionDeg(), 2);
-        Serial.print("° | FOC: Pos=");
-        Serial.print(motorControl.getCurrentPositionDeg(), 2);
-        Serial.print("° Vel=");
-        Serial.print(motorControl.getCurrentVelocityDegPerSec(), 2);
-        Serial.print("°/s I=");
-        Serial.print(motorControl.getCurrent(), 3);
-        Serial.println("A");
-        Serial.print("         State=");
-        Serial.print(state_str);
-        Serial.print(" En=");
-        Serial.print(motorControl.isEnabled() ? "Y" : "N");
-        Serial.print(" Cal=");
-        Serial.print(motorControl.isCalibrated() ? "Y" : "N");
-        Serial.print(" | Diff(Enc-FOC)=");
-        Serial.print(motorControl.getAbsolutePositionDeg() - motorControl.getCurrentPositionDeg(), 2);
-        Serial.print("° | RAM=");
-        Serial.print(ESP.getFreeHeap() / 1024);
-        Serial.println("KB");
+        // Single line: Encoder (truth) | FOC (control) | State
+        Serial.printf("[%lus] Enc:%.1f° | FOC:%.1f° %.1f°/s | %s En:%c Cal:%c\n",
+            millis() / 1000,
+            motorControl.getAbsolutePositionDeg(),      // MT6701 encoder (hardware truth)
+            motorControl.getCurrentPositionDeg(),       // SimpleFOC shaft_angle (control state)
+            motorControl.getCurrentVelocityDegPerSec(), // SimpleFOC velocity
+            state_str,
+            motorControl.isEnabled() ? 'Y' : 'N',
+            motorControl.isCalibrated() ? 'Y' : 'N');
     }
 
     // Maintain loop timing

@@ -26,18 +26,43 @@ void printStatus(MotorController& motorControl);
 //=============================================================================
 // MAIN DIAGNOSTIC (combined calibration + tests)
 //=============================================================================
-void runSystemDiagnostic(MotorController& motorControl);  // T1-T5: Hardware, Cal, Sensor, Open-loop, Position
+// runSystemDiagnostic: Full system validation sequence
+//   T1: Hardware - I2C bus, encoder response, magnetic field strength
+//   T2: Calibration - SimpleFOC initFOC (sensor-motor electrical alignment)
+//   T3: Sensor Integration - Verify loopFOC() reads encoder correctly
+//   T4: Open-Loop - Driver/wiring/power check (bypasses closed-loop control)
+//   T5: Position Control - Closed-loop +30° move with error measurement
+void runSystemDiagnostic(MotorController& motorControl);
 
 //=============================================================================
 // INDIVIDUAL TESTS (for specific debugging)
 //=============================================================================
-void runEncoderTest(MotorController& motorControl);      // Interactive encoder reading
-void runPhaseTest(MotorController& motorControl);        // Test 6 electrical phase angles
-void runAlignmentTest(MotorController& motorControl);    // Test motor holding at 4 angles
-void runMotorTest(MotorController& motorControl);        // Quick +30° movement test
-void runPositionSweepTest(MotorController& motorControl); // 5-position accuracy test
+// runEncoderTest: Interactive - rotate motor by hand, watch encoder values
+//   Shows: raw count, encoder degrees, SimpleFOC shaft_angle
+//   Use for: Verifying encoder tracks correctly, checking for noise/dropout
+void runEncoderTest(MotorController& motorControl);
 
-// Diagnostic helper
+// runPhaseTest: Tests all 3 driver phases at 6 electrical angles
+//   Applies voltage at 0°, 60°, 90°, 120°, 180°, 240° electrical
+//   Use for: Diagnosing driver faults, phase wiring issues, dead phases
+void runPhaseTest(MotorController& motorControl);
+
+// runAlignmentTest: Tests motor magnetic holding at 4 angles
+//   Applies voltage at 0°, 90°, 180°, 270° - user rotates by hand
+//   Use for: Checking motor can hold position, detecting weak magnets
+void runAlignmentTest(MotorController& motorControl);
+
+// runMotorTest: Quick +30° movement sanity check
+//   Enable → verify tracking → move +30° → check error
+//   Use for: Fast verification after changes
+void runMotorTest(MotorController& motorControl);
+
+// runPositionSweepTest: 5-position accuracy test within ±30°
+//   Tests: 0°, -15°, -30°, +15°, +30° offsets from start
+//   Use for: PID tuning validation, checking repeatability
+void runPositionSweepTest(MotorController& motorControl);
+
+// logMotorState: Diagnostic helper - logs current motor state
 void logMotorState(MotorController& motorControl, const char* context);
 
 #endif // TESTS_H
