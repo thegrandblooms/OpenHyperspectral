@@ -59,10 +59,6 @@ void printHelp() {
     Serial.println("  h/help, s/status, i/info, scan");
     Serial.println("  e/enable, d/disable, c/calibrate, home, stop");
     Serial.println("  m <deg>, v <deg/s>, a <deg/s²>, mode <0-2>");
-    Serial.println("Encoder/Filter (precision tuning):");
-    Serial.println("  encoder/enc - Show encoder status");
-    Serial.println("  filter <0-1> - Set filter alpha (0=smooth, 1=fast)");
-    Serial.println("  direct <0|1> - Toggle direct encoder mode");
     Serial.println("Tests:");
     Serial.println("  phase_test, test, motor_test, position_sweep");
     Serial.println("  encoder_test, diag, alignment_test");
