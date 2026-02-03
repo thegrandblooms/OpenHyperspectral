@@ -14,8 +14,8 @@ MT6701Sensor::MT6701Sensor(uint8_t address)
       raw_radians(0.0f),
       filtered_x(1.0f),                    // Initialize to angle=0 (cos(0)=1)
       filtered_y(0.0f),                    // Initialize to angle=0 (sin(0)=0)
-      filter_alpha(ENCODER_FILTER_ALPHA),  // Use config value
-      direct_mode(ENCODER_DIRECT_MODE),    // Use config value
+      filter_alpha(0.8f),                  // Default: fast response with light smoothing
+      direct_mode(false),                  // Default: use Cartesian filtering
       prev_raw_radians(0.0f),
       prev_velocity_time_us(0),
       cached_velocity_rad_s(0.0f),
