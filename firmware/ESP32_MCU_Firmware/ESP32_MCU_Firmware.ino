@@ -374,11 +374,11 @@ void processSerialCommand(String cmd) {
         Serial.println("Motor disabled!");
     }
     else if (command == "c" || command == "calibrate") {
-        Serial.println("Running motor calibration...");
+        Serial.print("Calibrating... ");
         if (motorControl.calibrate()) {
-            Serial.println("Calibration successful!");
+            Serial.println("OK");
         } else {
-            Serial.println("Calibration failed!");
+            Serial.println("FAILED");
         }
     }
     else if (command == "p" || command == "pidtune") {
@@ -453,26 +453,24 @@ void processSerialCommand(String cmd) {
             Serial.println("Error: Please specify mode (e.g., 'mode 0')");
         }
     }
-    else if (command == "test") {
-        runFullTest(motorControl);
+    else if (command == "test" || command == "diag" || command == "diagnostic") {
+        // Combined system diagnostic: calibration + hardware tests + motor control
+        runSystemDiagnostic(motorControl);
     }
     else if (command == "motor_test") {
         runMotorTest(motorControl);
     }
-    else if (command == "position_sweep" || command == "sweep") {
+    else if (command == "sweep" || command == "position_sweep") {
         runPositionSweepTest(motorControl);
     }
     else if (command == "encoder_test") {
         runEncoderTest(motorControl);
     }
-    else if (command == "phase_test" || command == "phasetest") {
+    else if (command == "phase_test") {
         runPhaseTest(motorControl);
     }
     else if (command == "align" || command == "alignment_test") {
         runAlignmentTest(motorControl);
-    }
-    else if (command == "diag" || command == "diagnostic" || command == "foc_diag") {
-        runSimpleFOCDiagnostic(motorControl);
     }
     else if (command == "debug") {
         if (args.length() > 0) {

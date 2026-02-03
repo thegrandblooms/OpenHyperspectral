@@ -56,13 +56,22 @@ void scanI2C() {
 void printHelp() {
     Serial.println("\n=== OpenHyperspectral Motor Controller ===");
     Serial.println("Commands:");
-    Serial.println("  h/help, s/status, i/info, scan");
-    Serial.println("  e/enable, d/disable, c/calibrate, home, stop");
-    Serial.println("  m <deg>, v <deg/s>, a <deg/s²>, mode <0-2>");
-    Serial.println("Tests:");
-    Serial.println("  phase_test, test, motor_test, position_sweep");
-    Serial.println("  encoder_test, diag, alignment_test");
-    Serial.println("  debug <0/1>\n");
+    Serial.println("  h/help        - Show this help");
+    Serial.println("  s/status      - Motor status");
+    Serial.println("  i/info        - System info");
+    Serial.println("  scan          - I2C bus scan");
+    Serial.println("  e/enable      - Enable motor");
+    Serial.println("  d/disable     - Disable motor");
+    Serial.println("  c/calibrate   - Run calibration only");
+    Serial.println("  m <deg>       - Move to position");
+    Serial.println("  stop          - Emergency stop");
+    Serial.println("Diagnostics:");
+    Serial.println("  test/diag     - Full system diagnostic (cal+tests)");
+    Serial.println("  motor_test    - Quick +30° move test");
+    Serial.println("  sweep         - 5-position accuracy test");
+    Serial.println("  phase_test    - Driver phase test");
+    Serial.println("  encoder_test  - Interactive encoder test");
+    Serial.println("  debug <0-2>   - Set debug level\n");
 }
 
 void printSystemInfo() {
@@ -335,244 +344,210 @@ void runPositionSweepTest(MotorController& mc) {
 }
 
 //=============================================================================
-// SIMPLEFOC DIAGNOSTIC - Root cause analysis
+// SYSTEM DIAGNOSTIC - Combined calibration + diagnostics + motor test
 //=============================================================================
 
-void runSimpleFOCDiagnostic(MotorController& mc) {
-    Serial.println("\n=== SimpleFOC Diagnostic ===\n");
+void runSystemDiagnostic(MotorController& mc) {
+    Serial.println("\n========================================");
+    Serial.println("       SYSTEM DIAGNOSTIC");
+    Serial.println("========================================\n");
 
     BLDCMotor& motor = mc.getMotor();
     MT6701Sensor& encoder = mc.getEncoder();
 
-    if (!mc.isCalibrated()) {
-        Serial.println("ERROR: Not calibrated. Run 'c' first.");
+    bool t1_pass = false, t2_pass = false, t3_pass = false;
+    bool t4_pass = false, t5_pass = false;
+    float t4_move = 0, t5_move = 0, t5_err = 0;
+
+    //=========================================================================
+    // T1: Hardware Check (I2C, encoder, magnetic field)
+    //=========================================================================
+    Serial.print("[T1] Hardware Check... ");
+
+    // Check I2C communication
+    Wire.beginTransmission(ENCODER_I2C_ADDR);
+    byte i2c_error = Wire.endTransmission();
+    if (i2c_error != 0) {
+        Serial.printf("FAIL (I2C error %d)\n", i2c_error);
+        Serial.println("\n>> Check I2C wiring (SDA/SCL) and encoder power\n");
         return;
     }
 
-    bool t2_pass = false, t3_pass = false, t4_pass = false;
-    bool t5_found = false, t6_pass = false, t7_pass = false;
-    float t6_move = 0, t7_move = 0, best_offset_deg = 0;
+    // Check magnetic field
+    uint8_t field = encoder.getFieldStatus();
+    encoder.update();
+    float enc_deg = encoder.getDegrees();
 
-    // T1: Config
-    Serial.println("--- T1: Config ---");
-    Serial.printf("Mode:%s Dir:%s Vlim:%.1fV Zero:%.1f° Sensor:%c\n\n",
-        motor.controller == MotionControlType::angle ? "angle" : "other",
-        motor.sensor_direction == Direction::CW ? "CW" : "CCW",
-        motor.voltage_limit, radiansToDegrees(motor.zero_electric_angle),
-        motor.sensor ? 'Y' : 'N');
+    if (field == 0x00 && !isnan(enc_deg)) {
+        t1_pass = true;
+        Serial.printf("OK (Enc:%.1f° Field:good)\n", enc_deg);
+    } else if (field == 0x01) {
+        Serial.printf("WARN (Enc:%.1f° Field:STRONG)\n", enc_deg);
+        t1_pass = true;  // Can continue but warn
+    } else if (field == 0x02) {
+        Serial.printf("WARN (Enc:%.1f° Field:WEAK)\n", enc_deg);
+        t1_pass = true;  // Can continue but warn
+    } else {
+        Serial.printf("FAIL (Enc:%.1f° Field:0x%02X)\n", enc_deg, field);
+        return;
+    }
 
-    // T2: Sensor calls
-    Serial.println("--- T2: Sensor Calls ---");
+    //=========================================================================
+    // T2: Calibration (SimpleFOC initFOC)
+    //=========================================================================
+    Serial.print("[T2] Calibration... ");
+
+    if (mc.isCalibrated()) {
+        Serial.printf("OK (already calibrated, Dir:%s Zero:%.1f°)\n",
+            motor.sensor_direction == Direction::CW ? "CW" : "CCW",
+            radiansToDegrees(motor.zero_electric_angle));
+        t2_pass = true;
+    } else {
+        // Run calibration (this prints its own compact status)
+        bool cal_ok = mc.calibrate();
+        if (cal_ok) {
+            t2_pass = true;
+            // Calibration already printed status, just confirm
+        } else {
+            Serial.println("FAIL");
+            Serial.println("\n>> Check motor wiring, power supply, and encoder alignment\n");
+            return;
+        }
+    }
+
+    //=========================================================================
+    // T3: Sensor Integration (verify loopFOC reads encoder)
+    //=========================================================================
+    Serial.print("[T3] Sensor Integration... ");
+
     mc.enable();
     delay(50);
     encoder.resetCallCount();
-    for (int i = 0; i < 100; i++) { motor.loopFOC(); delayMicroseconds(100); }
+
+    // Run 100 FOC loops and count sensor calls
+    for (int i = 0; i < 100; i++) {
+        motor.loopFOC();
+        delayMicroseconds(100);
+    }
+
     unsigned long calls = encoder.getCallCount();
-    t2_pass = calls >= 100;
-    Serial.printf("loopFOC()x100 → %lu calls: %s\n\n", calls, t2_pass ? "OK" : "FAIL");
-    if (!t2_pass) { mc.disable(); return; }
-
-    // T3: Open-loop (use encoder as ground truth, not shaft_angle)
-    Serial.println("--- T3: Open-Loop Test ---");
-    encoder.update();
-    float start_enc_deg = encoder.getDegrees();  // Use encoder, not shaft_angle
-    motor.controller = MotionControlType::angle_openloop;
-    float ol_target = motor.shaft_angle + degreesToRadians(30.0);
-    for (int i = 0; i < 20; i++) { motor.loopFOC(); motor.move(ol_target); delay(100); }
-    encoder.update();
-    float enc_move = encoder.getDegrees() - start_enc_deg;
-    if (enc_move < -180) enc_move += 360;
-    if (enc_move > 180) enc_move -= 360;
-    t3_pass = abs(enc_move) > 10;
-    motor.controller = MotionControlType::angle;
-    Serial.printf("Moved %.1f°: %s\n\n", enc_move, t3_pass ? "HW OK" : "FAIL - check wiring");
-    if (!t3_pass) { mc.disable(); return; }
-
-    // T4: Phase voltage
-    Serial.println("--- T4: Phase Voltage ---");
-    encoder.update();
-    float start_enc = encoder.getDegrees();
-    float test_angles[] = {0, _PI_2, PI, _3PI_2, _2PI};
-    Serial.print("Elec: ");
-    for (int i = 0; i < 5; i++) {
-        motor.setPhaseVoltage(6.0, 0, test_angles[i]);
-        delay(300);
-        encoder.update();
-        float mv = encoder.getDegrees() - start_enc;
-        if (mv < -180) mv += 360; if (mv > 180) mv -= 360;
-        Serial.printf("%d°→%.0f ", int(radiansToDegrees(test_angles[i])), mv);
-    }
-    Serial.println();
-    motor.setPhaseVoltage(0, 0, 0);
-    encoder.update();
-    float phase_move = abs(encoder.getDegrees() - start_enc);
-    if (phase_move > 180) phase_move = 360 - phase_move;
-    t4_pass = phase_move > 5;
-    Serial.printf("Total: %.1f°: %s\n\n", phase_move, t4_pass ? "OK" : "FAIL");
-
-    // T5: Zero Angle Offset Search
-    Serial.println("--- T5: Zero Offset Search ---");
-    Serial.printf("sensor_direction=%s\n", motor.sensor_direction == Direction::CW ? "CW" : "CCW");
-    mc.enable();
-    delay(50);
-
-    float orig_zero = motor.zero_electric_angle;
-    float best_offset = 0, best_correct = 0, best_wrong = 0;
-    bool found_correct = false;
-    bool expect_positive = (motor.sensor_direction == Direction::CW);
-
-    float offsets[] = {0, PI/4, PI/2, 3*PI/4, PI, 5*PI/4, 3*PI/2, 7*PI/4};
-    Serial.print("Testing: ");
-    for (int i = 0; i < 8; i++) {
-        motor.zero_electric_angle = normalizeRadians(orig_zero + offsets[i]);
-        encoder.update();
-        start_enc = encoder.getDegrees();
-
-        motor.controller = MotionControlType::velocity;
-        for (int j = 0; j < 50; j++) {
-            motor.loopFOC();
-            motor.move(degreesToRadians(60.0));
-            delay(10);
-        }
-
-        encoder.update();
-        float mv = encoder.getDegrees() - start_enc;
-        if (mv < -180) mv += 360; if (mv > 180) mv -= 360;
-
-        bool correct_dir = expect_positive ? (mv > 10) : (mv < -10);
-        if (correct_dir && abs(mv) > best_correct) {
-            best_correct = abs(mv);
-            best_offset = offsets[i];
-            found_correct = true;
-        }
-        if (!correct_dir && abs(mv) > best_wrong) best_wrong = abs(mv);
-
-        Serial.printf("%d°:%.0f ", int(radiansToDegrees(offsets[i])), mv);
-        motor.move(0);
-        delay(100);
-    }
-    Serial.println();
-
-    motor.controller = MotionControlType::angle;
-    best_offset_deg = radiansToDegrees(best_offset);
-
-    if (found_correct && best_correct > 10) {
-        t5_found = true;
-        motor.zero_electric_angle = normalizeRadians(orig_zero + best_offset);
-        Serial.printf("Best: %.0f° (%.0f° correct) → zero=%.1f° APPLIED\n",
-            best_offset_deg, best_correct, radiansToDegrees(motor.zero_electric_angle));
-    } else if (best_wrong > 20) {
-        Serial.printf("WRONG direction (%.0f°)! Toggle FORCE_SENSOR_DIRECTION_CW\n", best_wrong);
-        motor.zero_electric_angle = orig_zero;
+    if (calls >= 100) {
+        t3_pass = true;
+        Serial.printf("OK (%lu calls/100 loops)\n", calls);
     } else {
-        Serial.println("No offset worked - try toggling FORCE_SENSOR_DIRECTION_CW");
-        motor.zero_electric_angle = orig_zero;
-    }
-
-    // Sync state (don't reset - SimpleFOC manages continuous angles)
-    motor.loopFOC();
-    Serial.printf("\nCurrent shaft_angle: %.1f°\n", radiansToDegrees(motor.shaft_angle));
-
-    // T6: Position Control
-    Serial.println("\n--- T6: Position Control (+30°) ---");
-    float start_pos = radiansToDegrees(motor.shaft_angle);
-    float target_pos = start_pos + 30.0;
-    Serial.printf("%.1f° → %.1f°\n", start_pos, target_pos);
-
-    mc.moveToPosition(target_pos);
-    float prev = motor.shaft_angle;
-    unsigned long t0 = millis();
-
-    for (int i = 0; i < 8; i++) {
-        for (int j = 0; j < 3; j++) { mc.update(); delay(100); }
-        float delta = radiansToDegrees(motor.shaft_angle - prev);
-        Serial.printf("  %ldms | %.1f° | %.1f°/s | %.1fV | %+.1f°\n",
-            millis() - t0, radiansToDegrees(motor.shaft_angle),
-            radiansToDegrees(motor.shaft_velocity), motor.voltage.q, delta);
-        prev = motor.shaft_angle;
-    }
-
-    float final_pos = radiansToDegrees(motor.shaft_angle);
-    t6_move = final_pos - start_pos;
-    float t6_err = target_pos - final_pos;
-    bool correct_dir = (t6_move > 0) == ((target_pos - start_pos) > 0);
-    t6_pass = correct_dir && abs(t6_move) > 15;
-    Serial.printf("Move: %+.1f° Err: %.1f° %s\n", t6_move, t6_err,
-        (!correct_dir && abs(t6_move) > 10) ? "WRONG DIR!" : (t6_pass ? "OK" : "stalled"));
-
-    // T7: Velocity Mode
-    Serial.println("\n--- T7: Velocity Mode (60°/s) ---");
-    motor.controller = MotionControlType::velocity;
-    float start_shaft = motor.shaft_angle;
-    t0 = millis();
-
-    for (int i = 0; i < 8; i++) {
-        for (int j = 0; j < 2; j++) {
-            motor.loopFOC();
-            motor.move(degreesToRadians(60.0));
-            delay(100);
-        }
-        float mv = radiansToDegrees(motor.shaft_angle - start_shaft);
-        Serial.printf("  %ldms | %.1f° | %.1f°/s | %.1fV | %.1f°\n",
-            millis() - t0, radiansToDegrees(motor.shaft_angle),
-            radiansToDegrees(motor.shaft_velocity), motor.voltage.q, mv);
-    }
-
-    float t7_actual = radiansToDegrees(motor.shaft_angle - start_shaft);
-    t7_move = abs(t7_actual);
-    t7_pass = (t7_actual > 0) && (t7_move > 15);
-    motor.controller = MotionControlType::angle;
-    Serial.printf("Move: %+.1f° %s\n", t7_actual,
-        (t7_actual < 0 && t7_move > 10) ? "WRONG DIR!" : (t7_pass ? "OK" : "slow/stalled"));
-
-    // Summary
-    Serial.println("\n=== SUMMARY ===");
-    Serial.printf("T2 Sensor:    %s\n", t2_pass ? "OK" : "FAIL");
-    Serial.printf("T3 Open-loop: %s\n", t3_pass ? "HW OK" : "FAIL");
-    Serial.printf("T4 Phases:    %s\n", t4_pass ? "OK" : "FAIL");
-    Serial.printf("T5 Offset:    %s", t5_found ? "found " : "FAIL");
-    if (t5_found) Serial.printf("%.0f°", best_offset_deg);
-    Serial.println();
-    Serial.printf("T6 Position:  %.1f° %s\n", t6_move, t6_pass ? "OK" : "FAIL");
-    Serial.printf("T7 Velocity:  %.1f° %s\n", t7_move, t7_pass ? "OK" : "FAIL");
-
-    Serial.println("\nDiagnosis:");
-    if (!t3_pass) Serial.println("  → Hardware issue: check wiring/driver/power");
-    else if (!t5_found) Serial.println("  → Toggle FORCE_SENSOR_DIRECTION_CW in config.h");
-    else if (!t6_pass && !t7_pass) Serial.println("  → Closed-loop failing - check PID gains");
-    else if (t6_pass && t7_pass) Serial.println("  → Motor working! Offset applied for session.");
-    else Serial.println("  → Partial - check PID tuning");
-
-    if (!t5_found) motor.zero_electric_angle = orig_zero;
-    mc.disable();
-    Serial.println("\nMotor disabled. Run 'motor_test' to verify.\n");
-}
-
-//=============================================================================
-// FULL TEST
-//=============================================================================
-
-void runFullTest(MotorController& mc) {
-    Serial.println("\n=== Full System Test ===\n");
-
-    // Calibration
-    Serial.println("Step 1: Calibration");
-    if (mc.isCalibrated()) {
-        Serial.println("  Already calibrated");
-    } else if (!mc.calibrate()) {
-        Serial.println("  FAIL: Calibration failed");
+        Serial.printf("FAIL (%lu calls - sensor not linked)\n", calls);
+        mc.disable();
         return;
     }
-    delay(1000);
 
-    // PID tuning disabled
-    Serial.println("\nStep 2: PID Tuning");
-    Serial.println("  Skipped (use manual tuning)");
-    delay(500);
+    //=========================================================================
+    // T4: Open-Loop Test (verify driver/wiring/power)
+    //=========================================================================
+    Serial.print("[T4] Open-Loop Test... ");
 
-    // Motor test
-    Serial.println("\nStep 3: Movement Test");
-    runMotorTest(mc);
+    encoder.update();
+    float start_enc = encoder.getDegrees();
 
-    Serial.println("=== Full Test Complete ===\n");
+    // Temporarily switch to open-loop mode
+    motor.controller = MotionControlType::angle_openloop;
+    float ol_target = motor.shaft_angle + degreesToRadians(30.0);
+
+    for (int i = 0; i < 20; i++) {
+        motor.loopFOC();
+        motor.move(ol_target);
+        delay(100);
+    }
+
+    encoder.update();
+    t4_move = encoder.getDegrees() - start_enc;
+    if (t4_move < -180) t4_move += 360;
+    if (t4_move > 180) t4_move -= 360;
+
+    motor.controller = MotionControlType::angle;
+
+    if (abs(t4_move) > 10) {
+        t4_pass = true;
+        Serial.printf("OK (moved %.1f°)\n", t4_move);
+    } else {
+        Serial.printf("FAIL (moved %.1f° - check wiring/driver/power)\n", t4_move);
+        mc.disable();
+        return;
+    }
+
+    //=========================================================================
+    // T5: Position Control Test (+30° closed-loop move)
+    //=========================================================================
+    Serial.print("[T5] Position Control... ");
+
+    // Sync to current encoder position
+    encoder.update();
+    float start_pos = encoder.getDegrees();
+    float target_pos = fmod(start_pos + 30.0, 360.0);
+
+    mc.moveToPosition(target_pos);
+
+    // Run control loop for up to 3 seconds
+    unsigned long t0 = millis();
+    bool reached = false;
+
+    while (millis() - t0 < 3000) {
+        mc.update();
+        delay(10);
+        if (mc.isAtTarget()) {
+            reached = true;
+            break;
+        }
+    }
+
+    encoder.update();
+    float final_pos = encoder.getDegrees();
+    t5_move = final_pos - start_pos;
+    if (t5_move < -180) t5_move += 360;
+    if (t5_move > 180) t5_move -= 360;
+
+    t5_err = final_pos - target_pos;
+    if (t5_err > 180) t5_err -= 360;
+    if (t5_err < -180) t5_err += 360;
+
+    // Check: moved in correct direction and close to target
+    bool correct_dir = (t5_move > 0);  // We asked for +30°
+    t5_pass = correct_dir && abs(t5_move) > 20 && abs(t5_err) < 5;
+
+    if (t5_pass) {
+        Serial.printf("OK (moved %+.1f° err:%.1f°)\n", t5_move, t5_err);
+    } else if (!correct_dir && abs(t5_move) > 10) {
+        Serial.printf("FAIL (WRONG DIRECTION: %+.1f°)\n", t5_move);
+        Serial.println("  >> Toggle FORCE_SENSOR_DIRECTION_CW in config.h");
+    } else if (abs(t5_move) < 5) {
+        Serial.printf("FAIL (stalled: %+.1f°)\n", t5_move);
+        Serial.println("  >> Check PID gains or motor obstruction");
+    } else {
+        Serial.printf("PARTIAL (moved %+.1f° err:%.1f°)\n", t5_move, t5_err);
+    }
+
+    mc.disable();
+
+    //=========================================================================
+    // Summary
+    //=========================================================================
+    Serial.println("\n----------------------------------------");
+    Serial.println("SUMMARY");
+    Serial.println("----------------------------------------");
+    Serial.printf("  T1 Hardware:    %s\n", t1_pass ? "PASS" : "FAIL");
+    Serial.printf("  T2 Calibration: %s\n", t2_pass ? "PASS" : "FAIL");
+    Serial.printf("  T3 Sensor:      %s\n", t3_pass ? "PASS" : "FAIL");
+    Serial.printf("  T4 Open-Loop:   %s (%.1f°)\n", t4_pass ? "PASS" : "FAIL", t4_move);
+    Serial.printf("  T5 Position:    %s (%.1f° err:%.1f°)\n",
+        t5_pass ? "PASS" : "FAIL", t5_move, t5_err);
+    Serial.println("----------------------------------------");
+
+    int passed = t1_pass + t2_pass + t3_pass + t4_pass + t5_pass;
+    if (passed == 5) {
+        Serial.println("RESULT: ALL TESTS PASSED - Motor ready!");
+    } else if (passed >= 4) {
+        Serial.println("RESULT: PARTIAL - Check failed test above");
+    } else {
+        Serial.println("RESULT: FAILED - See diagnostics above");
+    }
+    Serial.println("========================================\n");
 }
