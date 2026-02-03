@@ -126,15 +126,6 @@ public:
     uint16_t getRawCount();                // Raw encoder value (0-16383)
     float getDegrees();                    // Degrees (0-360)
     float getDegreesPerSecond();           // Angular velocity in deg/s
-    float getRawRadians();                 // Unfiltered radians (0-2π) - for precision applications
-
-    //=========================================================================
-    // FILTER CONFIGURATION (for precision servo applications)
-    //=========================================================================
-    void setFilterAlpha(float alpha);      // Set filter coefficient (0.0-1.0)
-    float getFilterAlpha() { return filter_alpha; }
-    void setDirectMode(bool enabled);      // Enable/disable direct (unfiltered) mode
-    bool isDirectMode() { return direct_mode; }
 
     //=========================================================================
     // HARDWARE STATUS
@@ -154,21 +145,14 @@ private:
     // Cached values (updated by getSensorAngle())
     uint16_t cached_raw_count;             // Raw count (0-16383)
     float cached_degrees;                  // Degrees (0-360)
-    float cached_radians;                  // Radians (0-2π) for SimpleFOC (filtered or direct)
-    float raw_radians;                     // Unfiltered radians (0-2π) - always available
+    float cached_radians;                  // Radians (0-2π) for SimpleFOC
 
     // Cartesian filtering (SmartKnob pattern - eliminates wraparound discontinuities)
     float filtered_x;                      // Filtered X coordinate (cos component)
     float filtered_y;                      // Filtered Y coordinate (sin component)
-    float filter_alpha;                    // Configurable filter coefficient (0.0-1.0)
-    bool direct_mode;                      // When true, bypass filtering entirely
+    static constexpr float FILTER_ALPHA = 0.4f;  // Low-pass filter coefficient (0=no filtering, 1=no smoothing)
 
-    // Velocity calculation (uses raw readings, not filtered)
-    float prev_raw_radians;                // Previous raw reading for velocity calc
-    unsigned long prev_velocity_time_us;   // Timestamp of previous reading (microseconds)
-    float cached_velocity_rad_s;           // Cached velocity in rad/s
-
-    // Legacy (kept for compatibility)
+    // Previous values for velocity calculation
     float previous_degrees;
     unsigned long last_update_time;
 
