@@ -494,32 +494,17 @@ bool MotorController::calibrate() {
 }
 
 bool MotorController::runManualCalibration() {
-    if (DEBUG_MOTOR) {
-        Serial.println("\n[CALIBRATION] Starting...");
-    }
-
-    // Check magnetic field strength
-    if (!encoder.isFieldGood()) {
-        if (DEBUG_MOTOR) {
-            Serial.print("[WARNING] Magnetic field not optimal: 0x");
-            Serial.println(encoder.getFieldStatus(), HEX);
-        }
-    }
-
     // Verify encoder is readable
     encoder.update();
     float test_angle = encoder.getSensorAngle();
     if (isnan(test_angle) || isinf(test_angle)) {
-        if (DEBUG_MOTOR) {
-            Serial.println("[ERROR] Cannot read encoder!");
-        }
         return false;
     }
 
     if (DEBUG_MOTOR) {
-        Serial.print("  Encoder: ");
+        Serial.print("  Pos: ");
         Serial.print(radiansToDegrees(test_angle), 1);
-        Serial.print("° | Testing 4 positions: ");
+        Serial.print("° ");
     }
     motor.enable();
 
@@ -527,25 +512,15 @@ bool MotorController::runManualCalibration() {
     float normal_voltage_limit = motor.voltage_limit;
     motor.voltage_limit = 10.0f;
 
-    // Diagnostic test at 4 positions
+    // Test at 4 electrical positions
     float test_angles[] = {0, _PI_2, PI, _3PI_2};
     float positions[4];
 
     for (int i = 0; i < 4; i++) {
         motor.setPhaseVoltage(6.0, 0, test_angles[i]);
         delay(700);
-
         encoder.update();
         positions[i] = encoder.getSensorAngle();
-
-        if (DEBUG_MOTOR) {
-            Serial.print(radiansToDegrees(positions[i]), 1);
-            Serial.print("° ");
-        }
-    }
-
-    if (DEBUG_MOTOR) {
-        Serial.println("✓");
     }
 
     // Use 90° and 270° for calibration (they have best separation)
@@ -561,20 +536,9 @@ bool MotorController::runManualCalibration() {
     }
 
     if (angle_diff < 0.1) {  // Less than ~5.7 degrees
-        if (DEBUG_MOTOR) {
-            Serial.print("✗ Motor didn't move (");
-            Serial.print(radiansToDegrees(angle_diff), 1);
-            Serial.println("°) - check power/driver/wiring");
-        }
         motor.disable();
         motor.voltage_limit = normal_voltage_limit;
         return false;
-    }
-
-    if (DEBUG_MOTOR) {
-        Serial.print("  Movement: ");
-        Serial.print(radiansToDegrees(angle_diff), 1);
-        Serial.print("°");
     }
 
 #if !USE_SIMPLEFOC_AUTO_CALIBRATION
@@ -592,22 +556,10 @@ bool MotorController::runManualCalibration() {
 
     Direction sensor_dir = (angle_change > 0) ? Direction::CW : Direction::CCW;
 
-    // CRITICAL FIX: Override sensor direction to CW if configured
-    // MUST happen BEFORE zero_electric_angle calculation!
-    // When sensor_direction = CCW, SimpleFOC produces negative shaft_angle values
-    // which breaks position error calculations and velocity estimation
-    // Forcing CW ensures all angles are positive (0-2π range)
+    // Override sensor direction to CW if configured (for consistent positive angles)
 #if FORCE_SENSOR_DIRECTION_CW
-    if (DEBUG_MOTOR && sensor_dir == Direction::CCW) {
-        Serial.print(" [OVERRIDE: CCW→CW]");
-    }
     sensor_dir = Direction::CW;
 #endif
-
-    if (DEBUG_MOTOR) {
-        Serial.print(" Dir:");
-        Serial.print(sensor_dir == Direction::CW ? "CW" : "CCW");
-    }
 
     // Calculate zero_electric_angle
     // We know motor is at 90° electrical, encoder reads angle_at_pi2
@@ -630,15 +582,7 @@ bool MotorController::runManualCalibration() {
     motor.zero_electric_angle = zero_elec_angle;
     motor.sensor_direction = sensor_dir;
 
-    // DIRECTION VERIFICATION: Use setPhaseVoltage() to test direction
-    // (Don't use FOC loop - it can spin wildly with wrong calibration!)
-    if (DEBUG_MOTOR) {
-        Serial.print(" ZeroAngle:");
-        Serial.print(radiansToDegrees(zero_elec_angle), 1);
-        Serial.print("°");
-    }
-
-    // Get current encoder position
+    // Get current encoder position for direction verification
     encoder.update();
     float start_angle = encoder.getSensorAngle();
 
@@ -665,26 +609,12 @@ bool MotorController::runManualCalibration() {
 
     float movement_deg = radiansToDegrees(actual_movement);
 
-    if (DEBUG_MOTOR) {
-        Serial.print(" DirTest:");
-        Serial.print(movement_deg, 1);
-        Serial.print("°");
-    }
-
     // If motor moved in WRONG direction (negative), add 180° to fix
     if (movement_deg < -3.0f) {  // Moved backward more than 3°
         zero_elec_angle = normalizeRadians(zero_elec_angle + PI);
         motor.zero_electric_angle = zero_elec_angle;
-
-        if (DEBUG_MOTOR) {
-            Serial.print(" [REVERSED! New:");
-            Serial.print(radiansToDegrees(zero_elec_angle), 1);
-            Serial.print("°]");
-        }
     } else if (movement_deg > 3.0f) {
-        if (DEBUG_MOTOR) {
-            Serial.print(" [OK]");
-        }
+        // Direction OK
     } else {
         // Movement too small - try with 180° offset and see if that's better
         float alt_zero = normalizeRadians(zero_elec_angle + PI);
@@ -709,24 +639,11 @@ bool MotorController::runManualCalibration() {
             // Alternative offset works better
             zero_elec_angle = alt_zero;
             motor.zero_electric_angle = zero_elec_angle;
-            if (DEBUG_MOTOR) {
-                Serial.print(" [ALT BETTER:");
-                Serial.print(radiansToDegrees(zero_elec_angle), 1);
-                Serial.print("°]");
-            }
-        } else {
-            if (DEBUG_MOTOR) {
-                Serial.print(" [WEAK]");
-            }
         }
     }
 
     // Disable motor phases before continuing
     motor.setPhaseVoltage(0, 0, 0);
-
-    if (DEBUG_MOTOR) {
-        Serial.println("");
-    }
 
     // CRITICAL: Reset rotation tracking AFTER direction test
     // The direction test moved the motor, corrupting full_rotations
@@ -748,100 +665,43 @@ bool MotorController::runManualCalibration() {
     // Restore voltage limit
     motor.voltage_limit = normal_voltage_limit;
 
-    // CRITICAL FIX: Reset rotation tracking before initFOC()
-    // During calibration, setPhaseVoltage() caused instant electrical jumps (300° → 0°)
-    // which fooled SimpleFOC's wraparound detection, corrupting full_rotations counter.
-    // Reset to absolute encoder mode (full_rotations = 0) before initFOC().
+    // Reset rotation tracking before initFOC()
     encoder.resetRotationTracking();
 
-    // Now call initFOC()
-    if (DEBUG_MOTOR) {
-        Serial.print("  Initializing FOC...");
-    }
-
 #if !USE_SIMPLEFOC_AUTO_CALIBRATION
-    // Manual calibration: Suppress SimpleFOC's "MOT:" messages (we already calculated values)
+    // Suppress SimpleFOC's verbose messages during initFOC
     Print* saved_monitor = motor.monitor_port;
     motor.monitor_port = nullptr;
-#else
-    // Auto calibration: Show SimpleFOC's messages (to see what it calculates)
-    if (DEBUG_MOTOR) {
-        Serial.println("");  // New line for SimpleFOC messages
-    }
 #endif
 
     int foc_result = motor.initFOC();
 
 #if !USE_SIMPLEFOC_AUTO_CALIBRATION
-    // Restore monitoring
     motor.monitor_port = saved_monitor;
 #endif
 
-    // SMARTKNOB PATTERN: Trust SimpleFOC's initialization completely
-    // Do NOT manually set shaft_angle - this creates mismatches with sensor state
-    // (full_rotations, angle_prev) that cause velocity calculation errors.
-    //
-    // Instead, run stabilization cycles to let SimpleFOC synchronize naturally.
-    // This matches the proven SmartKnob implementation pattern.
     if (foc_result == 1) {
-        if (DEBUG_MOTOR) {
-#if USE_SIMPLEFOC_AUTO_CALIBRATION
-            // Show what SimpleFOC calculated
-            Serial.print(" ✓ | Dir:");
-            Serial.print(motor.sensor_direction == Direction::CW ? "CW" : "CCW");
-            Serial.print(" ZeroAngle:");
-            Serial.print(radiansToDegrees(motor.zero_electric_angle), 1);
-            Serial.print("°");
-#else
-            Serial.print(" ✓");
-#endif
-        }
-
-        // Run stabilization cycles to let sensor state settle
-        // This ensures full_rotations and angle_prev are synchronized with shaft_angle
+        // Run stabilization cycles
         for (int i = 0; i < 20; i++) {
             motor.loopFOC();
             delay(1);
         }
 
-        // VALIDATION: Verify shaft_angle matches encoder
-        float encoder_angle = encoder.getSensorAngle();
-        float encoder_deg = radiansToDegrees(encoder_angle);
+        // Verify shaft_angle matches encoder
+        float encoder_deg = radiansToDegrees(encoder.getSensorAngle());
         float shaft_deg = radiansToDegrees(motor.shaft_angle);
         float error = abs(shaft_deg - encoder_deg);
-
-        // Handle wraparound (e.g., 355° vs 5° should be 10° error, not 350°)
-        if (error > 180.0f) {
-            error = 360.0f - error;
-        }
+        if (error > 180.0f) error = 360.0f - error;
 
         if (DEBUG_MOTOR) {
-            Serial.print(" | Enc:");
-            Serial.print(encoder_deg, 1);
-            Serial.print("° FOC:");
-            Serial.print(shaft_deg, 1);
-            Serial.print("° Err:");
-            Serial.print(error, 1);
-            Serial.print("°");
-            if (error > 5.0f) {
-                Serial.print(" ⚠");
-            } else {
-                Serial.print(" ✓");
-            }
+            Serial.printf("Dir:%s Zero:%.1f° Enc:%.1f° FOC:%.1f° Err:%.1f°\n",
+                motor.sensor_direction == Direction::CW ? "CW" : "CCW",
+                radiansToDegrees(motor.zero_electric_angle),
+                encoder_deg, shaft_deg, error);
         }
     }
 
-    // Disable motor after calibration
     motor.disable();
-
-    if (DEBUG_MOTOR) {
-        if (foc_result == 1) {
-            Serial.println("\n✓ Calibration complete");
-        } else {
-            Serial.println("\n✗ initFOC() failed - check hardware");
-        }
-    }
-
     return (foc_result == 1);
 }
 
