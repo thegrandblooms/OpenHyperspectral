@@ -55,23 +55,24 @@ void scanI2C() {
 
 void printHelp() {
     Serial.println("\n=== OpenHyperspectral Motor Controller ===");
-    Serial.println("Commands:");
-    Serial.println("  h/help        - Show this help");
-    Serial.println("  s/status      - Motor status");
-    Serial.println("  i/info        - System info");
-    Serial.println("  scan          - I2C bus scan");
-    Serial.println("  e/enable      - Enable motor");
-    Serial.println("  d/disable     - Disable motor");
-    Serial.println("  c/calibrate   - Run calibration only");
-    Serial.println("  m <deg>       - Move to position");
-    Serial.println("  stop          - Emergency stop");
-    Serial.println("Diagnostics:");
-    Serial.println("  test/diag     - Full system diagnostic (cal+tests)");
-    Serial.println("  motor_test    - Quick +30° move test");
-    Serial.println("  sweep         - 5-position accuracy test");
-    Serial.println("  phase_test    - Driver phase test");
-    Serial.println("  encoder_test  - Interactive encoder test");
-    Serial.println("  debug <0-2>   - Set debug level\n");
+    Serial.println("Control:");
+    Serial.println("  e/enable       Enable motor (requires calibration)");
+    Serial.println("  d/disable      Disable motor");
+    Serial.println("  c/calibrate    Run SimpleFOC calibration");
+    Serial.println("  m <deg>        Move to absolute position (0-360)");
+    Serial.println("  stop           Emergency stop");
+    Serial.println("Info:");
+    Serial.println("  s/status       Encoder + FOC state");
+    Serial.println("  i/info         System info (chip, pins, config)");
+    Serial.println("  scan           I2C bus scan");
+    Serial.println("  debug <0/1>    Status output off/on");
+    Serial.println("Tests:");
+    Serial.println("  test/diag      Full diagnostic (HW+cal+sensor+move)");
+    Serial.println("  motor_test     Quick +30 move");
+    Serial.println("  sweep          5-position accuracy test");
+    Serial.println("  phase_test     Driver phase verification");
+    Serial.println("  align          Motor holding strength test");
+    Serial.println("  encoder_test   Interactive encoder reading\n");
 }
 
 void printSystemInfo() {
