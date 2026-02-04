@@ -69,10 +69,11 @@
 
 // Velocity limits - OPTIMIZED FOR GIMBAL MOTORS
 // Gimbal motors are designed for slow, precise movements, not high speed
-#define MAX_VELOCITY_DEG     573.0      // Maximum velocity (deg/s) ~95 RPM
-#define MAX_VELOCITY         10.0       // Maximum velocity (rad/s) - for SimpleFOC
-#define DEFAULT_VELOCITY_DEG 286.5      // Default velocity (deg/s) ~48 RPM
-#define DEFAULT_VELOCITY     5.0        // Default velocity (rad/s)
+// Previous 573°/s (10 rad/s) was too aggressive - caused open-loop test failures
+#define MAX_VELOCITY_DEG     180.0      // Maximum velocity (deg/s) ~30 RPM - conservative for gimbal
+#define MAX_VELOCITY         3.14       // Maximum velocity (rad/s) - for SimpleFOC
+#define DEFAULT_VELOCITY_DEG 90.0       // Default velocity (deg/s) ~15 RPM
+#define DEFAULT_VELOCITY     1.57       // Default velocity (rad/s)
 #define MIN_VELOCITY_DEG     5.7        // Minimum velocity (deg/s)
 #define MIN_VELOCITY         0.1        // Minimum velocity (rad/s)
 
