@@ -449,6 +449,10 @@ void runSystemDiagnostic(MotorController& mc) {
     encoder.update();
     float start_enc = encoder.getDegrees();
 
+    // Save and set conservative velocity for open-loop (gimbal motors need slow speeds)
+    float saved_vel_limit = motor.velocity_limit;
+    motor.velocity_limit = 2.0;  // ~115°/s - conservative for reliable open-loop
+
     // Temporarily switch to open-loop mode
     motor.controller = MotionControlType::angle_openloop;
     float ol_target = motor.shaft_angle + degreesToRadians(30.0);
@@ -464,6 +468,8 @@ void runSystemDiagnostic(MotorController& mc) {
     if (t4_move < -180) t4_move += 360;
     if (t4_move > 180) t4_move -= 360;
 
+    // Restore velocity limit and control mode
+    motor.velocity_limit = saved_vel_limit;
     motor.controller = MotionControlType::angle;
 
     if (abs(t4_move) > 10) {
