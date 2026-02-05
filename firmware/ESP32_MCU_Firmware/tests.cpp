@@ -61,6 +61,9 @@ void printHelp() {
     Serial.println("  c/calibrate    Run SimpleFOC calibration");
     Serial.println("  m <deg>        Move to absolute position (0-360)");
     Serial.println("  stop           Emergency stop");
+    Serial.println("Streaming:");
+    Serial.println("  stream on/off  Encoder data streaming ($ENC, lines)");
+    Serial.println("  stream rate N  Set stream rate in Hz (1-500)");
     Serial.println("Info:");
     Serial.println("  s/status       Encoder + FOC state");
     Serial.println("  i/info         System info (chip, pins, config)");
