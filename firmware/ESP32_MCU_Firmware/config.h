@@ -90,7 +90,7 @@
 // Start with SimpleFOC default P=20, tune down if oscillations occur
 #define PID_P_POSITION   20.0           // Proportional gain - FIXED from 1.0
 #define PID_I_POSITION   0.0            // Integral gain (usually not needed for position)
-#define PID_D_POSITION   0.0            // Derivative gain (can cause noise/vibration)
+#define PID_D_POSITION   1.0            // Derivative gain - provides damping to prevent overshoot
 #define PID_RAMP_POSITION_DEG 1000.0    // Output ramp (deg/s)
 #define PID_RAMP_POSITION 100.0         // Output ramp (rad/s) - for SimpleFOC
 
