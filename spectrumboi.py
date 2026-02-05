@@ -20,6 +20,8 @@ import numpy as np
 import sys
 import os
 import time
+import threading
+from collections import deque
 from typing import Optional, List, Tuple
 from dataclasses import dataclass
 import OpenGL.GL as gl
@@ -31,6 +33,9 @@ matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 import seaborn as sns
 from io import BytesIO
+
+import serial
+import serial.tools.list_ports
 
 # Set seaborn style
 sns.set_theme(style="darkgrid")
@@ -318,11 +323,24 @@ class SpectralViewerImGui:
         
         # OpenGL texture for camera frame
         self.texture_id = None
-        
+
         # Camera view position (for mouse handling)
         self.camera_view_pos = (0, 0)
         self.camera_view_size = (0, 0)
         self.mouse_over_camera = False
+
+        # Motor control serial monitor
+        self.motor_serial = None             # serial.Serial object
+        self.motor_serial_thread = None
+        self.motor_serial_running = False
+        self.motor_serial_port = ""          # Selected port name
+        self.motor_serial_ports = []         # Available ports list
+        self.motor_serial_last_scan = 0      # Timestamp of last port scan
+        self.motor_serial_lines = deque(maxlen=500)  # Rolling buffer of (line, is_tagged) tuples
+        self.motor_serial_lock = threading.Lock()
+        self.motor_cmd_input = ""            # Command text input buffer
+        self.motor_filter_stream = True      # Filter out $ENC lines by default
+        self.motor_auto_scroll = True        # Auto-scroll to bottom
         
     def init_glfw(self):
         """Initialize GLFW and ImGui"""
@@ -663,6 +681,171 @@ class SpectralViewerImGui:
         
         return self.spectrum_plot_texture
     
+    def scan_serial_ports(self):
+        """Scan for available serial ports (rate-limited to every 2 seconds)."""
+        now = time.time()
+        if now - self.motor_serial_last_scan < 2.0:
+            return
+        self.motor_serial_last_scan = now
+        self.motor_serial_ports = [p.device for p in serial.tools.list_ports.comports()]
+
+    def motor_serial_connect(self, port):
+        """Open serial connection and start reader thread."""
+        if self.motor_serial is not None:
+            self.motor_serial_disconnect()
+        try:
+            self.motor_serial = serial.Serial(port, 115200, timeout=0.1)
+            self.motor_serial.reset_input_buffer()
+            self.motor_serial_port = port
+            self.motor_serial_running = True
+            self.motor_serial_thread = threading.Thread(
+                target=self._motor_serial_reader, daemon=True
+            )
+            self.motor_serial_thread.start()
+            with self.motor_serial_lock:
+                self.motor_serial_lines.append(
+                    (f"--- Connected to {port} @ 115200 ---", False)
+                )
+        except Exception as e:
+            with self.motor_serial_lock:
+                self.motor_serial_lines.append((f"--- Connection failed: {e} ---", False))
+            self.motor_serial = None
+
+    def motor_serial_disconnect(self):
+        """Close serial connection and stop reader thread."""
+        self.motor_serial_running = False
+        if self.motor_serial_thread and self.motor_serial_thread.is_alive():
+            self.motor_serial_thread.join(timeout=1.0)
+        self.motor_serial_thread = None
+        if self.motor_serial:
+            try:
+                self.motor_serial.close()
+            except Exception:
+                pass
+            self.motor_serial = None
+        with self.motor_serial_lock:
+            self.motor_serial_lines.append(("--- Disconnected ---", False))
+
+    def motor_serial_send(self, cmd):
+        """Send a text command over the serial connection."""
+        if self.motor_serial and self.motor_serial.is_open:
+            try:
+                self.motor_serial.write((cmd + "\n").encode())
+                with self.motor_serial_lock:
+                    self.motor_serial_lines.append((f"> {cmd}", False))
+            except Exception as e:
+                with self.motor_serial_lock:
+                    self.motor_serial_lines.append((f"--- Send error: {e} ---", False))
+
+    def _motor_serial_reader(self):
+        """Background thread: read serial lines into the buffer."""
+        while self.motor_serial_running:
+            try:
+                if not self.motor_serial or not self.motor_serial.is_open:
+                    time.sleep(0.05)
+                    continue
+                raw = self.motor_serial.readline()
+                if not raw:
+                    continue
+                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                if not line:
+                    continue
+                is_tagged = line.startswith("$")
+                with self.motor_serial_lock:
+                    self.motor_serial_lines.append((line, is_tagged))
+            except serial.SerialException:
+                with self.motor_serial_lock:
+                    self.motor_serial_lines.append(("--- Serial connection lost ---", False))
+                self.motor_serial_running = False
+            except Exception:
+                time.sleep(0.01)
+
+    def render_motor_control(self):
+        """Render the Motor Control accordion section."""
+        expanded, _ = imgui.collapsing_header("Motor Control")
+        if not expanded:
+            return
+
+        # --- Connection controls ---
+        self.scan_serial_ports()
+        connected = self.motor_serial is not None and self.motor_serial.is_open
+
+        if not connected:
+            # Port selector combo
+            ports = self.motor_serial_ports if self.motor_serial_ports else ["(no ports)"]
+            # Find current selection index
+            current_idx = 0
+            if self.motor_serial_port in ports:
+                current_idx = ports.index(self.motor_serial_port)
+            imgui.push_item_width(160)
+            changed, selected_idx = imgui.combo("##port", current_idx, ports)
+            imgui.pop_item_width()
+            if changed and ports[selected_idx] != "(no ports)":
+                self.motor_serial_port = ports[selected_idx]
+
+            imgui.same_line()
+            if imgui.button("Connect") and self.motor_serial_port:
+                self.motor_serial_connect(self.motor_serial_port)
+        else:
+            imgui.text_colored(f"Connected: {self.motor_serial_port}", 0.0, 1.0, 0.0)
+            imgui.same_line()
+            if imgui.button("Disconnect"):
+                self.motor_serial_disconnect()
+
+        imgui.separator()
+
+        # --- Serial Monitor ---
+        _, self.motor_filter_stream = imgui.checkbox(
+            "Filter $ENC stream", self.motor_filter_stream
+        )
+        imgui.same_line()
+        if imgui.small_button("Clear"):
+            with self.motor_serial_lock:
+                self.motor_serial_lines.clear()
+
+        # Scrolling child region for serial output
+        # Reserve space for the command input row below (about 30px)
+        avail_h = imgui.get_content_region_available()[1] - 30
+        # Minimum height so the monitor isn't invisible when section first opened
+        monitor_h = max(avail_h, 120)
+
+        imgui.begin_child(
+            "serial_monitor", width=0, height=monitor_h,
+            border=True,
+            flags=imgui.WINDOW_HORIZONTAL_SCROLLBAR
+        )
+
+        with self.motor_serial_lock:
+            for line, is_tagged in self.motor_serial_lines:
+                if is_tagged and self.motor_filter_stream:
+                    continue
+                if line.startswith("> "):
+                    imgui.text_colored(line, 0.4, 0.8, 1.0)
+                elif line.startswith("---"):
+                    imgui.text_colored(line, 0.6, 0.6, 0.6)
+                elif is_tagged:
+                    imgui.text_colored(line, 0.5, 0.5, 0.5)
+                else:
+                    imgui.text(line)
+
+        if self.motor_auto_scroll:
+            imgui.set_scroll_here_y(1.0)
+        imgui.end_child()
+
+        # --- Command input ---
+        imgui.push_item_width(imgui.get_content_region_available()[0] - 50)
+        enter_pressed, self.motor_cmd_input = imgui.input_text(
+            "##cmd", self.motor_cmd_input, 256,
+            imgui.INPUT_TEXT_ENTER_RETURNS_TRUE
+        )
+        imgui.pop_item_width()
+        imgui.same_line()
+        send_clicked = imgui.button("Send")
+
+        if (enter_pressed or send_clicked) and self.motor_cmd_input.strip():
+            self.motor_serial_send(self.motor_cmd_input.strip())
+            self.motor_cmd_input = ""
+
     def render_ui(self, frame):
         """Render ImGui interface"""
         imgui.new_frame()
@@ -1038,7 +1221,18 @@ class SpectralViewerImGui:
                     imgui.text_wrapped("Capture a spectrum from the selected ROI")
                 else:
                     imgui.text_wrapped("Capture spectra from defined scan lines")
-        
+
+        # === Motor Control Section ===
+        self.render_motor_control()
+
+        # === Encoder (placeholder) ===
+        if imgui.collapsing_header("Encoder")[0]:
+            imgui.text_colored("(encoder visualization coming soon)", 0.5, 0.5, 0.5)
+
+        # === Settings (placeholder) ===
+        if imgui.collapsing_header("Settings")[0]:
+            imgui.text_colored("(motor settings coming soon)", 0.5, 0.5, 0.5)
+
         imgui.end()
         
         # Camera view
@@ -1183,10 +1377,13 @@ class SpectralViewerImGui:
             glfw.swap_buffers(self.window)
         
         # Cleanup
+        if self.motor_serial:
+            self.motor_serial_disconnect()
+
         if self.stream:
             self.stream.stop_capture()
             self.stream.disconnect()
-        
+
         self.impl.shutdown()
         glfw.terminate()
         
