@@ -74,8 +74,8 @@
 #define MAX_VELOCITY         3.14       // Maximum velocity (rad/s) - for SimpleFOC
 #define DEFAULT_VELOCITY_DEG 90.0       // Default velocity (deg/s) ~15 RPM
 #define DEFAULT_VELOCITY     1.57       // Default velocity (rad/s)
-#define MIN_VELOCITY_DEG     5.7        // Minimum velocity (deg/s)
-#define MIN_VELOCITY         0.1        // Minimum velocity (rad/s)
+#define MIN_VELOCITY_DEG     5.0        // Minimum velocity (deg/s)
+#define MIN_VELOCITY         0.05       // Minimum velocity (rad/s)
 
 // Acceleration limits - OPTIMIZED FOR GIMBAL MOTORS
 #define MAX_ACCELERATION_DEG 1146.0     // Maximum acceleration (deg/s²)
@@ -95,10 +95,10 @@
 #define PID_RAMP_POSITION 100.0         // Output ramp (rad/s) - for SimpleFOC
 
 // Velocity control PID parameters - Inner loop (more critical for stability)
-// CRITICAL: These values are based on SimpleFOC gimbal motor recommendations
-// Research shows gimbal motors typically use: P=0.2, I=20, output_ramp=1000, voltage_limit=6V
-#define PID_P_VELOCITY   0.2            // Standard for gimbal motors (was 0.1)
-#define PID_I_VELOCITY   20.0           // Standard for gimbal motors (was 10.0)
+// NOTE: High integral (I=20) causes windup oscillation under varying load.
+// Reduced I and increased P to compensate. May need further tuning or architecture change.
+#define PID_P_VELOCITY   0.5            // Increased from 0.2 to compensate for lower I
+#define PID_I_VELOCITY   2.0            // Reduced from 20 to combat integral windup
 #define PID_D_VELOCITY   0.0            // Usually 0 for gimbal motors
 #define PID_RAMP_VELOCITY 1000.0        // Higher ramp for smoother control (was 100.0)
 #define PID_LPF_VELOCITY 0.01           // Low-pass filter time constant (10ms, less aggressive)
