@@ -180,6 +180,20 @@
 #define MAX_TEMPERATURE          80.0   // Maximum allowed temperature (°C)
 
 //=============================================================================
+// ENCODER STREAMING
+//=============================================================================
+// Tagged-line encoder streaming for position logging and oscillation diagnosis.
+// Lines prefixed with '$ENC,' are data; everything else is debug text.
+// Python filters on prefix, serial monitor stays usable for debugging.
+//
+// Format: $ENC,<timestamp_ms>,<position_deg>,<velocity_deg_s>,<target_deg>
+// Markers: $SCAN_START,<timestamp_ms>  and  $SCAN_END,<timestamp_ms>
+#define STREAM_DEFAULT_ENABLED   false          // Streaming off by default (toggle with 'stream on')
+#define STREAM_RATE_HZ           100            // Default stream rate (Hz) - uses ~35% of 115200 baud
+#define STREAM_MIN_RATE_HZ       1              // Minimum configurable rate
+#define STREAM_MAX_RATE_HZ       500            // Maximum configurable rate (limited by loop + I2C)
+
+//=============================================================================
 // DEBUGGING
 //=============================================================================
 // NOTE: Debug flags can be toggled at runtime using the "debug" command

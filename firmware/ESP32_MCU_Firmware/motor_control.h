@@ -234,6 +234,15 @@ public:
     // Diagnostic: Get sensor call count (for debugging SimpleFOC integration)
     unsigned long getSensorCallCount() { return encoder.getCallCount(); }
 
+    // Encoder streaming (tagged CSV over serial)
+    void setStreamEnabled(bool enabled);
+    bool isStreamEnabled() { return stream_enabled; }
+    void setStreamRate(uint16_t hz);
+    uint16_t getStreamRate() { return stream_rate_hz; }
+    void emitStreamLine();       // Call from loop - emits $ENC, line at configured rate
+    void emitScanStart();        // Emit $SCAN_START marker
+    void emitScanEnd();          // Emit $SCAN_END marker
+
     // Direct motor access for tests
     BLDCMotor& getMotor() { return motor; }
     MT6701Sensor& getEncoder() { return encoder; }
@@ -263,6 +272,12 @@ private:
     // Calibration helpers
     bool runCalibration();
     bool runManualCalibration();
+
+    // Encoder streaming state
+    bool stream_enabled;
+    uint16_t stream_rate_hz;
+    unsigned long stream_interval_us;   // Microseconds between stream lines
+    unsigned long last_stream_time_us;  // Last time a stream line was emitted
 };
 
 #endif // MOTOR_CONTROL_H

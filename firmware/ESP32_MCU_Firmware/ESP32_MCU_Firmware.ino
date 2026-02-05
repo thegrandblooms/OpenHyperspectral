@@ -470,6 +470,37 @@ void processSerialCommand(String cmd) {
     else if (command == "align" || command == "alignment_test") {
         runAlignmentTest(motorControl);
     }
+    else if (command == "stream") {
+        if (args == "on") {
+            motorControl.setStreamEnabled(true);
+            Serial.println("Encoder streaming ON");
+        } else if (args == "off") {
+            motorControl.setStreamEnabled(false);
+            Serial.println("Encoder streaming OFF");
+        } else if (args.startsWith("rate")) {
+            // "stream rate 50" sets stream to 50Hz
+            int spaceIdx = args.indexOf(' ');
+            if (spaceIdx > 0) {
+                uint16_t hz = args.substring(spaceIdx + 1).toInt();
+                motorControl.setStreamRate(hz);
+                Serial.print("Stream rate set to ");
+                Serial.print(motorControl.getStreamRate());
+                Serial.println(" Hz");
+            } else {
+                Serial.print("Current stream rate: ");
+                Serial.print(motorControl.getStreamRate());
+                Serial.println(" Hz");
+            }
+        } else {
+            Serial.printf("Streaming: %s @ %d Hz\n",
+                motorControl.isStreamEnabled() ? "ON" : "OFF",
+                motorControl.getStreamRate());
+            Serial.println("  stream on        - start encoder streaming");
+            Serial.println("  stream off       - stop encoder streaming");
+            Serial.println("  stream rate <hz> - set stream rate (1-500)");
+            Serial.println("Format: $ENC,timestamp_ms,pos_deg,vel_deg_s,target_deg");
+        }
+    }
     else if (command == "debug") {
         if (args.length() > 0) {
             int level = args.toInt();
@@ -595,6 +626,9 @@ void loop() {
 
     // Update motor control (FOC algorithm)
     motorControl.update();
+
+    // Emit encoder stream line (rate-limited, no-op when streaming is off)
+    motorControl.emitStreamLine();
 
     // Check for position reached notifications
     if (motorControl.getControlMode() == MODE_POSITION) {

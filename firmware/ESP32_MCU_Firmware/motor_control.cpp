@@ -315,7 +315,11 @@ MotorController::MotorController()
       settling_start_time(0),
       move_timeout_printed(true),  // Start as true so we don't print before first move
       at_target_printed(true),     // Start as true so we don't print before first move
-      last_target_for_timeout(-999.0f) {
+      last_target_for_timeout(-999.0f),
+      stream_enabled(STREAM_DEFAULT_ENABLED),
+      stream_rate_hz(STREAM_RATE_HZ),
+      stream_interval_us(1000000UL / STREAM_RATE_HZ),
+      last_stream_time_us(0) {
 }
 
 void MotorController::begin() {
@@ -1144,4 +1148,63 @@ void MotorController::update() {
             }
         }
     }
+}
+
+//=============================================================================
+// ENCODER STREAMING
+//=============================================================================
+// Tagged CSV lines: $ENC,timestamp_ms,position_deg,velocity_deg_s,target_deg
+// Python filters on '$ENC,' prefix; debug text passes through untagged.
+// This keeps the serial monitor usable for debugging while streaming data.
+
+void MotorController::setStreamEnabled(bool enabled) {
+    stream_enabled = enabled;
+    last_stream_time_us = micros();  // Reset timer to avoid burst on enable
+    if (enabled) {
+        Serial.print("$STREAM_ON,");
+        Serial.println(millis());
+    } else {
+        Serial.print("$STREAM_OFF,");
+        Serial.println(millis());
+    }
+}
+
+void MotorController::setStreamRate(uint16_t hz) {
+    hz = constrain(hz, STREAM_MIN_RATE_HZ, STREAM_MAX_RATE_HZ);
+    stream_rate_hz = hz;
+    stream_interval_us = 1000000UL / hz;
+}
+
+void MotorController::emitStreamLine() {
+    if (!stream_enabled) return;
+
+    unsigned long now_us = micros();
+    if (now_us - last_stream_time_us < stream_interval_us) return;
+    last_stream_time_us = now_us;
+
+    // Use already-cached values from this loop iteration (no extra I2C read)
+    float pos_deg = getPosition();
+    float vel_deg_s = getCurrentVelocityDegPerSec();
+    float target_deg = target_position_deg;
+
+    // Tagged CSV: $ENC,timestamp_ms,position_deg,velocity_deg_s,target_deg
+    // Using Serial.print chain for minimal memory allocation on ESP32
+    Serial.print("$ENC,");
+    Serial.print(millis());
+    Serial.print(',');
+    Serial.print(pos_deg, 2);
+    Serial.print(',');
+    Serial.print(vel_deg_s, 2);
+    Serial.print(',');
+    Serial.println(target_deg, 2);
+}
+
+void MotorController::emitScanStart() {
+    Serial.print("$SCAN_START,");
+    Serial.println(millis());
+}
+
+void MotorController::emitScanEnd() {
+    Serial.print("$SCAN_END,");
+    Serial.println(millis());
 }
