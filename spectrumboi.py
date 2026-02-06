@@ -22,6 +22,7 @@ import os
 import time
 import threading
 from collections import deque
+from datetime import datetime
 from typing import Optional, List, Tuple
 from dataclasses import dataclass
 import OpenGL.GL as gl
@@ -761,6 +762,32 @@ class SpectralViewerImGui:
             except Exception:
                 time.sleep(0.01)
 
+    def _export_encoder_csv(self):
+        """Export stream buffer to a timestamped CSV file."""
+        with self.motor_serial_lock:
+            lines = [l for l in self.motor_stream_lines if l.startswith("$ENC,")]
+
+        if not lines:
+            with self.motor_serial_lock:
+                self.motor_debug_lines.append("--- Export: no encoder data to export ---")
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"encoder_log_{timestamp}.csv"
+        try:
+            with open(filename, "w") as f:
+                f.write("timestamp_ms,position_deg,velocity_deg_s,target_deg\n")
+                for line in lines:
+                    # $ENC,ts,pos,vel,target -> ts,pos,vel,target
+                    f.write(line[5:] + "\n")
+            with self.motor_serial_lock:
+                self.motor_debug_lines.append(
+                    f"--- Exported {len(lines)} samples to {filename} ---"
+                )
+        except Exception as e:
+            with self.motor_serial_lock:
+                self.motor_debug_lines.append(f"--- Export failed: {e} ---")
+
     def _render_encoder_plot(self):
         """Render real-time encoder position plot using imgui draw list."""
         plot_width = imgui.get_content_region_available()[0]
@@ -975,6 +1002,19 @@ class SpectralViewerImGui:
         # --- Nested sub-sections (tree_node nests inside collapsing_header) ---
         if imgui.tree_node("Encoder"):
             self._render_encoder_plot()
+
+            # Sample count and export button
+            with self.motor_serial_lock:
+                n_samples = sum(1 for l in self.motor_stream_lines if l.startswith("$ENC,"))
+            imgui.text(f"{n_samples} samples")
+            imgui.same_line()
+            if imgui.small_button("Export CSV"):
+                self._export_encoder_csv()
+            imgui.same_line()
+            if imgui.small_button("Clear##enc"):
+                with self.motor_serial_lock:
+                    self.motor_stream_lines.clear()
+
             imgui.tree_pop()
 
         if imgui.tree_node("Motor Settings"):

@@ -733,6 +733,11 @@ void MotorController::enable() {
     // Set target to current position to prevent immediate movement
     target_position_deg = getPosition();
 
+    // Auto-start encoder streaming so test sequences get logged
+    if (!stream_enabled) {
+        setStreamEnabled(true);
+    }
+
     if (DEBUG_MOTOR) {
         Serial.print("✓ Motor enabled at ");
         Serial.print(target_position_deg, 1);
@@ -743,6 +748,11 @@ void MotorController::enable() {
 void MotorController::disable() {
     motor.disable();
     motor_enabled = false;
+
+    // Auto-stop encoder streaming
+    if (stream_enabled) {
+        setStreamEnabled(false);
+    }
 
     // Reset timeout tracking
     move_start_time = 0;
