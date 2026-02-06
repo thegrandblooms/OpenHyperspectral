@@ -811,8 +811,7 @@ class SpectralViewerImGui:
 
         imgui.begin_child(
             "serial_monitor", width=0, height=monitor_h,
-            border=True,
-            flags=imgui.WINDOW_HORIZONTAL_SCROLLBAR
+            border=True
         )
 
         with self.motor_serial_lock:
@@ -845,6 +844,17 @@ class SpectralViewerImGui:
         if (enter_pressed or send_clicked) and self.motor_cmd_input.strip():
             self.motor_serial_send(self.motor_cmd_input.strip())
             self.motor_cmd_input = ""
+
+        imgui.separator()
+
+        # --- Nested sub-sections (tree_node nests inside collapsing_header) ---
+        if imgui.tree_node("Encoder"):
+            imgui.text_colored("(encoder visualization coming soon)", 0.5, 0.5, 0.5)
+            imgui.tree_pop()
+
+        if imgui.tree_node("Motor Settings"):
+            imgui.text_colored("(motor settings coming soon)", 0.5, 0.5, 0.5)
+            imgui.tree_pop()
 
     def render_ui(self, frame):
         """Render ImGui interface"""
@@ -1224,14 +1234,6 @@ class SpectralViewerImGui:
 
         # === Motor Control Section ===
         self.render_motor_control()
-
-        # === Encoder (placeholder) ===
-        if imgui.collapsing_header("Encoder")[0]:
-            imgui.text_colored("(encoder visualization coming soon)", 0.5, 0.5, 0.5)
-
-        # === Settings (placeholder) ===
-        if imgui.collapsing_header("Settings")[0]:
-            imgui.text_colored("(motor settings coming soon)", 0.5, 0.5, 0.5)
 
         imgui.end()
         
