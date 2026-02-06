@@ -761,6 +761,122 @@ class SpectralViewerImGui:
             except Exception:
                 time.sleep(0.01)
 
+    def _render_encoder_plot(self):
+        """Render real-time encoder position plot using imgui draw list."""
+        plot_width = imgui.get_content_region_available()[0]
+        plot_height = 150
+        plot_color_pos = imgui.get_color_u32_rgba(0.4, 0.8, 1.0, 1.0)     # Blue - position
+        plot_color_target = imgui.get_color_u32_rgba(1.0, 0.4, 0.4, 0.8)   # Red - target
+        plot_color_bg = imgui.get_color_u32_rgba(0.12, 0.12, 0.12, 1.0)
+        plot_color_grid = imgui.get_color_u32_rgba(0.25, 0.25, 0.25, 1.0)
+        plot_color_label = imgui.get_color_u32_rgba(0.5, 0.5, 0.5, 1.0)
+
+        # Parse stream buffer into plottable arrays
+        with self.motor_serial_lock:
+            stream_snapshot = list(self.motor_stream_lines)
+
+        positions = []
+        targets = []
+        for line in stream_snapshot:
+            if not line.startswith("$ENC,"):
+                continue
+            parts = line[5:].split(",")
+            if len(parts) < 4:
+                continue
+            try:
+                positions.append(float(parts[1]))
+                targets.append(float(parts[3]))
+            except ValueError:
+                continue
+
+        # Reserve space and get draw list
+        cursor_pos = imgui.get_cursor_screen_position()
+        imgui.invisible_button("##enc_plot", plot_width, plot_height)
+        draw_list = imgui.get_window_draw_list()
+
+        x0 = cursor_pos[0]
+        y0 = cursor_pos[1]
+        x1 = x0 + plot_width
+        y1 = y0 + plot_height
+
+        # Background
+        draw_list.add_rect_filled(x0, y0, x1, y1, plot_color_bg)
+
+        # Grid lines (3 horizontal)
+        for i in range(1, 4):
+            gy = y0 + plot_height * i / 4
+            draw_list.add_line(x0, gy, x1, gy, plot_color_grid)
+
+        if len(positions) < 2:
+            # No data yet
+            tx = x0 + plot_width / 2 - 40
+            ty = y0 + plot_height / 2 - 7
+            draw_list.add_text(tx, ty, plot_color_label, "Waiting for $ENC data...")
+            # Axis labels
+            draw_list.add_text(x0 + 2, y0 + 2, plot_color_label, "Encoder Position")
+            draw_list.add_text(x0 + plot_width - 30, y1 - 14, plot_color_label, "Time")
+            # Border
+            draw_list.add_rect(x0, y0, x1, y1, plot_color_grid)
+            return
+
+        # Use last N points that fit in the plot width (1 point per 2 pixels)
+        max_points = int(plot_width / 2)
+        pos_data = positions[-max_points:]
+        tgt_data = targets[-max_points:]
+        n = len(pos_data)
+
+        # Compute Y range from both position and target
+        all_vals = pos_data + tgt_data
+        val_min = min(all_vals)
+        val_max = max(all_vals)
+
+        # Add some padding so lines don't sit on the edge
+        val_range = val_max - val_min
+        if val_range < 1.0:
+            val_range = 1.0
+            mid = (val_max + val_min) / 2
+            val_min = mid - 0.5
+            val_max = mid + 0.5
+        padding = val_range * 0.1
+        val_min -= padding
+        val_max += padding
+        val_range = val_max - val_min
+
+        def to_screen(i, v):
+            sx = x0 + (i / (n - 1)) * plot_width
+            sy = y1 - ((v - val_min) / val_range) * plot_height
+            return (sx, sy)
+
+        # Draw target line first (behind position)
+        for i in range(n - 1):
+            sx1, sy1 = to_screen(i, tgt_data[i])
+            sx2, sy2 = to_screen(i + 1, tgt_data[i + 1])
+            draw_list.add_line(sx1, sy1, sx2, sy2, plot_color_target, 1.0)
+
+        # Draw position line
+        for i in range(n - 1):
+            sx1, sy1 = to_screen(i, pos_data[i])
+            sx2, sy2 = to_screen(i + 1, pos_data[i + 1])
+            draw_list.add_line(sx1, sy1, sx2, sy2, plot_color_pos, 1.5)
+
+        # Axis labels
+        draw_list.add_text(x0 + 2, y0 + 2, plot_color_label, "Encoder Position")
+        draw_list.add_text(x0 + plot_width - 30, y1 - 14, plot_color_label, "Time")
+
+        # Y range labels
+        draw_list.add_text(x0 + 2, y0 + 14, plot_color_label, f"{val_max:.0f}")
+        draw_list.add_text(x0 + 2, y1 - 14, plot_color_label, f"{val_min:.0f}")
+
+        # Legend (top right)
+        lx = x1 - 85
+        draw_list.add_line(lx, y0 + 6, lx + 12, y0 + 6, plot_color_pos, 1.5)
+        draw_list.add_text(lx + 15, y0 + 0, plot_color_label, "pos")
+        draw_list.add_line(lx + 40, y0 + 6, lx + 52, y0 + 6, plot_color_target, 1.0)
+        draw_list.add_text(lx + 55, y0 + 0, plot_color_label, "target")
+
+        # Border
+        draw_list.add_rect(x0, y0, x1, y1, plot_color_grid)
+
     def render_motor_control(self):
         """Render the Motor Control accordion section."""
         expanded, _ = imgui.collapsing_header("Motor Control")
@@ -835,6 +951,11 @@ class SpectralViewerImGui:
         imgui.end_child()
 
         # --- Command input ---
+        # Set focus back to input after sending a command
+        if hasattr(self, '_motor_refocus_cmd') and self._motor_refocus_cmd:
+            imgui.set_keyboard_focus_here()
+            self._motor_refocus_cmd = False
+
         imgui.push_item_width(imgui.get_content_region_available()[0] - 50)
         enter_pressed, self.motor_cmd_input = imgui.input_text(
             "##cmd", self.motor_cmd_input, 256,
@@ -847,12 +968,13 @@ class SpectralViewerImGui:
         if (enter_pressed or send_clicked) and self.motor_cmd_input.strip():
             self.motor_serial_send(self.motor_cmd_input.strip())
             self.motor_cmd_input = ""
+            self._motor_refocus_cmd = True
 
         imgui.separator()
 
         # --- Nested sub-sections (tree_node nests inside collapsing_header) ---
         if imgui.tree_node("Encoder"):
-            imgui.text_colored("(encoder visualization coming soon)", 0.5, 0.5, 0.5)
+            self._render_encoder_plot()
             imgui.tree_pop()
 
         if imgui.tree_node("Motor Settings"):
