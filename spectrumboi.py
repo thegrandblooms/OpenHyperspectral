@@ -336,10 +336,11 @@ class SpectralViewerImGui:
         self.motor_serial_port = ""          # Selected port name
         self.motor_serial_ports = []         # Available ports list
         self.motor_serial_last_scan = 0      # Timestamp of last port scan
-        self.motor_serial_lines = deque(maxlen=500)  # Rolling buffer of (line, is_tagged) tuples
+        # Separate buffers: debug text shown in monitor, tagged data stored silently
+        self.motor_debug_lines = deque(maxlen=500)   # Debug/command text only
+        self.motor_stream_lines = deque(maxlen=2000) # $ENC data (for future Encoder section)
         self.motor_serial_lock = threading.Lock()
         self.motor_cmd_input = ""            # Command text input buffer
-        self.motor_filter_stream = True      # Filter out $ENC lines by default
         self.motor_auto_scroll = True        # Auto-scroll to bottom
         
     def init_glfw(self):
@@ -703,12 +704,10 @@ class SpectralViewerImGui:
             )
             self.motor_serial_thread.start()
             with self.motor_serial_lock:
-                self.motor_serial_lines.append(
-                    (f"--- Connected to {port} @ 115200 ---", False)
-                )
+                self.motor_debug_lines.append(f"--- Connected to {port} @ 115200 ---")
         except Exception as e:
             with self.motor_serial_lock:
-                self.motor_serial_lines.append((f"--- Connection failed: {e} ---", False))
+                self.motor_debug_lines.append(f"--- Connection failed: {e} ---")
             self.motor_serial = None
 
     def motor_serial_disconnect(self):
@@ -724,7 +723,7 @@ class SpectralViewerImGui:
                 pass
             self.motor_serial = None
         with self.motor_serial_lock:
-            self.motor_serial_lines.append(("--- Disconnected ---", False))
+            self.motor_debug_lines.append("--- Disconnected ---")
 
     def motor_serial_send(self, cmd):
         """Send a text command over the serial connection."""
@@ -732,13 +731,13 @@ class SpectralViewerImGui:
             try:
                 self.motor_serial.write((cmd + "\n").encode())
                 with self.motor_serial_lock:
-                    self.motor_serial_lines.append((f"> {cmd}", False))
+                    self.motor_debug_lines.append(f"> {cmd}")
             except Exception as e:
                 with self.motor_serial_lock:
-                    self.motor_serial_lines.append((f"--- Send error: {e} ---", False))
+                    self.motor_debug_lines.append(f"--- Send error: {e} ---")
 
     def _motor_serial_reader(self):
-        """Background thread: read serial lines into the buffer."""
+        """Background thread: sort serial lines into debug vs stream buffers."""
         while self.motor_serial_running:
             try:
                 if not self.motor_serial or not self.motor_serial.is_open:
@@ -750,12 +749,14 @@ class SpectralViewerImGui:
                 line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
                 if not line:
                     continue
-                is_tagged = line.startswith("$")
                 with self.motor_serial_lock:
-                    self.motor_serial_lines.append((line, is_tagged))
+                    if line.startswith("$"):
+                        self.motor_stream_lines.append(line)
+                    else:
+                        self.motor_debug_lines.append(line)
             except serial.SerialException:
                 with self.motor_serial_lock:
-                    self.motor_serial_lines.append(("--- Serial connection lost ---", False))
+                    self.motor_debug_lines.append("--- Serial connection lost ---")
                 self.motor_serial_running = False
             except Exception:
                 time.sleep(0.01)
@@ -794,19 +795,25 @@ class SpectralViewerImGui:
 
         imgui.separator()
 
-        # --- Serial Monitor ---
-        _, self.motor_filter_stream = imgui.checkbox(
-            "Filter $ENC stream", self.motor_filter_stream
-        )
+        # --- Serial Monitor toolbar ---
+        _, self.motor_auto_scroll = imgui.checkbox("Auto-scroll", self.motor_auto_scroll)
+
+        # Right-align Copy and Clear buttons
+        imgui.same_line()
+        avail_x = imgui.get_content_region_available()[0]
+        imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + avail_x - 80)
+        if imgui.small_button("Copy"):
+            with self.motor_serial_lock:
+                text = "\n".join(self.motor_debug_lines)
+            imgui.set_clipboard_text(text)
         imgui.same_line()
         if imgui.small_button("Clear"):
             with self.motor_serial_lock:
-                self.motor_serial_lines.clear()
+                self.motor_debug_lines.clear()
 
-        # Scrolling child region for serial output
-        # Reserve space for the command input row below (about 30px)
+        # Scrolling child region for serial output (debug lines only)
+        # Reserve space for the command input row below (~30px)
         avail_h = imgui.get_content_region_available()[1] - 30
-        # Minimum height so the monitor isn't invisible when section first opened
         monitor_h = max(avail_h, 120)
 
         imgui.begin_child(
@@ -815,15 +822,11 @@ class SpectralViewerImGui:
         )
 
         with self.motor_serial_lock:
-            for line, is_tagged in self.motor_serial_lines:
-                if is_tagged and self.motor_filter_stream:
-                    continue
+            for line in self.motor_debug_lines:
                 if line.startswith("> "):
                     imgui.text_colored(line, 0.4, 0.8, 1.0)
                 elif line.startswith("---"):
                     imgui.text_colored(line, 0.6, 0.6, 0.6)
-                elif is_tagged:
-                    imgui.text_colored(line, 0.5, 0.5, 0.5)
                 else:
                     imgui.text(line)
 
