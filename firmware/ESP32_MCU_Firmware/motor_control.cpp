@@ -1093,6 +1093,11 @@ void MotorController::update() {
 
     motor.move(normalized_target_rad);
 
+    // Emit encoder stream data (rate-limited, no-op when streaming is off).
+    // Called here so test loops that call update() also get stream data,
+    // not just the main Arduino loop().
+    emitStreamLine();
+
     // NOTE: AT_TARGET debug removed from here - it was using raw shaft_angle
     // which caused confusing duplicate logs with non-normalized angles.
     // The isAtTarget() function already has proper normalized debug output.

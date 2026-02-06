@@ -624,11 +624,8 @@ void loop() {
         processCommand();
     }
 
-    // Update motor control (FOC algorithm)
+    // Update motor control (FOC algorithm + encoder stream emission)
     motorControl.update();
-
-    // Emit encoder stream line (rate-limited, no-op when streaming is off)
-    motorControl.emitStreamLine();
 
     // Check for position reached notifications
     if (motorControl.getControlMode() == MODE_POSITION) {
