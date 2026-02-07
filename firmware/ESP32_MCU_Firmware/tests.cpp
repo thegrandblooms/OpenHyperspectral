@@ -465,16 +465,17 @@ void runSystemDiagnostic(MotorController& mc) {
     motor.controller = MotionControlType::angle_openloop;
     float ol_target = motor.shaft_angle + degreesToRadians(30.0);
 
-    // CRITICAL: Run at ~1kHz (delay(1)), NOT 10Hz (delay(100))!
-    // Open-loop commutation requires small electrical angle steps per iteration.
-    // At 10Hz:  step = velocity * Ts * pole_pairs = 2.0 * 0.1  * 7 = 80° elec → motor loses sync
-    // At 1kHz:  step = velocity * Ts * pole_pairs = 2.0 * 0.001 * 7 = 0.8° elec → smooth tracking
+    // CRITICAL: Do NOT call loopFOC() during open-loop movement!
+    // loopFOC() overwrites shaft_angle with the actual sensor reading each iteration.
+    // This defeats open-loop control: angleOpenloop() advances shaft_angle internally
+    // to rotate the field, but loopFOC() resets it to the encoder position, so the
+    // field is always only ~0.8° electrical ahead of the motor — not enough torque.
+    // Without loopFOC(), shaft_angle ramps freely at velocity_limit and the motor follows.
     unsigned long t4_start_ms = millis();
     unsigned long last_sample_ms = t4_start_ms;
     int t4_loops = 0;
 
     while (millis() - t4_start_ms < 2000) {  // 2 second test window
-        motor.loopFOC();
         motor.move(ol_target);
         t4_loops++;
 
@@ -506,7 +507,7 @@ void runSystemDiagnostic(MotorController& mc) {
         t4_pass = true;
         Serial.printf("OK (moved %.1f° in %d loops)\n", t4_move, t4_loops);
     } else {
-        Serial.printf("FAIL (moved %.1f° in %d loops - check wiring/driver/power)\n", t4_move, t4_loops);
+        Serial.printf("FAIL (moved %.1f° in %d loops)\n", t4_move, t4_loops);
         mc.disable();
         return;
     }
