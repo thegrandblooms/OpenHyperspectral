@@ -452,31 +452,30 @@ void runSystemDiagnostic(MotorController& mc) {
     encoder.update();
     float start_enc = encoder.getDegrees();
 
-    // Save and set conservative velocity for open-loop (gimbal motors need slow speeds)
+    // Save velocity limit
     float saved_vel_limit = motor.velocity_limit;
-    motor.velocity_limit = 2.0;  // ~115°/s - conservative for reliable open-loop
+
+    // Use velocity_openloop (not angle_openloop) so the field rotates continuously
+    // at a steady rate for the full 2s test. angle_openloop stops advancing once the
+    // internal shaft_angle reaches the target (~260ms for 30°), leaving the motor
+    // with only a static field for the remaining 1.7s — not enough time to move.
+    motor.controller = MotionControlType::velocity_openloop;
+    float ol_velocity = 1.0;  // rad/s (~57°/s) - moderate for gimbal motor
 
     // Log pre-test state
-    Serial.printf("  Setup: Enc=%.1f° shaft=%.1f° Vlim=%.1frad/s Vdrive=%.1fV\n",
+    Serial.printf("  Setup: Enc=%.1f° shaft=%.1f° OL_vel=%.1frad/s Vdrive=%.1fV\n",
         start_enc, radiansToDegrees(motor.shaft_angle),
-        motor.velocity_limit, motor.voltage_limit);
-
-    // Temporarily switch to open-loop mode (NO feedback control)
-    motor.controller = MotionControlType::angle_openloop;
-    float ol_target = motor.shaft_angle + degreesToRadians(30.0);
+        ol_velocity, motor.voltage_limit);
 
     // CRITICAL: Do NOT call loopFOC() during open-loop movement!
-    // loopFOC() overwrites shaft_angle with the actual sensor reading each iteration.
-    // This defeats open-loop control: angleOpenloop() advances shaft_angle internally
-    // to rotate the field, but loopFOC() resets it to the encoder position, so the
-    // field is always only ~0.8° electrical ahead of the motor — not enough torque.
-    // Without loopFOC(), shaft_angle ramps freely at velocity_limit and the motor follows.
+    // loopFOC() overwrites shaft_angle with the sensor reading each iteration,
+    // preventing the open-loop controller from freely advancing the field angle.
     unsigned long t4_start_ms = millis();
     unsigned long last_sample_ms = t4_start_ms;
     int t4_loops = 0;
 
     while (millis() - t4_start_ms < 2000) {  // 2 second test window
-        motor.move(ol_target);
+        motor.move(ol_velocity);
         t4_loops++;
 
         // Log progress every 500ms
