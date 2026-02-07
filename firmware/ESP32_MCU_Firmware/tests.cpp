@@ -516,7 +516,20 @@ void runSystemDiagnostic(MotorController& mc) {
     //=========================================================================
     Serial.print("[T5] Position Control... ");
 
-    // Sync to current encoder position
+    // T4's velocity_openloop leaves the motor spinning with shaft_angle desynced
+    // from the actual encoder. Must settle and re-sync before closed-loop T5.
+    mc.disable();
+    delay(500);  // Coast to a stop
+
+    // Re-enable: re-syncs shaft_angle from sensor, sets target = current position
+    mc.enable();
+    // Stabilize: run a few closed-loop cycles holding current position
+    for (int i = 0; i < 100; i++) {
+        mc.update();
+        delay(1);
+    }
+
+    // Now read position and command +30° from a clean, settled state
     encoder.update();
     float start_pos = encoder.getDegrees();
     float target_pos = fmod(start_pos + 30.0, 360.0);
