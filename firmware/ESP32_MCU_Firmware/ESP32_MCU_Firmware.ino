@@ -340,6 +340,9 @@ void processSerialCommand(String cmd) {
 
     if (cmd.length() == 0) return;
 
+    // Reset idle timer on any command
+    motorControl.notifyCommandActivity();
+
     Serial.print("\n> ");
     Serial.println(cmd);
 
@@ -364,11 +367,13 @@ void processSerialCommand(String cmd) {
     else if (command == "e" || command == "enable") {
         Serial.println("Enabling motor...");
         motorControl.enable();
+        motorControl.setAutoEnabled(false);  // Manual enable - don't auto-disable
         Serial.println("Motor enabled!");
     }
     else if (command == "d" || command == "disable") {
         Serial.println("Disabling motor...");
         motorControl.disable();
+        motorControl.setAutoEnabled(false);
         Serial.println("Motor disabled!");
     }
     else if (command == "c" || command == "calibrate") {
@@ -404,15 +409,28 @@ void processSerialCommand(String cmd) {
         motorControl.stop();
         Serial.println("Motor stopped!");
     }
-    else if (command == "m" || command == "move") {
-        if (args.length() > 0) {
-            float angle = args.toFloat();
+    else if (command == "m" || command == "move" || (command.startsWith("m") && command.length() > 1 && (isDigit(command[1]) || command[1] == '-' || command[1] == '.'))) {
+        // Support both "m 90" and "m90" / "m180" syntax
+        String angleStr = args;
+        if (command.length() > 1 && command.startsWith("m") && command != "move" && command != "mode" && command != "motor_test") {
+            // "m90", "m180", "m-45" etc. - number is part of command token
+            angleStr = command.substring(1) + (args.length() > 0 ? " " + args : "");
+        }
+        if (angleStr.length() > 0) {
+            float angle = angleStr.toFloat();
+            // Auto-enable if calibrated but not enabled
+            if (!motorControl.isEnabled() && motorControl.isCalibrated()) {
+                Serial.println("[AUTO] Enabling motor for move command...");
+                motorControl.enable();
+                motorControl.setAutoEnabled(true);
+                motorControl.notifyCommandActivity();
+            }
             Serial.print("Moving to position: ");
             Serial.print(angle);
             Serial.println("° (absolute position 0-360)");
             motorControl.moveToPosition(angle);
         } else {
-            Serial.println("Error: Please specify angle in degrees (e.g., 'm 90' or 'm 180.5')");
+            Serial.println("Error: Please specify angle (e.g., 'm 90', 'm90', 'move 180.5')");
         }
     }
     else if (command == "v" || command == "velocity") {
@@ -626,6 +644,9 @@ void loop() {
 
     // Update motor control (FOC algorithm + encoder stream emission)
     motorControl.update();
+
+    // Check for auto-disable on idle (only affects auto-enabled motors)
+    motorControl.checkIdleDisable();
 
     // Check for position reached notifications
     if (motorControl.getControlMode() == MODE_POSITION) {

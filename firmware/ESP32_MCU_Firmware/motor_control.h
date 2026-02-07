@@ -243,6 +243,12 @@ public:
     void emitScanStart();        // Emit $SCAN_START marker
     void emitScanEnd();          // Emit $SCAN_END marker
 
+    // Auto-enable/disable
+    void notifyCommandActivity();    // Call on any serial command to reset idle timer
+    void checkIdleDisable();         // Call in loop - disables motor after idle timeout
+    void setAutoEnabled(bool enabled) { auto_enabled = enabled; }
+    bool isAutoEnabled() { return auto_enabled; }
+
     // Direct motor access for tests
     BLDCMotor& getMotor() { return motor; }
     MT6701Sensor& getEncoder() { return encoder; }
@@ -272,6 +278,15 @@ private:
     // Calibration helpers
     bool runCalibration();
     bool runManualCalibration();
+
+    // Auto-idle disable tracking
+    unsigned long last_command_time;        // Last time a serial command was received (millis)
+    unsigned long last_movement_time;       // Last time encoder detected movement (millis)
+    float last_idle_check_deg;             // Position at last idle check
+    bool auto_enabled;                      // True if motor was auto-enabled (vs manually enabled)
+    static constexpr unsigned long IDLE_COMMAND_TIMEOUT_MS = 10000;  // 10s no commands
+    static constexpr unsigned long IDLE_MOVEMENT_TIMEOUT_MS = 5000;  // 5s no encoder movement
+    static constexpr float IDLE_MOVEMENT_THRESHOLD_DEG = 0.5f;      // Movement detection threshold
 
     // Encoder streaming state
     bool stream_enabled;
