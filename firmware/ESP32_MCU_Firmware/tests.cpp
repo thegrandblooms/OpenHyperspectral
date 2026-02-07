@@ -447,7 +447,7 @@ void runSystemDiagnostic(MotorController& mc) {
     //=========================================================================
     // T4: Open-Loop Test (verify driver/wiring/power)
     //=========================================================================
-    Serial.print("[T4] Open-Loop Test... ");
+    Serial.println("[T4] Open-Loop Test... ");
 
     encoder.update();
     float start_enc = encoder.getDegrees();
@@ -456,14 +456,41 @@ void runSystemDiagnostic(MotorController& mc) {
     float saved_vel_limit = motor.velocity_limit;
     motor.velocity_limit = 2.0;  // ~115°/s - conservative for reliable open-loop
 
-    // Temporarily switch to open-loop mode
+    // Log pre-test state
+    Serial.printf("  Setup: Enc=%.1f° shaft=%.1f° Vlim=%.1frad/s Vdrive=%.1fV\n",
+        start_enc, radiansToDegrees(motor.shaft_angle),
+        motor.velocity_limit, motor.voltage_limit);
+
+    // Temporarily switch to open-loop mode (NO feedback control)
     motor.controller = MotionControlType::angle_openloop;
     float ol_target = motor.shaft_angle + degreesToRadians(30.0);
 
-    for (int i = 0; i < 20; i++) {
+    // CRITICAL: Run at ~1kHz (delay(1)), NOT 10Hz (delay(100))!
+    // Open-loop commutation requires small electrical angle steps per iteration.
+    // At 10Hz:  step = velocity * Ts * pole_pairs = 2.0 * 0.1  * 7 = 80° elec → motor loses sync
+    // At 1kHz:  step = velocity * Ts * pole_pairs = 2.0 * 0.001 * 7 = 0.8° elec → smooth tracking
+    unsigned long t4_start_ms = millis();
+    unsigned long last_sample_ms = t4_start_ms;
+    int t4_loops = 0;
+
+    while (millis() - t4_start_ms < 2000) {  // 2 second test window
         motor.loopFOC();
         motor.move(ol_target);
-        delay(100);
+        t4_loops++;
+
+        // Log progress every 500ms
+        unsigned long now = millis();
+        if (now - last_sample_ms >= 500) {
+            encoder.update();
+            float progress = encoder.getDegrees() - start_enc;
+            if (progress < -180) progress += 360;
+            if (progress > 180) progress -= 360;
+            Serial.printf("  @%lums: moved %.1f° (%d loops)\n",
+                now - t4_start_ms, progress, t4_loops);
+            last_sample_ms = now;
+        }
+
+        delay(1);
     }
 
     encoder.update();
@@ -477,9 +504,9 @@ void runSystemDiagnostic(MotorController& mc) {
 
     if (abs(t4_move) > 10) {
         t4_pass = true;
-        Serial.printf("OK (moved %.1f°)\n", t4_move);
+        Serial.printf("OK (moved %.1f° in %d loops)\n", t4_move, t4_loops);
     } else {
-        Serial.printf("FAIL (moved %.1f° - check wiring/driver/power)\n", t4_move);
+        Serial.printf("FAIL (moved %.1f° in %d loops - check wiring/driver/power)\n", t4_move, t4_loops);
         mc.disable();
         return;
     }
