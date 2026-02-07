@@ -512,24 +512,95 @@ void runSystemDiagnostic(MotorController& mc) {
     }
 
     //=========================================================================
-    // T5: Position Control Test (+30° closed-loop move)
+    // Settle after T4 open-loop
     //=========================================================================
-    Serial.print("[T5] Position Control... ");
-
-    // T4's velocity_openloop leaves the motor spinning with shaft_angle desynced
-    // from the actual encoder. Must settle and re-sync before closed-loop T5.
+    // T4's velocity_openloop leaves the motor spinning with shaft_angle desynced.
     mc.disable();
     delay(500);  // Coast to a stop
-
-    // Re-enable: re-syncs shaft_angle from sensor, sets target = current position
-    mc.enable();
-    // Stabilize: run a few closed-loop cycles holding current position
+    mc.enable();  // Re-syncs shaft_angle from sensor
     for (int i = 0; i < 100; i++) {
         mc.update();
         delay(1);
     }
 
-    // Now read position and command +30° from a clean, settled state
+    //=========================================================================
+    // PID Tune: Reduce velocity I if oscillating
+    //=========================================================================
+    // Gimbal motors without current sensing are prone to velocity integral windup.
+    // Command a small +10° step and check if the system oscillates. If so,
+    // halve I_vel until stable (up to 5 rounds). This adapts to the specific
+    // motor/load/friction combination at test time.
+    Serial.printf("[PID] Tuning... (P_vel=%.2f I_vel=%.1f | P_pos=%.1f D_pos=%.1f)\n",
+        motor.PID_velocity.P, motor.PID_velocity.I,
+        motor.P_angle.P, motor.P_angle.D);
+
+    encoder.update();
+    float tune_start_deg = encoder.getDegrees();
+    mc.moveToPosition(fmod(tune_start_deg + 10.0, 360.0));
+
+    float original_vel_I = motor.PID_velocity.I;
+    bool pid_stable = false;
+    int tune_round = 0;
+
+    while (!pid_stable && tune_round < 5) {
+        // Let the system respond to the step
+        unsigned long resp_t = millis();
+        while (millis() - resp_t < 500) {
+            mc.update();
+            delay(1);
+        }
+
+        // Count velocity reversals over 300ms (oscillation detector)
+        // A reversal = velocity crossing zero with magnitude > 20°/s on each side
+        int reversals = 0;
+        int vel_sign = 0;  // 0=unknown, 1=positive, -1=negative
+        unsigned long check_t = millis();
+        while (millis() - check_t < 300) {
+            mc.update();
+            float vel_deg = radiansToDegrees(motor.shaft_velocity);
+            if (vel_deg > 20.0) {
+                if (vel_sign == -1) reversals++;
+                vel_sign = 1;
+            } else if (vel_deg < -20.0) {
+                if (vel_sign == 1) reversals++;
+                vel_sign = -1;
+            }
+            delay(1);
+        }
+
+        if (reversals > 3) {
+            motor.PID_velocity.I *= 0.5;
+            if (motor.PID_velocity.I < 0.1) motor.PID_velocity.I = 0;
+            Serial.printf("  Round %d: %d reversals → I=%.1f\n",
+                tune_round + 1, reversals, motor.PID_velocity.I);
+            tune_round++;
+        } else {
+            pid_stable = true;
+            if (tune_round > 0) {
+                Serial.printf("  Round %d: %d reversals → stable\n",
+                    tune_round + 1, reversals);
+            }
+        }
+    }
+
+    if (motor.PID_velocity.I != original_vel_I) {
+        Serial.printf("  Adjusted I_vel: %.1f → %.1f\n",
+            original_vel_I, motor.PID_velocity.I);
+    } else {
+        Serial.println("  No adjustment needed");
+    }
+
+    // Brief settle after tuning before T5
+    for (int i = 0; i < 200; i++) {
+        mc.update();
+        delay(1);
+    }
+
+    //=========================================================================
+    // T5: Position Control Test (+30° closed-loop move)
+    //=========================================================================
+    Serial.print("[T5] Position Control... ");
+
     encoder.update();
     float start_pos = encoder.getDegrees();
     float target_pos = fmod(start_pos + 30.0, 360.0);
@@ -549,6 +620,24 @@ void runSystemDiagnostic(MotorController& mc) {
         }
     }
 
+    // Check for sustained oscillation (velocity reversals after move)
+    int t5_reversals = 0;
+    int t5_vel_sign = 0;
+    unsigned long osc_t = millis();
+    while (millis() - osc_t < 300) {
+        mc.update();
+        float vel_deg = radiansToDegrees(motor.shaft_velocity);
+        if (vel_deg > 20.0) {
+            if (t5_vel_sign == -1) t5_reversals++;
+            t5_vel_sign = 1;
+        } else if (vel_deg < -20.0) {
+            if (t5_vel_sign == 1) t5_reversals++;
+            t5_vel_sign = -1;
+        }
+        delay(1);
+    }
+    bool t5_oscillating = (t5_reversals > 3);
+
     encoder.update();
     float final_pos = encoder.getDegrees();
     t5_move = final_pos - start_pos;
@@ -559,12 +648,15 @@ void runSystemDiagnostic(MotorController& mc) {
     if (t5_err > 180) t5_err -= 360;
     if (t5_err < -180) t5_err += 360;
 
-    // Check: moved in correct direction and close to target
+    // Check: moved correct direction, close to target, AND not oscillating
     bool correct_dir = (t5_move > 0);  // We asked for +30°
-    t5_pass = correct_dir && abs(t5_move) > 20 && abs(t5_err) < 5;
+    t5_pass = correct_dir && abs(t5_move) > 20 && abs(t5_err) < 5 && !t5_oscillating;
 
     if (t5_pass) {
         Serial.printf("OK (moved %+.1f° err:%.1f°)\n", t5_move, t5_err);
+    } else if (t5_oscillating) {
+        Serial.printf("FAIL (oscillating: %d reversals, moved %+.1f° err:%.1f°)\n",
+            t5_reversals, t5_move, t5_err);
     } else if (!correct_dir && abs(t5_move) > 10) {
         Serial.printf("FAIL (WRONG DIRECTION: %+.1f°)\n", t5_move);
         Serial.println("  >> Toggle FORCE_SENSOR_DIRECTION_CW in config.h");
