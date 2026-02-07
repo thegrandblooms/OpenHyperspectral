@@ -316,6 +316,10 @@ MotorController::MotorController()
       move_timeout_printed(true),  // Start as true so we don't print before first move
       at_target_printed(true),     // Start as true so we don't print before first move
       last_target_for_timeout(-999.0f),
+      last_command_time(0),
+      last_movement_time(0),
+      last_idle_check_deg(0.0f),
+      auto_enabled(false),
       stream_enabled(STREAM_DEFAULT_ENABLED),
       stream_rate_hz(STREAM_RATE_HZ),
       stream_interval_us(1000000UL / STREAM_RATE_HZ),
@@ -1222,4 +1226,42 @@ void MotorController::emitScanStart() {
 void MotorController::emitScanEnd() {
     Serial.print("$SCAN_END,");
     Serial.println(millis());
+}
+
+//=============================================================================
+// AUTO-ENABLE / AUTO-IDLE DISABLE
+//=============================================================================
+
+void MotorController::notifyCommandActivity() {
+    unsigned long now = millis();
+    last_command_time = now;
+    last_movement_time = now;  // Also reset movement timer on command
+    last_idle_check_deg = getPosition();
+}
+
+void MotorController::checkIdleDisable() {
+    // Only auto-disable if motor was auto-enabled (not manually enabled)
+    if (!motor_enabled || !auto_enabled) return;
+
+    unsigned long now = millis();
+
+    // Check for encoder movement
+    float current_deg = getPosition();
+    float diff = abs(current_deg - last_idle_check_deg);
+    if (diff > 180.0f) diff = 360.0f - diff;  // Handle wraparound
+
+    if (diff > IDLE_MOVEMENT_THRESHOLD_DEG) {
+        last_movement_time = now;
+        last_idle_check_deg = current_deg;
+    }
+
+    // Both conditions must be met: no commands AND no movement
+    bool commands_idle = (now - last_command_time > IDLE_COMMAND_TIMEOUT_MS);
+    bool movement_idle = (now - last_movement_time > IDLE_MOVEMENT_TIMEOUT_MS);
+
+    if (commands_idle && movement_idle) {
+        Serial.println("[AUTO] Motor idle - disabling (no commands for 10s, no movement for 5s)");
+        disable();
+        auto_enabled = false;
+    }
 }

@@ -59,7 +59,7 @@ void printHelp() {
     Serial.println("  e/enable       Enable motor (requires calibration)");
     Serial.println("  d/disable      Disable motor");
     Serial.println("  c/calibrate    Run SimpleFOC calibration");
-    Serial.println("  m <deg>        Move to absolute position (0-360)");
+    Serial.println("  m <deg>/m<deg> Move to position (auto-enables if calibrated)");
     Serial.println("  stop           Emergency stop");
     Serial.println("Streaming:");
     Serial.println("  stream on/off  Encoder data streaming ($ENC, lines)");
