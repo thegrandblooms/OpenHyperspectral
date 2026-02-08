@@ -279,6 +279,13 @@ private:
     bool runCalibration();
     bool runManualCalibration();
 
+    // Setpoint ramping (motion profiling)
+    // Instead of jumping the PID target instantly, we ramp it at a limited rate.
+    // This prevents overshoot/oscillation while preserving full PID gains (= torque).
+    float ramp_position_deg;               // Current ramped setpoint (advances toward target)
+    unsigned long last_ramp_time_us;       // Timestamp for dt computation
+    static constexpr float SLEW_RATE_DEG_S = 120.0f;  // Max setpoint rate (°/s)
+
     // Auto-idle disable tracking
     unsigned long last_command_time;        // Last time a serial command was received (millis)
     unsigned long last_movement_time;       // Last time encoder detected movement (millis)

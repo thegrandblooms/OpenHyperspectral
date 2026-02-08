@@ -311,6 +311,8 @@ MotorController::MotorController()
       motor_enabled(false),
       motor_calibrated(false),
       target_position_deg(0.0f),
+      ramp_position_deg(0.0f),
+      last_ramp_time_us(0),
       move_start_time(0),
       settling_start_time(0),
       move_timeout_printed(true),  // Start as true so we don't print before first move
@@ -736,6 +738,8 @@ void MotorController::enable() {
 
     // Set target to current position to prevent immediate movement
     target_position_deg = getPosition();
+    ramp_position_deg = target_position_deg;
+    last_ramp_time_us = micros();
 
     // Auto-start encoder streaming so test sequences get logged
     if (!stream_enabled) {
@@ -1078,10 +1082,33 @@ void MotorController::update() {
     // SimpleFOC tracks continuous angle via full_rotations counter
     motor.loopFOC();
 
-    // Target calculation using SimpleFOC's shaft_angle directly
-    // shaft_angle is continuous (can be <0 or >2π) via full_rotations tracking,
-    // so we compute shortest-path error and express target in the same space
-    float target_rad = degreesToRadians(target_position_deg);
+    // Setpoint ramping: advance ramp_position_deg toward target_position_deg
+    // at a limited rate (SLEW_RATE_DEG_S). This prevents large step inputs
+    // to the PID controller, eliminating overshoot and oscillation while
+    // preserving full PID gains (= holding torque).
+    unsigned long now_us = micros();
+    float dt_s = (now_us - last_ramp_time_us) / 1000000.0f;
+    last_ramp_time_us = now_us;
+    if (dt_s > 0.1f) dt_s = 0.1f;  // Clamp to prevent jumps after pauses
+
+    if (dt_s > 0.0f) {
+        float ramp_error = target_position_deg - ramp_position_deg;
+        if (ramp_error > 180.0f) ramp_error -= 360.0f;
+        if (ramp_error < -180.0f) ramp_error += 360.0f;
+
+        float max_step = SLEW_RATE_DEG_S * dt_s;
+        if (fabsf(ramp_error) <= max_step) {
+            ramp_position_deg = target_position_deg;
+        } else {
+            ramp_position_deg += copysignf(max_step, ramp_error);
+        }
+        ramp_position_deg = fmod(ramp_position_deg, 360.0f);
+        if (ramp_position_deg < 0) ramp_position_deg += 360.0f;
+    }
+
+    // Target calculation using ramped setpoint (not the final target directly).
+    // The PID only ever sees small errors, staying in its stable/linear region.
+    float target_rad = degreesToRadians(ramp_position_deg);
 
     float current_wrapped = fmod(motor.shaft_angle, TWO_PI);
     if (current_wrapped < 0) current_wrapped += TWO_PI;
