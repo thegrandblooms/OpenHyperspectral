@@ -26,6 +26,29 @@ void logMotorState(MotorController& mc, const char* ctx) {
         radiansToDegrees(motor.shaft_velocity), motor.voltage.q, motor.voltage.d);
 }
 
+// Count velocity sign reversals over a time window (oscillation detector).
+// A reversal = velocity exceeding +threshold then -threshold (or vice versa).
+// Returns the number of reversals detected.
+int countOscillations(MotorController& mc, BLDCMotor& motor,
+                      unsigned long duration_ms, float threshold_deg_s) {
+    int reversals = 0;
+    int vel_sign = 0;  // 0=unknown, 1=positive, -1=negative
+    unsigned long start_t = millis();
+    while (millis() - start_t < duration_ms) {
+        mc.update();
+        float vel_deg = radiansToDegrees(motor.shaft_velocity);
+        if (vel_deg > threshold_deg_s) {
+            if (vel_sign == -1) reversals++;
+            vel_sign = 1;
+        } else if (vel_deg < -threshold_deg_s) {
+            if (vel_sign == 1) reversals++;
+            vel_sign = -1;
+        }
+        delay(1);
+    }
+    return reversals;
+}
+
 //=============================================================================
 // I2C SCANNER
 //=============================================================================
@@ -524,68 +547,89 @@ void runSystemDiagnostic(MotorController& mc) {
     }
 
     //=========================================================================
-    // PID Tune: Reduce velocity I if oscillating
+    // PID Tune: Adaptive oscillation suppression (two-phase)
     //=========================================================================
-    // Gimbal motors without current sensing are prone to velocity integral windup.
-    // Command a small +10° step and check if the system oscillates. If so,
-    // halve I_vel until stable (up to 5 rounds). This adapts to the specific
-    // motor/load/friction combination at test time.
+    // Gimbal motors without current sensing are prone to velocity integral windup
+    // and position gain instability. We command a +30° step (same as T5) and
+    // check for oscillation.
+    //   Phase 1: Halve I_vel until oscillation stops (integral windup fix)
+    //   Phase 2: If I_vel=0 and still oscillating, halve P_pos (gain too high)
     Serial.printf("[PID] Tuning... (P_vel=%.2f I_vel=%.1f | P_pos=%.1f D_pos=%.1f)\n",
         motor.PID_velocity.P, motor.PID_velocity.I,
         motor.P_angle.P, motor.P_angle.D);
 
-    encoder.update();
-    float tune_start_deg = encoder.getDegrees();
-    mc.moveToPosition(fmod(tune_start_deg + 10.0, 360.0));
-
     float original_vel_I = motor.PID_velocity.I;
+    float original_pos_P = motor.P_angle.P;
     bool pid_stable = false;
     int tune_round = 0;
 
+    // Phase 1: Reduce velocity integral gain
     while (!pid_stable && tune_round < 5) {
-        // Let the system respond to the step
+        // Command a fresh +30° step each round
+        encoder.update();
+        float tune_start_deg = encoder.getDegrees();
+        mc.moveToPosition(fmod(tune_start_deg + 30.0, 360.0));
+
+        // Let the system respond (800ms for the larger step)
         unsigned long resp_t = millis();
-        while (millis() - resp_t < 500) {
+        while (millis() - resp_t < 800) {
             mc.update();
             delay(1);
         }
 
-        // Count velocity reversals over 300ms (oscillation detector)
-        // A reversal = velocity crossing zero with magnitude > 20°/s on each side
-        int reversals = 0;
-        int vel_sign = 0;  // 0=unknown, 1=positive, -1=negative
-        unsigned long check_t = millis();
-        while (millis() - check_t < 300) {
-            mc.update();
-            float vel_deg = radiansToDegrees(motor.shaft_velocity);
-            if (vel_deg > 20.0) {
-                if (vel_sign == -1) reversals++;
-                vel_sign = 1;
-            } else if (vel_deg < -20.0) {
-                if (vel_sign == 1) reversals++;
-                vel_sign = -1;
-            }
-            delay(1);
-        }
+        // Check for oscillation over 500ms
+        int reversals = countOscillations(mc, motor, 500, 20.0);
 
         if (reversals > 3) {
             motor.PID_velocity.I *= 0.5;
             if (motor.PID_velocity.I < 0.1) motor.PID_velocity.I = 0;
-            Serial.printf("  Round %d: %d reversals → I=%.1f\n",
+            Serial.printf("  Ph1 R%d: %d reversals -> I_vel=%.1f\n",
                 tune_round + 1, reversals, motor.PID_velocity.I);
             tune_round++;
         } else {
             pid_stable = true;
-            if (tune_round > 0) {
-                Serial.printf("  Round %d: %d reversals → stable\n",
-                    tune_round + 1, reversals);
+            Serial.printf("  Ph1 R%d: %d reversals -> stable\n",
+                tune_round + 1, reversals);
+        }
+    }
+
+    // Phase 2: If I_vel is zeroed and still oscillating, reduce position P
+    if (!pid_stable && motor.PID_velocity.I == 0) {
+        int p_round = 0;
+        while (!pid_stable && p_round < 3) {
+            motor.P_angle.P *= 0.5;
+
+            // Command a fresh +30° step
+            encoder.update();
+            float tune_start_deg = encoder.getDegrees();
+            mc.moveToPosition(fmod(tune_start_deg + 30.0, 360.0));
+
+            unsigned long resp_t = millis();
+            while (millis() - resp_t < 800) {
+                mc.update();
+                delay(1);
+            }
+
+            int reversals = countOscillations(mc, motor, 500, 20.0);
+
+            if (reversals > 3) {
+                Serial.printf("  Ph2 R%d: %d reversals -> P_pos=%.1f\n",
+                    p_round + 1, reversals, motor.P_angle.P);
+                p_round++;
+            } else {
+                pid_stable = true;
+                Serial.printf("  Ph2 R%d: %d reversals -> stable\n",
+                    p_round + 1, reversals);
             }
         }
     }
 
-    if (motor.PID_velocity.I != original_vel_I) {
-        Serial.printf("  Adjusted I_vel: %.1f → %.1f\n",
-            original_vel_I, motor.PID_velocity.I);
+    // Report adjustments
+    if (motor.PID_velocity.I != original_vel_I || motor.P_angle.P != original_pos_P) {
+        Serial.printf("  Final: I_vel %.1f->%.1f  P_pos %.1f->%.1f  %s\n",
+            original_vel_I, motor.PID_velocity.I,
+            original_pos_P, motor.P_angle.P,
+            pid_stable ? "(stable)" : "(STILL UNSTABLE)");
     } else {
         Serial.println("  No adjustment needed");
     }
@@ -620,22 +664,8 @@ void runSystemDiagnostic(MotorController& mc) {
         }
     }
 
-    // Check for sustained oscillation (velocity reversals after move)
-    int t5_reversals = 0;
-    int t5_vel_sign = 0;
-    unsigned long osc_t = millis();
-    while (millis() - osc_t < 300) {
-        mc.update();
-        float vel_deg = radiansToDegrees(motor.shaft_velocity);
-        if (vel_deg > 20.0) {
-            if (t5_vel_sign == -1) t5_reversals++;
-            t5_vel_sign = 1;
-        } else if (vel_deg < -20.0) {
-            if (t5_vel_sign == 1) t5_reversals++;
-            t5_vel_sign = -1;
-        }
-        delay(1);
-    }
+    // Check for sustained oscillation (500ms window, matching tune check)
+    int t5_reversals = countOscillations(mc, motor, 500, 20.0);
     bool t5_oscillating = (t5_reversals > 3);
 
     encoder.update();
