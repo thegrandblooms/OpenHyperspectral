@@ -667,7 +667,7 @@ void runSystemDiagnostic(MotorController& mc) {
         }
     }
 
-    // Check for sustained oscillation (500ms window, matching tune check)
+    // Check for oscillation immediately after move (500ms window)
     int t5_reversals = countOscillations(mc, motor, 500, 20.0);
     bool t5_oscillating = (t5_reversals > 3);
 
