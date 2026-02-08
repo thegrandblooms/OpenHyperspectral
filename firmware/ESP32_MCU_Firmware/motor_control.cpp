@@ -1082,10 +1082,12 @@ void MotorController::update() {
     // SimpleFOC tracks continuous angle via full_rotations counter
     motor.loopFOC();
 
-    // Setpoint ramping: advance ramp_position_deg toward target_position_deg
-    // at a limited rate (SLEW_RATE_DEG_S). This prevents large step inputs
-    // to the PID controller, eliminating overshoot and oscillation while
-    // preserving full PID gains (= holding torque).
+    // Setpoint ramping with deceleration: advance ramp_position_deg toward
+    // target_position_deg at a rate that decelerates near the target.
+    // Far from target: cruise at SLEW_RATE_DEG_S (e.g., 120°/s).
+    // Near target: ramp speed proportional to remaining distance.
+    // This produces a trapezoidal velocity profile — the motor arrives at
+    // the target with near-zero velocity, preventing overshoot.
     unsigned long now_us = micros();
     float dt_s = (now_us - last_ramp_time_us) / 1000000.0f;
     last_ramp_time_us = now_us;
@@ -1096,7 +1098,12 @@ void MotorController::update() {
         if (ramp_error > 180.0f) ramp_error -= 360.0f;
         if (ramp_error < -180.0f) ramp_error += 360.0f;
 
-        float max_step = SLEW_RATE_DEG_S * dt_s;
+        // Proportional deceleration: ramp speed = min(cruise, distance × gain).
+        // The gain (20.0) roughly matches P_pos, so the ramp decelerates in
+        // sync with what the PID expects — minimal tracking error at arrival.
+        float ramp_speed = fminf(SLEW_RATE_DEG_S, fabsf(ramp_error) * 20.0f);
+        float max_step = ramp_speed * dt_s;
+
         if (fabsf(ramp_error) <= max_step) {
             ramp_position_deg = target_position_deg;
         } else {
