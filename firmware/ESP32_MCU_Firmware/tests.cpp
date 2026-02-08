@@ -652,12 +652,15 @@ void runSystemDiagnostic(MotorController& mc) {
     mc.moveToPosition(target_pos);
 
     // Run control loop for up to 3 seconds
+    // IMPORTANT: Use delay(1) to match the PID tuner's ~1kHz loop rate.
+    // delay(10) = 100Hz creates effectively 10x larger PID corrections,
+    // causing oscillation even with gains the tuner found stable at 1kHz.
     unsigned long t0 = millis();
     bool reached = false;
 
     while (millis() - t0 < 3000) {
         mc.update();
-        delay(10);
+        delay(1);
         if (mc.isAtTarget()) {
             reached = true;
             break;
