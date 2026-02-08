@@ -667,7 +667,15 @@ void runSystemDiagnostic(MotorController& mc) {
         }
     }
 
-    // Check for sustained oscillation (500ms window, matching tune check)
+    // Let the motor fully settle before checking for oscillation.
+    // The normal settling transient (damped ~150ms wobble after reaching target)
+    // is not oscillation — only sustained oscillation after settling matters.
+    for (int i = 0; i < 500; i++) {
+        mc.update();
+        delay(1);
+    }
+
+    // NOW check for sustained oscillation (500ms window)
     int t5_reversals = countOscillations(mc, motor, 500, 20.0);
     bool t5_oscillating = (t5_reversals > 3);
 
