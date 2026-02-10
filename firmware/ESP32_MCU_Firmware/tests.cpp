@@ -547,6 +547,94 @@ void runSystemDiagnostic(MotorController& mc) {
     }
 
     //=========================================================================
+    // Encoder Field Uniformity Sweep
+    //=========================================================================
+    // Sweep 180° in 15° steps measuring encoder noise and hold stability
+    // at each position. Magnet offset shows as worse noise/oscillation on
+    // one side of the rotation.
+    Serial.println("[FIELD] Encoder field uniformity sweep...");
+    Serial.println("  Pos°    Field  RawNoise  Osc°   Status");
+
+    encoder.update();
+    float sweep_start = encoder.getDegrees();
+
+    for (int step = 0; step <= 12; step++) {
+        float sweep_target = fmod(sweep_start + step * 15.0f, 360.0f);
+        mc.moveToPosition(sweep_target);
+
+        // Wait for arrival (up to 1.5s)
+        unsigned long move_t = millis();
+        bool arrived = false;
+        while (millis() - move_t < 1500) {
+            mc.update();
+            delay(1);
+            if (mc.isAtTarget()) { arrived = true; break; }
+        }
+
+        // Brief settle
+        for (int i = 0; i < 100; i++) {
+            mc.update();
+            delay(1);
+        }
+
+        // --- Measure 1: Raw encoder noise (50 rapid I2C reads) ---
+        uint16_t raw_min = 16383, raw_max = 0;
+        for (int i = 0; i < 50; i++) {
+            uint16_t raw = encoder.readRawAngleDirect();
+            if (raw < raw_min) raw_min = raw;
+            if (raw > raw_max) raw_max = raw;
+            delayMicroseconds(500);
+        }
+        uint16_t raw_spread = raw_max - raw_min;
+        // Handle wraparound at 0/16383 boundary
+        if (raw_spread > 8192) raw_spread = 16384 - raw_spread;
+
+        // --- Measure 2: Position oscillation (300ms hold window) ---
+        float pos_min = 9999.0f, pos_max = -9999.0f;
+        unsigned long osc_t = millis();
+        while (millis() - osc_t < 300) {
+            mc.update();
+            float pos = mc.getPosition();
+            if (pos < pos_min) pos_min = pos;
+            if (pos > pos_max) pos_max = pos;
+            delay(1);
+        }
+        float osc_range = pos_max - pos_min;
+        // Handle wraparound
+        if (osc_range > 180.0f) osc_range = 360.0f - osc_range;
+
+        // --- Measure 3: Field status ---
+        uint8_t field = encoder.getFieldStatus();
+        const char* field_str = (field == 0x00) ? "OK" :
+                                (field == 0x01) ? "HI" :
+                                (field == 0x02) ? "LO" : "??";
+
+        // Classify stability
+        const char* status;
+        if (osc_range < 0.3f) status = "stable";
+        else if (osc_range < 1.0f) status = "settling";
+        else if (osc_range < 3.0f) status = "OSCILLATING";
+        else status = "CHAOTIC";
+
+        Serial.printf("  %5.1f   %s     %3d       %4.2f   %s\n",
+            sweep_target, field_str, raw_spread, osc_range, status);
+    }
+
+    // Return to sweep start for clean handoff to PID tuner
+    mc.moveToPosition(sweep_start);
+    unsigned long ret_t = millis();
+    while (millis() - ret_t < 1500) {
+        mc.update();
+        delay(1);
+        if (mc.isAtTarget()) break;
+    }
+    for (int i = 0; i < 100; i++) {
+        mc.update();
+        delay(1);
+    }
+    Serial.println();
+
+    //=========================================================================
     // PID Tune: Adaptive oscillation suppression (two-phase)
     //=========================================================================
     // Gimbal motors without current sensing are prone to velocity integral windup
