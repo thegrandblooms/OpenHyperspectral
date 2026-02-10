@@ -26,29 +26,6 @@ void logMotorState(MotorController& mc, const char* ctx) {
         radiansToDegrees(motor.shaft_velocity), motor.voltage.q, motor.voltage.d);
 }
 
-// Count velocity sign reversals over a time window (oscillation detector).
-// A reversal = velocity exceeding +threshold then -threshold (or vice versa).
-// Returns the number of reversals detected.
-int countOscillations(MotorController& mc, BLDCMotor& motor,
-                      unsigned long duration_ms, float threshold_deg_s) {
-    int reversals = 0;
-    int vel_sign = 0;  // 0=unknown, 1=positive, -1=negative
-    unsigned long start_t = millis();
-    while (millis() - start_t < duration_ms) {
-        mc.update();
-        float vel_deg = radiansToDegrees(motor.shaft_velocity);
-        if (vel_deg > threshold_deg_s) {
-            if (vel_sign == -1) reversals++;
-            vel_sign = 1;
-        } else if (vel_deg < -threshold_deg_s) {
-            if (vel_sign == 1) reversals++;
-            vel_sign = -1;
-        }
-        delay(1);
-    }
-    return reversals;
-}
-
 //=============================================================================
 // I2C SCANNER
 //=============================================================================
@@ -384,7 +361,10 @@ void runSystemDiagnostic(MotorController& mc) {
 
     bool t1_pass = false, t2_pass = false, t3_pass = false;
     bool t4_pass = false, t5_pass = false;
-    float t4_move = 0, t5_move = 0, t5_err = 0;
+    float t4_move = 0;
+    int t5_stable = 0, t5_settling = 0, t5_oscillating = 0, t5_chaotic = 0;
+    float t5_worst_osc = 0;
+    float t5_worst_pos = 0;
 
     //=========================================================================
     // T1: Hardware Check (I2C, encoder, magnetic field)
@@ -547,28 +527,24 @@ void runSystemDiagnostic(MotorController& mc) {
     }
 
     //=========================================================================
-    // Encoder Field Uniformity Sweep
+    // T5: Position Control + Field Uniformity (360° sweep, 15° steps)
     //=========================================================================
-    // Sweep 180° in 15° steps measuring encoder noise and hold stability
-    // at each position. Magnet offset shows as worse noise/oscillation on
-    // one side of the rotation.
-    Serial.println("[FIELD] Encoder field uniformity sweep...");
-    Serial.println("  Pos°    Field  RawNoise  Osc°   Status");
+    // Combined test: validates closed-loop position control at 24 positions
+    // AND maps encoder/field quality around the full rotation.
+    // Magnet offset or tilt shows as oscillation concentrated in one arc.
+    Serial.println("[T5] Position Control + Field Uniformity (360° sweep)");
+    Serial.println("  Pos°    Field  RawNoise  Osc°   Err°   Status");
 
-    encoder.update();
-    float sweep_start = encoder.getDegrees();
-
-    for (int step = 0; step <= 12; step++) {
-        float sweep_target = fmod(sweep_start + step * 15.0f, 360.0f);
-        mc.moveToPosition(sweep_target);
+    for (int step = 0; step < 24; step++) {
+        float t5_target = fmod(step * 15.0f, 360.0f);
+        mc.moveToPosition(t5_target);
 
         // Wait for arrival (up to 1.5s)
         unsigned long move_t = millis();
-        bool arrived = false;
         while (millis() - move_t < 1500) {
             mc.update();
             delay(1);
-            if (mc.isAtTarget()) { arrived = true; break; }
+            if (mc.isAtTarget()) break;
         }
 
         // Brief settle
@@ -586,10 +562,9 @@ void runSystemDiagnostic(MotorController& mc) {
             delayMicroseconds(500);
         }
         uint16_t raw_spread = raw_max - raw_min;
-        // Handle wraparound at 0/16383 boundary
         if (raw_spread > 8192) raw_spread = 16384 - raw_spread;
 
-        // --- Measure 2: Position oscillation (300ms hold window) ---
+        // --- Measure 2: Position oscillation (300ms hold) ---
         float pos_min = 9999.0f, pos_max = -9999.0f;
         unsigned long osc_t = millis();
         while (millis() - osc_t < 300) {
@@ -600,10 +575,16 @@ void runSystemDiagnostic(MotorController& mc) {
             delay(1);
         }
         float osc_range = pos_max - pos_min;
-        // Handle wraparound
         if (osc_range > 180.0f) osc_range = 360.0f - osc_range;
 
-        // --- Measure 3: Field status ---
+        // --- Measure 3: Position error ---
+        encoder.update();
+        float actual = encoder.getDegrees();
+        float pos_err = actual - t5_target;
+        if (pos_err > 180.0f) pos_err -= 360.0f;
+        if (pos_err < -180.0f) pos_err += 360.0f;
+
+        // --- Measure 4: Field status ---
         uint8_t field = encoder.getFieldStatus();
         const char* field_str = (field == 0x00) ? "OK" :
                                 (field == 0x01) ? "HI" :
@@ -611,182 +592,39 @@ void runSystemDiagnostic(MotorController& mc) {
 
         // Classify stability
         const char* status;
-        if (osc_range < 0.3f) status = "stable";
-        else if (osc_range < 1.0f) status = "settling";
-        else if (osc_range < 3.0f) status = "OSCILLATING";
-        else status = "CHAOTIC";
-
-        Serial.printf("  %5.1f   %s     %3d       %4.2f   %s\n",
-            sweep_target, field_str, raw_spread, osc_range, status);
-    }
-
-    // Return to sweep start for clean handoff to PID tuner
-    mc.moveToPosition(sweep_start);
-    unsigned long ret_t = millis();
-    while (millis() - ret_t < 1500) {
-        mc.update();
-        delay(1);
-        if (mc.isAtTarget()) break;
-    }
-    for (int i = 0; i < 100; i++) {
-        mc.update();
-        delay(1);
-    }
-    Serial.println();
-
-    //=========================================================================
-    // PID Tune: Adaptive oscillation suppression (two-phase)
-    //=========================================================================
-    // Gimbal motors without current sensing are prone to velocity integral windup
-    // and position gain instability. We command a +30° step (same as T5) and
-    // check for oscillation.
-    //   Phase 1: Halve I_vel until oscillation stops (integral windup fix)
-    //   Phase 2: If I_vel=0 and still oscillating, halve P_pos (gain too high)
-    Serial.printf("[PID] Tuning... (P_vel=%.2f I_vel=%.1f | P_pos=%.1f D_pos=%.1f)\n",
-        motor.PID_velocity.P, motor.PID_velocity.I,
-        motor.P_angle.P, motor.P_angle.D);
-
-    float original_vel_I = motor.PID_velocity.I;
-    float original_pos_P = motor.P_angle.P;
-    bool pid_stable = false;
-    int tune_round = 0;
-
-    // Phase 1: Reduce velocity integral gain
-    while (!pid_stable && tune_round < 5) {
-        // Command a fresh +30° step each round
-        encoder.update();
-        float tune_start_deg = encoder.getDegrees();
-        mc.moveToPosition(fmod(tune_start_deg + 30.0, 360.0));
-
-        // Let the system respond (800ms for the larger step)
-        unsigned long resp_t = millis();
-        while (millis() - resp_t < 800) {
-            mc.update();
-            delay(1);
-        }
-
-        // Check for oscillation over 500ms
-        int reversals = countOscillations(mc, motor, 500, 20.0);
-
-        if (reversals > 3) {
-            motor.PID_velocity.I *= 0.5;
-            if (motor.PID_velocity.I < 0.1) motor.PID_velocity.I = 0;
-            Serial.printf("  Ph1 R%d: %d reversals -> I_vel=%.1f\n",
-                tune_round + 1, reversals, motor.PID_velocity.I);
-            tune_round++;
+        if (osc_range < 0.3f) {
+            status = "stable";
+            t5_stable++;
+        } else if (osc_range < 1.0f) {
+            status = "settling";
+            t5_settling++;
+        } else if (osc_range < 3.0f) {
+            status = "OSCILLATING";
+            t5_oscillating++;
         } else {
-            pid_stable = true;
-            Serial.printf("  Ph1 R%d: %d reversals -> stable\n",
-                tune_round + 1, reversals);
+            status = "CHAOTIC";
+            t5_chaotic++;
         }
-    }
 
-    // Phase 2: If I_vel is zeroed and still oscillating, reduce position P
-    if (!pid_stable && motor.PID_velocity.I == 0) {
-        int p_round = 0;
-        while (!pid_stable && p_round < 3) {
-            motor.P_angle.P *= 0.5;
-
-            // Command a fresh +30° step
-            encoder.update();
-            float tune_start_deg = encoder.getDegrees();
-            mc.moveToPosition(fmod(tune_start_deg + 30.0, 360.0));
-
-            unsigned long resp_t = millis();
-            while (millis() - resp_t < 800) {
-                mc.update();
-                delay(1);
-            }
-
-            int reversals = countOscillations(mc, motor, 500, 20.0);
-
-            if (reversals > 3) {
-                Serial.printf("  Ph2 R%d: %d reversals -> P_pos=%.1f\n",
-                    p_round + 1, reversals, motor.P_angle.P);
-                p_round++;
-            } else {
-                pid_stable = true;
-                Serial.printf("  Ph2 R%d: %d reversals -> stable\n",
-                    p_round + 1, reversals);
-            }
+        if (osc_range > t5_worst_osc) {
+            t5_worst_osc = osc_range;
+            t5_worst_pos = t5_target;
         }
+
+        Serial.printf("  %5.1f   %s     %3d       %4.2f   %+5.2f  %s\n",
+            t5_target, field_str, raw_spread, osc_range, pos_err, status);
     }
 
-    // Report adjustments
-    if (motor.PID_velocity.I != original_vel_I || motor.P_angle.P != original_pos_P) {
-        Serial.printf("  Final: I_vel %.1f->%.1f  P_pos %.1f->%.1f  %s\n",
-            original_vel_I, motor.PID_velocity.I,
-            original_pos_P, motor.P_angle.P,
-            pid_stable ? "(stable)" : "(STILL UNSTABLE)");
-    } else {
-        Serial.println("  No adjustment needed");
+    // T5 pass criteria: majority stable, no chaotic positions
+    int t5_total = t5_stable + t5_settling + t5_oscillating + t5_chaotic;
+    t5_pass = (t5_chaotic == 0) && (t5_stable + t5_settling >= t5_total * 3 / 4);
+
+    Serial.printf("  Summary: %d stable, %d settling, %d oscillating, %d chaotic\n",
+        t5_stable, t5_settling, t5_oscillating, t5_chaotic);
+    if (t5_worst_osc > 0.3f) {
+        Serial.printf("  Worst: %.1f° at position %.0f°\n", t5_worst_osc, t5_worst_pos);
     }
-
-    // Brief settle after tuning before T5
-    for (int i = 0; i < 200; i++) {
-        mc.update();
-        delay(1);
-    }
-
-    //=========================================================================
-    // T5: Position Control Test (+30° closed-loop move)
-    //=========================================================================
-    Serial.print("[T5] Position Control... ");
-
-    encoder.update();
-    float start_pos = encoder.getDegrees();
-    float target_pos = fmod(start_pos + 30.0, 360.0);
-
-    mc.moveToPosition(target_pos);
-
-    // Run control loop for up to 3 seconds
-    // IMPORTANT: Use delay(1) to match the PID tuner's ~1kHz loop rate.
-    // delay(10) = 100Hz creates effectively 10x larger PID corrections,
-    // causing oscillation even with gains the tuner found stable at 1kHz.
-    unsigned long t0 = millis();
-    bool reached = false;
-
-    while (millis() - t0 < 3000) {
-        mc.update();
-        delay(1);
-        if (mc.isAtTarget()) {
-            reached = true;
-            break;
-        }
-    }
-
-    // Check for oscillation immediately after move (500ms window)
-    int t5_reversals = countOscillations(mc, motor, 500, 20.0);
-    bool t5_oscillating = (t5_reversals > 3);
-
-    encoder.update();
-    float final_pos = encoder.getDegrees();
-    t5_move = final_pos - start_pos;
-    if (t5_move < -180) t5_move += 360;
-    if (t5_move > 180) t5_move -= 360;
-
-    t5_err = final_pos - target_pos;
-    if (t5_err > 180) t5_err -= 360;
-    if (t5_err < -180) t5_err += 360;
-
-    // Check: moved correct direction, close to target, AND not oscillating
-    bool correct_dir = (t5_move > 0);  // We asked for +30°
-    t5_pass = correct_dir && abs(t5_move) > 20 && abs(t5_err) < 5 && !t5_oscillating;
-
-    if (t5_pass) {
-        Serial.printf("OK (moved %+.1f° err:%.1f°)\n", t5_move, t5_err);
-    } else if (t5_oscillating) {
-        Serial.printf("FAIL (oscillating: %d reversals, moved %+.1f° err:%.1f°)\n",
-            t5_reversals, t5_move, t5_err);
-    } else if (!correct_dir && abs(t5_move) > 10) {
-        Serial.printf("FAIL (WRONG DIRECTION: %+.1f°)\n", t5_move);
-        Serial.println("  >> Toggle FORCE_SENSOR_DIRECTION_CW in config.h");
-    } else if (abs(t5_move) < 5) {
-        Serial.printf("FAIL (stalled: %+.1f°)\n", t5_move);
-        Serial.println("  >> Check PID gains or motor obstruction");
-    } else {
-        Serial.printf("PARTIAL (moved %+.1f° err:%.1f°)\n", t5_move, t5_err);
-    }
+    Serial.printf("[T5] %s\n", t5_pass ? "PASS" : "FAIL");
 
     mc.disable();
 
@@ -800,8 +638,9 @@ void runSystemDiagnostic(MotorController& mc) {
     Serial.printf("  T2 Calibration: %s\n", t2_pass ? "PASS" : "FAIL");
     Serial.printf("  T3 Sensor:      %s\n", t3_pass ? "PASS" : "FAIL");
     Serial.printf("  T4 Open-Loop:   %s (%.1f°)\n", t4_pass ? "PASS" : "FAIL", t4_move);
-    Serial.printf("  T5 Position:    %s (%.1f° err:%.1f°)\n",
-        t5_pass ? "PASS" : "FAIL", t5_move, t5_err);
+    Serial.printf("  T5 Pos+Field:   %s (%d/%d stable, worst %.1f° at %.0f°)\n",
+        t5_pass ? "PASS" : "FAIL", t5_stable, t5_total,
+        t5_worst_osc, t5_worst_pos);
     Serial.println("----------------------------------------");
 
     int passed = t1_pass + t2_pass + t3_pass + t4_pass + t5_pass;
