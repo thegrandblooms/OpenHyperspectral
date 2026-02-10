@@ -170,6 +170,17 @@ float MT6701Sensor::getSensorAngle() {
     filtered_x = new_x * FILTER_ALPHA + filtered_x * (1.0f - FILTER_ALPHA);
     filtered_y = new_y * FILTER_ALPHA + filtered_y * (1.0f - FILTER_ALPHA);
 
+    // Renormalize to unit circle to prevent angle-dependent filter lag.
+    // Without this, the EMA shrinks the vector toward the origin. Near cardinal
+    // axes (0°/90°/180°/270°) the small component gets over-damped relative to
+    // the large one, creating non-uniform phase lag that causes limit-cycle
+    // oscillation at specific angles.
+    float mag = sqrtf(filtered_x * filtered_x + filtered_y * filtered_y);
+    if (mag > 0.0f) {
+        filtered_x /= mag;
+        filtered_y /= mag;
+    }
+
     // Convert filtered Cartesian coordinates back to angle
     // atan2 handles all quadrants correctly and returns -π to π
     float filtered_radians = atan2(filtered_y, filtered_x);
