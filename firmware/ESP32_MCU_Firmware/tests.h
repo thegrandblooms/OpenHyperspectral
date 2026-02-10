@@ -31,8 +31,7 @@ void printStatus(MotorController& motorControl);
 //   T2: Calibration - SimpleFOC initFOC (sensor-motor electrical alignment)
 //   T3: Sensor Integration - Verify loopFOC() reads encoder correctly
 //   T4: Open-Loop - Driver/wiring/power check (bypasses closed-loop control)
-//   Field Sweep: 180° encoder uniformity check (raw noise + oscillation per angle)
-//   T5: Position Control - Closed-loop +30° move with error measurement
+//   T5: Position + Field - 360° sweep (24 positions): position control + encoder uniformity
 void runSystemDiagnostic(MotorController& motorControl);
 
 //=============================================================================
