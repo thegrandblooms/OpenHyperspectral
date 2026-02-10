@@ -101,7 +101,7 @@
 #define PID_I_VELOCITY   10.0            // Reduced from 20 to 5 to combat integral windup?
 #define PID_D_VELOCITY   0.0            // Usually 0 for gimbal motors
 #define PID_RAMP_VELOCITY 1000.0        // Higher ramp for smoother control (was 100.0)
-#define PID_LPF_VELOCITY 0.01           // Low-pass filter time constant (10ms, less aggressive)
+#define PID_LPF_VELOCITY 0.03           // Low-pass filter time constant (30ms, filters cogging ripple)
 
 // Current control PID parameters (for FOC)
 #define PID_P_CURRENT    5.0            // Proportional gain for current control
