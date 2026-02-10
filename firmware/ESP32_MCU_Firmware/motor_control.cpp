@@ -280,6 +280,12 @@ uint16_t MT6701Sensor::getRawCount() {
     return cached_raw_count;
 }
 
+uint16_t MT6701Sensor::readRawAngleDirect() {
+    // Fresh I2C read bypassing Cartesian filter — for diagnostics only.
+    // Does NOT update cached values or filter state.
+    return encoder.readRawAngle();
+}
+
 float MT6701Sensor::getDegrees() {
     return cached_degrees;
 }

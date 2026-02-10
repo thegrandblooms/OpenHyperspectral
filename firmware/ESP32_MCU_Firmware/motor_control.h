@@ -123,7 +123,8 @@ public:
     //=========================================================================
     // DIRECT ENCODER ACCESS (Our preferred interface - minimal abstraction)
     //=========================================================================
-    uint16_t getRawCount();                // Raw encoder value (0-16383)
+    uint16_t getRawCount();                // Raw encoder value (0-16383, cached from last update)
+    uint16_t readRawAngleDirect();         // Fresh I2C read bypassing filter (for diagnostics)
     float getDegrees();                    // Degrees (0-360)
     float getDegreesPerSecond();           // Angular velocity in deg/s
 
