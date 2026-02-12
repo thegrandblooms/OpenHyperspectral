@@ -739,6 +739,182 @@ bool MotorController::runCalibration() {
     return runManualCalibration();
 }
 
+bool MotorController::runMultiPointCalibration(bool verbose) {
+    // Multi-point electrical angle calibration.
+    // Energizes the motor at 24 electrical angles (every 15°), reads the
+    // encoder at each position, and averages the zero_electric_angle
+    // estimates using circular mean. This is far more precise than
+    // SimpleFOC's single-point initFOC() calibration.
+    //
+    // Relationship: elec_angle = mech_angle * POLE_PAIRS * dir + zero_elec_angle
+    // We solve for zero_elec_angle at each sample and average.
+
+    const int NUM_SAMPLES = 24;
+    const float STEP_ELECTRICAL_RAD = (2.0f * PI) / NUM_SAMPLES;  // 15° electrical
+    const float CAL_VOLTAGE = 6.0f;
+    const unsigned long SETTLE_MS = 500;  // Generous settle for precision
+
+    if (verbose) {
+        Serial.printf("[CAL] Multi-point calibration (%d samples, %ldms settle)...\n",
+            NUM_SAMPLES, SETTLE_MS);
+    }
+
+    // Reset calibration state
+    motor_calibrated = false;
+
+    // Verify encoder works
+    encoder.update();
+    float test_angle = encoder.getSensorAngle();
+    if (isnan(test_angle) || isinf(test_angle)) {
+        if (verbose) Serial.println("[CAL] FAIL: Cannot read encoder");
+        return false;
+    }
+
+    motor.enable();
+    float saved_voltage_limit = motor.voltage_limit;
+    motor.voltage_limit = 10.0f;  // Temporary increase for reliable alignment
+
+    // Step 1: Record encoder position at each electrical angle.
+    // Use raw readings (bypass Cartesian filter) for accuracy.
+    float mech_readings[NUM_SAMPLES];
+
+    for (int i = 0; i < NUM_SAMPLES; i++) {
+        float elec_angle = i * STEP_ELECTRICAL_RAD;
+        motor.setPhaseVoltage(CAL_VOLTAGE, 0, elec_angle);
+        delay(SETTLE_MS);
+
+        // Average 16 raw readings using circular mean (handles encoder noise)
+        float sc = 0, ss = 0;
+        for (int j = 0; j < 16; j++) {
+            uint16_t raw = encoder.readRawAngleDirect();
+            float rad = degreesToRadians(rawToDegrees(raw));
+            sc += cosf(rad);
+            ss += sinf(rad);
+            delayMicroseconds(500);
+        }
+        mech_readings[i] = atan2f(ss, sc);
+        if (mech_readings[i] < 0) mech_readings[i] += TWO_PI;
+    }
+
+    // Release motor
+    motor.setPhaseVoltage(0, 0, 0);
+    motor.voltage_limit = saved_voltage_limit;
+
+    // Step 2: Determine sensor direction.
+    // Sum the angle deltas between consecutive positions. If the encoder
+    // angle increases as electrical angle advances, direction is CW.
+    float total_delta = 0;
+    for (int i = 1; i < NUM_SAMPLES; i++) {
+        float diff = mech_readings[i] - mech_readings[i - 1];
+        while (diff > PI) diff -= TWO_PI;
+        while (diff < -PI) diff += TWO_PI;
+        total_delta += diff;
+    }
+    Direction sensor_dir = (total_delta > 0) ? Direction::CW : Direction::CCW;
+    float dir_sign = (sensor_dir == Direction::CW) ? 1.0f : -1.0f;
+
+    // Step 3: Compute zero_electric_angle from each sample using circular mean.
+    // ZEA = elec_applied - mech_measured * PP * dir
+    float zea_cos_sum = 0, zea_sin_sum = 0;
+
+    for (int i = 0; i < NUM_SAMPLES; i++) {
+        float elec_applied = i * STEP_ELECTRICAL_RAD;
+        float elec_from_mech = normalizeRadians(mech_readings[i] * POLE_PAIRS * dir_sign);
+        float zea_sample = normalizeRadians(elec_applied - elec_from_mech);
+        zea_cos_sum += cosf(zea_sample);
+        zea_sin_sum += sinf(zea_sample);
+    }
+
+    float avg_zea = atan2f(zea_sin_sum / NUM_SAMPLES, zea_cos_sum / NUM_SAMPLES);
+    if (avg_zea < 0) avg_zea += TWO_PI;
+
+    // Consistency: magnitude of the mean vector (1.0 = perfect agreement)
+    float consistency = sqrtf((zea_cos_sum / NUM_SAMPLES) * (zea_cos_sum / NUM_SAMPLES) +
+                              (zea_sin_sum / NUM_SAMPLES) * (zea_sin_sum / NUM_SAMPLES));
+
+    if (verbose) {
+        Serial.printf("[CAL] Dir:%s ZeroElec:%.1f° Consistency:%.3f\n",
+            sensor_dir == Direction::CW ? "CW" : "CCW",
+            radiansToDegrees(avg_zea), consistency);
+    }
+
+    if (consistency < 0.5f) {
+        if (verbose) Serial.println("[CAL] WARNING: Low consistency - check motor/encoder coupling");
+    }
+
+    // Step 4: Apply calibration values
+    motor.zero_electric_angle = avg_zea;
+    motor.sensor_direction = sensor_dir;
+
+    // Step 5: Run initFOC with pre-set values (SimpleFOC skips its own cal)
+    encoder.resetRotationTracking();
+    Print* saved_monitor = motor.monitor_port;
+    motor.monitor_port = nullptr;
+    int foc_result = motor.initFOC();
+    motor.monitor_port = saved_monitor;
+
+    if (foc_result != 1) {
+        if (verbose) Serial.println("[CAL] FAIL: initFOC failed");
+        motor.disable();
+        return false;
+    }
+
+    // Step 6: Verify direction — apply field 90° ahead electrically and check
+    motor.enable();
+    encoder.update();
+    float verify_start = encoder.getSensorAngle();
+
+    float current_elec = verify_start * POLE_PAIRS * dir_sign + avg_zea;
+    float target_elec = current_elec + _PI_2;  // 90° ahead in electrical space
+
+    motor.setPhaseVoltage(CAL_VOLTAGE, 0, target_elec);
+    delay(300);
+    encoder.update();
+    float verify_end = encoder.getSensorAngle();
+
+    float movement = verify_end - verify_start;
+    while (movement > PI) movement -= TWO_PI;
+    while (movement < -PI) movement += TWO_PI;
+    float movement_deg = radiansToDegrees(movement);
+
+    motor.setPhaseVoltage(0, 0, 0);
+
+    // If motor moved backward, add 180° to fix polarity ambiguity
+    if (movement_deg < -3.0f) {
+        avg_zea = normalizeRadians(avg_zea + PI);
+        motor.zero_electric_angle = avg_zea;
+        if (verbose) Serial.printf("[CAL] Polarity corrected: ZeroElec:%.1f°\n",
+            radiansToDegrees(avg_zea));
+
+        encoder.resetRotationTracking();
+        motor.monitor_port = nullptr;
+        foc_result = motor.initFOC();
+        motor.monitor_port = saved_monitor;
+    }
+
+    // Step 7: Stabilize and verify tracking
+    for (int i = 0; i < 20; i++) {
+        motor.loopFOC();
+        delay(1);
+    }
+
+    float enc_deg = radiansToDegrees(encoder.getSensorAngle());
+    float shaft_deg = radiansToDegrees(motor.shaft_angle);
+    float tracking_err = abs(shaft_deg - enc_deg);
+    if (tracking_err > 180.0f) tracking_err = 360.0f - tracking_err;
+
+    if (verbose) {
+        Serial.printf("[CAL] Verify: Enc:%.1f° FOC:%.1f° TrkErr:%.1f° DirTest:%+.1f°\n",
+            enc_deg, shaft_deg, tracking_err, movement_deg);
+    }
+
+    encoder.resetRotationTracking();
+    motor.disable();
+
+    motor_calibrated = true;
+    return true;
+}
+
 void MotorController::enable() {
     if (!motor_calibrated) {
         if (DEBUG_MOTOR) {

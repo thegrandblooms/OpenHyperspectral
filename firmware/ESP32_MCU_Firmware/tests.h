@@ -28,9 +28,10 @@ void printStatus(MotorController& motorControl);
 //=============================================================================
 // runSystemDiagnostic: Full system validation sequence
 //   T1: Hardware - I2C bus, encoder response, magnetic field strength
-//   T2: Calibration - SimpleFOC initFOC (sensor-motor electrical alignment)
+//   T2: Multi-Point Calibration - 24-sample precision electrical angle calibration
 //   T3: Sensor Integration - Verify loopFOC() reads encoder correctly
 //   T4: Open-Loop - Driver/wiring/power check (bypasses closed-loop control)
+//   PID: Adaptive oscillation suppression (adjusts I_vel and P_pos)
 //   T5: Position + Field - 360° sweep (24 positions): position control + encoder uniformity
 void runSystemDiagnostic(MotorController& motorControl);
 
