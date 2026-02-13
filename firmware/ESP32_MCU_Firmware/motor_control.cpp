@@ -800,6 +800,15 @@ bool MotorController::runMultiPointCalibration(bool verbose) {
     motor.setPhaseVoltage(0, 0, 0);
     motor.voltage_limit = saved_voltage_limit;
 
+    // Warm up the Cartesian filter to the current position.
+    // During sampling we used readRawAngleDirect() which bypasses the filter,
+    // so filtered_x/filtered_y are stale. Pump getSensorAngle() until the
+    // filter converges, preventing a large tracking error after initFOC().
+    for (int i = 0; i < 50; i++) {
+        encoder.getSensorAngle();
+        delayMicroseconds(200);
+    }
+
     // Step 2: Determine sensor direction.
     // Sum the angle deltas between consecutive positions. If the encoder
     // angle increases as electrical angle advances, direction is CW.
@@ -1318,6 +1327,12 @@ void MotorController::update() {
     // Normalize error to [-π, +π] (shortest path)
     while (error_rad > PI) error_rad -= TWO_PI;
     while (error_rad < -PI) error_rad += TWO_PI;
+
+    // Position deadband: if error is tiny, hold current position.
+    // Prevents the PID from chasing encoder noise into a limit cycle.
+    if (fabsf(error_rad) < DEADBAND_RAD) {
+        error_rad = 0.0f;
+    }
 
     // Express target in continuous space so PID doesn't see jumps at boundary
     float normalized_target_rad = motor.shaft_angle + error_rad;
