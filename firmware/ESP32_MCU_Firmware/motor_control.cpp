@@ -888,6 +888,14 @@ bool MotorController::runMultiPointCalibration(bool verbose) {
 
     motor.setPhaseVoltage(0, 0, 0);
 
+    // Warm up Cartesian filter AGAIN after direction test moved the motor.
+    // Without this, the filter is stale and getSensorAngle() returns a
+    // blended old/new position, corrupting shaft_angle via full_rotations.
+    for (int i = 0; i < 50; i++) {
+        encoder.getSensorAngle();
+        delayMicroseconds(200);
+    }
+
     // If motor moved backward, add 180° to fix polarity ambiguity
     if (movement_deg < -3.0f) {
         avg_zea = normalizeRadians(avg_zea + PI);
@@ -901,8 +909,12 @@ bool MotorController::runMultiPointCalibration(bool verbose) {
         motor.monitor_port = saved_monitor;
     }
 
-    // Step 7: Stabilize and verify tracking
-    for (int i = 0; i < 20; i++) {
+    // Step 7: Reset rotation tracking and sync shaft_angle.
+    // resetRotationTracking sets full_rotations=0 and angle_prev to current.
+    // Then loopFOC re-reads the sensor and sets shaft_angle from the reset state.
+    encoder.resetRotationTracking();
+
+    for (int i = 0; i < 50; i++) {
         motor.loopFOC();
         delay(1);
     }
@@ -917,7 +929,6 @@ bool MotorController::runMultiPointCalibration(bool verbose) {
             enc_deg, shaft_deg, tracking_err, movement_deg);
     }
 
-    encoder.resetRotationTracking();
     motor.disable();
 
     motor_calibrated = true;
@@ -1327,12 +1338,6 @@ void MotorController::update() {
     // Normalize error to [-π, +π] (shortest path)
     while (error_rad > PI) error_rad -= TWO_PI;
     while (error_rad < -PI) error_rad += TWO_PI;
-
-    // Position deadband: if error is tiny, hold current position.
-    // Prevents the PID from chasing encoder noise into a limit cycle.
-    if (fabsf(error_rad) < DEADBAND_RAD) {
-        error_rad = 0.0f;
-    }
 
     // Express target in continuous space so PID doesn't see jumps at boundary
     float normalized_target_rad = motor.shaft_angle + error_rad;

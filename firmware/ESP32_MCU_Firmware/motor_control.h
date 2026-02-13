@@ -151,7 +151,7 @@ private:
     // Cartesian filtering (SmartKnob pattern - eliminates wraparound discontinuities)
     float filtered_x;                      // Filtered X coordinate (cos component)
     float filtered_y;                      // Filtered Y coordinate (sin component)
-    static constexpr float FILTER_ALPHA = 0.275f; // Low-pass filter coefficient (0=no filtering, 1=no smoothing)
+    static constexpr float FILTER_ALPHA = 0.4f;  // Low-pass filter coefficient (0=no filtering, 1=no smoothing)
 
     // Previous values for velocity calculation
     float previous_degrees;
@@ -287,7 +287,6 @@ private:
     float ramp_position_deg;               // Current ramped setpoint (advances toward target)
     unsigned long last_ramp_time_us;       // Timestamp for dt computation
     static constexpr float SLEW_RATE_DEG_S = 120.0f;  // Max setpoint rate (°/s)
-    static constexpr float DEADBAND_RAD = 0.00436f;   // ~0.25° position deadband
 
     // Auto-idle disable tracking
     unsigned long last_command_time;        // Last time a serial command was received (millis)
