@@ -189,7 +189,6 @@ public:
     // Setup
     void begin();
     bool calibrate();  // Runs motor.initFOC()
-    bool runMultiPointCalibration(bool verbose = true);  // 24-point precision calibration
 
     // Control
     void enable();
