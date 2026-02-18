@@ -212,6 +212,12 @@ public:
     void setCurrentPID(float p, float i, float d, float ramp);
     bool autoTunePID(bool verbose = false);
 
+    // Runtime-tunable position tracking thresholds (defaults from config.h)
+    void setPositionTolerance(float deg);
+    void setVelocityThreshold(float deg_s);
+    float getPositionTolerance() const { return pos_tolerance_deg; }
+    float getVelocityThreshold() const { return vel_threshold_deg_s; }
+
     // Status getters
     float getPosition();  // Current position (absolute 0-360°)
     float getAbsolutePositionDeg();  // Alias for getPosition()
@@ -295,6 +301,10 @@ private:
     static constexpr unsigned long IDLE_COMMAND_TIMEOUT_MS = 10000;  // 10s no commands
     static constexpr unsigned long IDLE_MOVEMENT_TIMEOUT_MS = 5000;  // 5s no encoder movement
     static constexpr float IDLE_MOVEMENT_THRESHOLD_DEG = 0.5f;      // Movement detection threshold
+
+    // Runtime position tracking thresholds (overrideable via 'set' command)
+    float pos_tolerance_deg;
+    float vel_threshold_deg_s;
 
     // Encoder streaming state
     bool stream_enabled;

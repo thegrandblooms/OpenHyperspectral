@@ -343,6 +343,30 @@ class SpectralViewerImGui:
         self.motor_serial_lock = threading.Lock()
         self.motor_cmd_input = ""            # Command text input buffer
         self.motor_auto_scroll = True        # Auto-scroll to bottom
+
+        # Motor settings state — values mirror config.h defaults so the panel
+        # always shows what the firmware booted with (no query needed).
+        # Motion control
+        self.ms_vel_max = 180.0          # MAX_VELOCITY_DEG (deg/s)
+        self.ms_accel = 286.5            # DEFAULT_ACCELERATION_DEG (deg/s²)
+        self.ms_vlim = 6.0               # VOLTAGE_LIMIT_GIMBAL (V)
+        self.ms_cur_lim = 2.0            # CURRENT_LIMIT (A)
+        # Position PID
+        self.ms_pid_p_pos = 20.0         # PID_P_POSITION
+        self.ms_pid_i_pos = 0.0          # PID_I_POSITION
+        self.ms_pid_d_pos = 1.0          # PID_D_POSITION
+        self.ms_pid_ramp_pos = 1000.0    # PID_RAMP_POSITION_DEG (deg/s)
+        # Velocity PID
+        self.ms_pid_p_vel = 0.2          # PID_P_VELOCITY
+        self.ms_pid_i_vel = 10.0         # PID_I_VELOCITY
+        self.ms_pid_d_vel = 0.0          # PID_D_VELOCITY
+        self.ms_pid_ramp_vel = 1000.0    # PID_RAMP_VELOCITY (deg/s)
+        self.ms_lpf_vel = 0.03           # PID_LPF_VELOCITY (s)
+        # Position tracking
+        self.ms_pos_tol = 0.5            # POSITION_TOLERANCE_DEG (deg)
+        self.ms_vel_thresh = 0.57        # VELOCITY_THRESHOLD_DEG (deg/s)
+        # Monitor filter
+        self.ms_filter_set_cmds = True   # Hide "set" command echoes from monitor
         
     def init_glfw(self):
         """Initialize GLFW and ImGui"""
@@ -904,6 +928,118 @@ class SpectralViewerImGui:
         # Border
         draw_list.add_rect(x0, y0, x1, y1, plot_color_grid)
 
+    def _motor_set(self, key, value, fmt=".6g"):
+        """Send a 'set <key> <value>' command over serial."""
+        self.motor_serial_send(f"set {key} {value:{fmt}}")
+
+    def _param_row(self, label, key, value, fmt_display="%.4f", fmt_send=".6g",
+                   v_min=0.0, v_max=0.0, tooltip=""):
+        """
+        Render one motor-settings parameter row: [label]  [input]  [Set].
+        Returns the (possibly edited) value.  Sends 'set key value' when
+        the Set button is clicked.  v_min/v_max are display hints only.
+        """
+        avail = imgui.get_content_region_available()[0]
+        btn_w = 36
+        label_w = 140
+        input_w = max(avail - label_w - btn_w - 14, 55)
+
+        imgui.text(label)
+        if tooltip and imgui.is_item_hovered():
+            imgui.set_tooltip(tooltip)
+        imgui.same_line(label_w)
+        imgui.push_item_width(input_w)
+        changed, new_val = imgui.input_float(f"##{key}", value, 0.0, 0.0, fmt_display)
+        imgui.pop_item_width()
+        imgui.same_line()
+        if imgui.small_button(f"Set##{key}"):
+            self._motor_set(key, new_val, fmt_send)
+        return new_val
+
+    def _render_motor_settings(self):
+        """Render the Motor Settings sub-panel (called from Motor Settings tree node)."""
+        connected = self.motor_serial is not None and self.motor_serial.is_open
+        if not connected:
+            imgui.text_colored("Connect serial to send settings", 0.7, 0.5, 0.2)
+            imgui.separator()
+
+        # Filter option
+        _, self.ms_filter_set_cmds = imgui.checkbox(
+            "Filter set cmds from monitor##ms", self.ms_filter_set_cmds)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "When enabled, 'set' command echoes are hidden\n"
+                "in the serial monitor above.\n"
+                "Firmware ACKs ($SET,...) are always silent.")
+        imgui.separator()
+
+        # ── Motion Control ─────────────────────────────────────────────
+        imgui.text_colored("Motion Control", 0.9, 0.85, 0.4, 1.0)
+
+        self.ms_vel_max = self._param_row(
+            "Vel Max (deg/s)", "vel_max", self.ms_vel_max, "%.1f", ".4g",
+            tooltip="motor.velocity_limit  [MAX_VELOCITY_DEG = 180.0]")
+        self.ms_accel = self._param_row(
+            "Accel (deg/s\xb2)", "accel", self.ms_accel, "%.1f", ".4g",
+            tooltip="PID output_ramp  [DEFAULT_ACCELERATION_DEG = 286.5]")
+        self.ms_vlim = self._param_row(
+            "Voltage Limit (V)", "vlim", self.ms_vlim, "%.2f", ".4g",
+            tooltip="motor.voltage_limit  [VOLTAGE_LIMIT_GIMBAL = 6.0]")
+        self.ms_cur_lim = self._param_row(
+            "Current Limit (A)", "cur_lim", self.ms_cur_lim, "%.2f", ".4g",
+            tooltip="motor.current_limit  [CURRENT_LIMIT = 2.0]")
+
+        imgui.separator()
+
+        # ── Position PID ───────────────────────────────────────────────
+        imgui.text_colored("Position PID  (P_angle)", 0.4, 0.8, 1.0, 1.0)
+
+        self.ms_pid_p_pos = self._param_row(
+            "P", "pid_p_pos", self.ms_pid_p_pos, "%.3f", ".6g",
+            tooltip="P_angle.P  [PID_P_POSITION = 20.0]")
+        self.ms_pid_i_pos = self._param_row(
+            "I", "pid_i_pos", self.ms_pid_i_pos, "%.3f", ".6g",
+            tooltip="P_angle.I  [PID_I_POSITION = 0.0]")
+        self.ms_pid_d_pos = self._param_row(
+            "D", "pid_d_pos", self.ms_pid_d_pos, "%.3f", ".6g",
+            tooltip="P_angle.D  [PID_D_POSITION = 1.0]")
+        self.ms_pid_ramp_pos = self._param_row(
+            "Ramp (deg/s)", "pid_ramp_pos", self.ms_pid_ramp_pos, "%.1f", ".4g",
+            tooltip="P_angle.output_ramp  [PID_RAMP_POSITION_DEG = 1000.0]")
+
+        imgui.separator()
+
+        # ── Velocity PID ───────────────────────────────────────────────
+        imgui.text_colored("Velocity PID  (PID_velocity)", 0.4, 1.0, 0.6, 1.0)
+
+        self.ms_pid_p_vel = self._param_row(
+            "P", "pid_p_vel", self.ms_pid_p_vel, "%.4f", ".6g",
+            tooltip="PID_velocity.P  [PID_P_VELOCITY = 0.2]")
+        self.ms_pid_i_vel = self._param_row(
+            "I", "pid_i_vel", self.ms_pid_i_vel, "%.3f", ".6g",
+            tooltip="PID_velocity.I  [PID_I_VELOCITY = 10.0]")
+        self.ms_pid_d_vel = self._param_row(
+            "D", "pid_d_vel", self.ms_pid_d_vel, "%.3f", ".6g",
+            tooltip="PID_velocity.D  [PID_D_VELOCITY = 0.0]")
+        self.ms_pid_ramp_vel = self._param_row(
+            "Ramp (deg/s)", "pid_ramp_vel", self.ms_pid_ramp_vel, "%.1f", ".4g",
+            tooltip="PID_velocity.output_ramp  [PID_RAMP_VELOCITY = 1000.0]")
+        self.ms_lpf_vel = self._param_row(
+            "LPF Tf (s)", "lpf_vel", self.ms_lpf_vel, "%.4f", ".6g",
+            tooltip="LPF_velocity.Tf  [PID_LPF_VELOCITY = 0.03]")
+
+        imgui.separator()
+
+        # ── Position Tracking ──────────────────────────────────────────
+        imgui.text_colored("Position Tracking", 1.0, 0.6, 0.4, 1.0)
+
+        self.ms_pos_tol = self._param_row(
+            "Pos Tolerance (deg)", "pos_tol", self.ms_pos_tol, "%.3f", ".6g",
+            tooltip="isAtTarget() position band  [POSITION_TOLERANCE_DEG = 0.5]")
+        self.ms_vel_thresh = self._param_row(
+            "Vel Threshold (deg/s)", "vel_thresh", self.ms_vel_thresh, "%.3f", ".6g",
+            tooltip="isAtTarget() velocity band  [VELOCITY_THRESHOLD_DEG = 0.57]")
+
     def render_motor_control(self):
         """Render the Motor Control accordion section."""
         expanded, _ = imgui.collapsing_header("Motor Control")
@@ -966,6 +1102,9 @@ class SpectralViewerImGui:
 
         with self.motor_serial_lock:
             for line in self.motor_debug_lines:
+                # Optionally hide "set" command echoes to reduce noise during tuning
+                if self.ms_filter_set_cmds and line.startswith("> set "):
+                    continue
                 if line.startswith("> "):
                     imgui.text_colored(line, 0.4, 0.8, 1.0)
                 elif line.startswith("---"):
@@ -1018,7 +1157,7 @@ class SpectralViewerImGui:
             imgui.tree_pop()
 
         if imgui.tree_node("Motor Settings"):
-            imgui.text_colored("(motor settings coming soon)", 0.5, 0.5, 0.5)
+            self._render_motor_settings()
             imgui.tree_pop()
 
     def render_ui(self, frame):
