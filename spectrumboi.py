@@ -932,22 +932,30 @@ class SpectralViewerImGui:
         """Send a 'set <key> <value>' command over serial."""
         self.motor_serial_send(f"set {key} {value:{fmt}}")
 
-    def _param_row(self, label, key, value, fmt_display="%.4f", fmt_send=".6g",
-                   v_min=0.0, v_max=0.0, tooltip=""):
+    def _param_row(self, label, key, value, fmt_display="%.4f", fmt_send=".6g", tooltip=""):
         """
-        Render one motor-settings parameter row: [label]  [input]  [Set].
-        Returns the (possibly edited) value.  Sends 'set key value' when
-        the Set button is clicked.  v_min/v_max are display hints only.
+        Render one motor-settings parameter row: [label .............. input | Set]
+        Label is left-aligned; input + Set button are right-aligned to the panel edge.
+        Returns the (possibly edited) value.  Sends 'set key value' when Set is clicked.
         """
-        avail = imgui.get_content_region_available()[0]
-        btn_w = 36
-        label_w = 140
-        input_w = max(avail - label_w - btn_w - 14, 55)
+        btn_w = 34
+        input_w = 78
+        spacing = 5   # gap between input and button
 
         imgui.text(label)
         if tooltip and imgui.is_item_hovered():
             imgui.set_tooltip(tooltip)
-        imgui.same_line(label_w)
+
+        # After imgui.text() the cursor has advanced to the next line.
+        # Capture the right edge of the content region from that position,
+        # then same_line back and jump the cursor to the right-aligned position.
+        next_x = imgui.get_cursor_pos_x()
+        avail   = imgui.get_content_region_available()[0]
+        right_edge = next_x + avail
+        input_x = right_edge - input_w - spacing - btn_w
+
+        imgui.same_line()
+        imgui.set_cursor_pos_x(input_x)
         imgui.push_item_width(input_w)
         changed, new_val = imgui.input_float(f"##{key}", value, 0.0, 0.0, fmt_display)
         imgui.pop_item_width()
@@ -956,6 +964,40 @@ class SpectralViewerImGui:
             self._motor_set(key, new_val, fmt_send)
         return new_val
 
+    # config.h defaults — used by Reset to Defaults
+    _MS_DEFAULTS = dict(
+        ms_vel_max=180.0, ms_accel=286.5, ms_vlim=6.0, ms_cur_lim=2.0,
+        ms_pid_p_pos=20.0, ms_pid_i_pos=0.0, ms_pid_d_pos=1.0, ms_pid_ramp_pos=1000.0,
+        ms_pid_p_vel=0.2,  ms_pid_i_vel=10.0, ms_pid_d_vel=0.0, ms_pid_ramp_vel=1000.0,
+        ms_lpf_vel=0.03,
+        ms_pos_tol=0.5, ms_vel_thresh=0.57,
+    )
+    # Maps attr name → (serial key, send format)
+    _MS_KEYS = [
+        ("ms_vel_max",      "vel_max",      ".4g"),
+        ("ms_accel",        "accel",        ".4g"),
+        ("ms_vlim",         "vlim",         ".4g"),
+        ("ms_cur_lim",      "cur_lim",      ".4g"),
+        ("ms_pid_p_pos",    "pid_p_pos",    ".6g"),
+        ("ms_pid_i_pos",    "pid_i_pos",    ".6g"),
+        ("ms_pid_d_pos",    "pid_d_pos",    ".6g"),
+        ("ms_pid_ramp_pos", "pid_ramp_pos", ".4g"),
+        ("ms_pid_p_vel",    "pid_p_vel",    ".6g"),
+        ("ms_pid_i_vel",    "pid_i_vel",    ".6g"),
+        ("ms_pid_d_vel",    "pid_d_vel",    ".6g"),
+        ("ms_pid_ramp_vel", "pid_ramp_vel", ".4g"),
+        ("ms_lpf_vel",      "lpf_vel",      ".6g"),
+        ("ms_pos_tol",      "pos_tol",      ".6g"),
+        ("ms_vel_thresh",   "vel_thresh",   ".6g"),
+    ]
+
+    def _reset_motor_settings(self):
+        """Reset all motor settings to config.h defaults and send them to the board."""
+        for attr, default in self._MS_DEFAULTS.items():
+            setattr(self, attr, default)
+        for attr, key, fmt in self._MS_KEYS:
+            self._motor_set(key, getattr(self, attr), fmt)
+
     def _render_motor_settings(self):
         """Render the Motor Settings sub-panel (called from Motor Settings tree node)."""
         connected = self.motor_serial is not None and self.motor_serial.is_open
@@ -963,14 +1005,26 @@ class SpectralViewerImGui:
             imgui.text_colored("Connect serial to send settings", 0.7, 0.5, 0.2)
             imgui.separator()
 
-        # Filter option
+        # Filter option + Reset button on the same line
         _, self.ms_filter_set_cmds = imgui.checkbox(
-            "Filter set cmds from monitor##ms", self.ms_filter_set_cmds)
+            "Filter set cmds##ms", self.ms_filter_set_cmds)
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                "When enabled, 'set' command echoes are hidden\n"
-                "in the serial monitor above.\n"
+                "Hide 'set' command echoes from the serial monitor above.\n"
                 "Firmware ACKs ($SET,...) are always silent.")
+
+        # Right-align the Reset button
+        imgui.same_line()
+        avail = imgui.get_content_region_available()[0]
+        reset_w = 110
+        imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + avail - reset_w)
+        if imgui.small_button("Reset to Defaults"):
+            self._reset_motor_settings()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Resets all values below to config.h defaults\n"
+                "and sends each one to the board immediately.")
+
         imgui.separator()
 
         # ── Motion Control ─────────────────────────────────────────────
@@ -978,55 +1032,69 @@ class SpectralViewerImGui:
 
         self.ms_vel_max = self._param_row(
             "Vel Max (deg/s)", "vel_max", self.ms_vel_max, "%.1f", ".4g",
-            tooltip="motor.velocity_limit  [MAX_VELOCITY_DEG = 180.0]")
+            tooltip="Top speed cap. Lower to keep motion gentle;\n"
+                    "higher to allow faster sweeps. (default 180 deg/s)")
         self.ms_accel = self._param_row(
             "Accel (deg/s\xb2)", "accel", self.ms_accel, "%.1f", ".4g",
-            tooltip="PID output_ramp  [DEFAULT_ACCELERATION_DEG = 286.5]")
+            tooltip="How quickly the motor ramps up and slows down.\n"
+                    "Lower = smoother start/stop, higher = snappier. (default 286.5)")
         self.ms_vlim = self._param_row(
             "Voltage Limit (V)", "vlim", self.ms_vlim, "%.2f", ".4g",
-            tooltip="motor.voltage_limit  [VOLTAGE_LIMIT_GIMBAL = 6.0]")
+            tooltip="Max voltage applied to the motor coils.\n"
+                    "Lower = cooler and smoother but less torque.\n"
+                    "Gimbal motors work best around 5–7 V. (default 6.0)")
         self.ms_cur_lim = self._param_row(
             "Current Limit (A)", "cur_lim", self.ms_cur_lim, "%.2f", ".4g",
-            tooltip="motor.current_limit  [CURRENT_LIMIT = 2.0]")
+            tooltip="Hard ceiling on coil current — a safety cap.\n"
+                    "SimpleFOC Mini supports up to 2 A continuous. (default 2.0)")
 
         imgui.separator()
 
         # ── Position PID ───────────────────────────────────────────────
-        imgui.text_colored("Position PID  (P_angle)", 0.4, 0.8, 1.0, 1.0)
+        imgui.text_colored("Position PID", 0.4, 0.8, 1.0, 1.0)
 
         self.ms_pid_p_pos = self._param_row(
             "P", "pid_p_pos", self.ms_pid_p_pos, "%.3f", ".6g",
-            tooltip="P_angle.P  [PID_P_POSITION = 20.0]")
+            tooltip="Proportional — how hard the motor pulls toward the target.\n"
+                    "Too low: sluggish or stalls. Too high: oscillates. (default 20.0)")
         self.ms_pid_i_pos = self._param_row(
             "I", "pid_i_pos", self.ms_pid_i_pos, "%.3f", ".6g",
-            tooltip="P_angle.I  [PID_I_POSITION = 0.0]")
+            tooltip="Integral — corrects lingering offset from target.\n"
+                    "Usually left at 0; only add if motor consistently misses. (default 0.0)")
         self.ms_pid_d_pos = self._param_row(
             "D", "pid_d_pos", self.ms_pid_d_pos, "%.3f", ".6g",
-            tooltip="P_angle.D  [PID_D_POSITION = 1.0]")
+            tooltip="Derivative — damping to reduce overshoot and ringing.\n"
+                    "Increase if motor bounces past target. (default 1.0)")
         self.ms_pid_ramp_pos = self._param_row(
             "Ramp (deg/s)", "pid_ramp_pos", self.ms_pid_ramp_pos, "%.1f", ".4g",
-            tooltip="P_angle.output_ramp  [PID_RAMP_POSITION_DEG = 1000.0]")
+            tooltip="Max rate the position loop's speed command can change.\n"
+                    "Acts as a secondary acceleration limiter. (default 1000)")
 
         imgui.separator()
 
         # ── Velocity PID ───────────────────────────────────────────────
-        imgui.text_colored("Velocity PID  (PID_velocity)", 0.4, 1.0, 0.6, 1.0)
+        imgui.text_colored("Velocity PID", 0.4, 1.0, 0.6, 1.0)
 
         self.ms_pid_p_vel = self._param_row(
             "P", "pid_p_vel", self.ms_pid_p_vel, "%.4f", ".6g",
-            tooltip="PID_velocity.P  [PID_P_VELOCITY = 0.2]")
+            tooltip="Proportional — responsiveness of the speed control inner loop.\n"
+                    "Typical range for gimbal motors: 0.1–0.5. (default 0.2)")
         self.ms_pid_i_vel = self._param_row(
             "I", "pid_i_vel", self.ms_pid_i_vel, "%.3f", ".6g",
-            tooltip="PID_velocity.I  [PID_I_VELOCITY = 10.0]")
+            tooltip="Integral — compensates for friction and load.\n"
+                    "High I can cause windup/oscillation; reduce if motor hunts. (default 10.0)")
         self.ms_pid_d_vel = self._param_row(
             "D", "pid_d_vel", self.ms_pid_d_vel, "%.3f", ".6g",
-            tooltip="PID_velocity.D  [PID_D_VELOCITY = 0.0]")
+            tooltip="Derivative — rarely used in velocity loops, usually 0. (default 0.0)")
         self.ms_pid_ramp_vel = self._param_row(
             "Ramp (deg/s)", "pid_ramp_vel", self.ms_pid_ramp_vel, "%.1f", ".4g",
-            tooltip="PID_velocity.output_ramp  [PID_RAMP_VELOCITY = 1000.0]")
+            tooltip="How fast the velocity loop's output voltage can change.\n"
+                    "Higher = more responsive, lower = smoother. (default 1000)")
         self.ms_lpf_vel = self._param_row(
             "LPF Tf (s)", "lpf_vel", self.ms_lpf_vel, "%.4f", ".6g",
-            tooltip="LPF_velocity.Tf  [PID_LPF_VELOCITY = 0.03]")
+            tooltip="Low-pass filter time constant on velocity measurement.\n"
+                    "Higher = smoother signal but slower response to speed changes.\n"
+                    "Helps suppress cogging noise in gimbal motors. (default 0.03)")
 
         imgui.separator()
 
@@ -1035,10 +1103,13 @@ class SpectralViewerImGui:
 
         self.ms_pos_tol = self._param_row(
             "Pos Tolerance (deg)", "pos_tol", self.ms_pos_tol, "%.3f", ".6g",
-            tooltip="isAtTarget() position band  [POSITION_TOLERANCE_DEG = 0.5]")
+            tooltip="How close the motor must be (in degrees) before the firmware\n"
+                    "considers the target reached. Tighter = more accurate but\n"
+                    "motor may never fully settle. (default 0.5°)")
         self.ms_vel_thresh = self._param_row(
             "Vel Threshold (deg/s)", "vel_thresh", self.ms_vel_thresh, "%.3f", ".6g",
-            tooltip="isAtTarget() velocity band  [VELOCITY_THRESHOLD_DEG = 0.57]")
+            tooltip="How slow the motor must be moving (deg/s) before the firmware\n"
+                    "considers it settled at the target. Pairs with Pos Tolerance. (default 0.57)")
 
     def render_motor_control(self):
         """Render the Motor Control accordion section."""
