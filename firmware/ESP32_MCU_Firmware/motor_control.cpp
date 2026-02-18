@@ -339,6 +339,8 @@ MotorController::MotorController()
       last_movement_time(0),
       last_idle_check_deg(0.0f),
       auto_enabled(false),
+      pos_tolerance_deg(POSITION_TOLERANCE_DEG),
+      vel_threshold_deg_s(VELOCITY_THRESHOLD_DEG),
       stream_enabled(STREAM_DEFAULT_ENABLED),
       stream_rate_hz(STREAM_RATE_HZ),
       stream_interval_us(1000000UL / STREAM_RATE_HZ),
@@ -953,6 +955,24 @@ void MotorController::setCurrentPID(float p, float i, float d, float ramp) {
     }
 }
 
+void MotorController::setPositionTolerance(float deg) {
+    pos_tolerance_deg = constrain(deg, 0.01f, 10.0f);
+    if (DEBUG_MOTOR) {
+        Serial.print("Position tolerance set to: ");
+        Serial.print(pos_tolerance_deg, 3);
+        Serial.println("°");
+    }
+}
+
+void MotorController::setVelocityThreshold(float deg_s) {
+    vel_threshold_deg_s = constrain(deg_s, 0.01f, 50.0f);
+    if (DEBUG_MOTOR) {
+        Serial.print("Velocity threshold set to: ");
+        Serial.print(vel_threshold_deg_s, 3);
+        Serial.println("°/s");
+    }
+}
+
 bool MotorController::autoTunePID(bool verbose) {
     // PID auto-tuner removed - use manual PID tuning via setPositionPID()
     if (verbose) {
@@ -1038,9 +1058,9 @@ bool MotorController::isAtTarget() {
     }
 
     // Target reached if position error is small and velocity is low
-    // Use constants from config.h
-    bool at_target = (position_error_deg < POSITION_TOLERANCE_DEG) &&
-                     (velocity_deg_s < VELOCITY_THRESHOLD_DEG);
+    // Use runtime-tunable thresholds (defaults from config.h, overrideable via 'set' command)
+    bool at_target = (position_error_deg < pos_tolerance_deg) &&
+                     (velocity_deg_s < vel_threshold_deg_s);
 
     // Print AT_TARGET only ONCE per move command (not every second)
     if (DEBUG_MOTOR && at_target && !at_target_printed) {

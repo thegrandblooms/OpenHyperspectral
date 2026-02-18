@@ -529,6 +529,88 @@ void processSerialCommand(String cmd) {
                 debug_status_enabled ? "ON" : "OFF");
         }
     }
+    else if (command == "set") {
+        // Runtime parameter tuning: set <key> <value>
+        // Designed for use with the SpectrumBoi Motor Settings panel.
+        // Responses are prefixed with '$SET,' so Python silently absorbs them
+        // into motor_stream_lines (same pattern as $ENC encoder data).
+        //
+        // Keys and units:
+        //   vel_max    deg/s      - velocity limit
+        //   accel      deg/s²     - acceleration (PID output ramp)
+        //   vlim       V          - motor voltage limit
+        //   cur_lim    A          - current limit
+        //   pid_p_pos             - position PID proportional gain
+        //   pid_i_pos             - position PID integral gain
+        //   pid_d_pos             - position PID derivative gain
+        //   pid_ramp_pos deg/s    - position PID output ramp
+        //   pid_p_vel             - velocity PID proportional gain
+        //   pid_i_vel             - velocity PID integral gain
+        //   pid_d_vel             - velocity PID derivative gain
+        //   pid_ramp_vel deg/s    - velocity PID output ramp
+        //   lpf_vel    s          - velocity low-pass filter time constant
+        //   pos_tol    deg        - position reached tolerance
+        //   vel_thresh deg/s      - velocity settled threshold
+        int space_idx = args.indexOf(' ');
+        if (space_idx < 0) {
+            Serial.println("Usage: set <key> <value>");
+            Serial.println("Keys: vel_max, accel, vlim, cur_lim,");
+            Serial.println("      pid_p_pos, pid_i_pos, pid_d_pos, pid_ramp_pos,");
+            Serial.println("      pid_p_vel, pid_i_vel, pid_d_vel, pid_ramp_vel,");
+            Serial.println("      lpf_vel, pos_tol, vel_thresh");
+        } else {
+            String key = args.substring(0, space_idx);
+            float val = args.substring(space_idx + 1).toFloat();
+            bool ok = true;
+
+            if (key == "vel_max") {
+                motorControl.setVelocity(val);
+            } else if (key == "accel") {
+                motorControl.setAcceleration(val);
+            } else if (key == "vlim") {
+                motorControl.getMotor().voltage_limit = constrain(val, 0.0f, (float)VOLTAGE_PSU);
+            } else if (key == "cur_lim") {
+                motorControl.setCurrentLimit(val);
+            } else if (key == "pid_p_pos") {
+                motorControl.getMotor().P_angle.P = val;
+            } else if (key == "pid_i_pos") {
+                motorControl.getMotor().P_angle.I = val;
+            } else if (key == "pid_d_pos") {
+                motorControl.getMotor().P_angle.D = val;
+            } else if (key == "pid_ramp_pos") {
+                motorControl.getMotor().P_angle.output_ramp = degreesToRadians(val);
+            } else if (key == "pid_p_vel") {
+                motorControl.getMotor().PID_velocity.P = val;
+            } else if (key == "pid_i_vel") {
+                motorControl.getMotor().PID_velocity.I = val;
+            } else if (key == "pid_d_vel") {
+                motorControl.getMotor().PID_velocity.D = val;
+            } else if (key == "pid_ramp_vel") {
+                motorControl.getMotor().PID_velocity.output_ramp = degreesToRadians(val);
+            } else if (key == "lpf_vel") {
+                motorControl.getMotor().LPF_velocity.Tf = constrain(val, 0.0f, 1.0f);
+            } else if (key == "pos_tol") {
+                motorControl.setPositionTolerance(val);
+            } else if (key == "vel_thresh") {
+                motorControl.setVelocityThreshold(val);
+            } else {
+                Serial.print("Unknown setting key: '");
+                Serial.print(key);
+                Serial.println("' - type 'set' for usage");
+                ok = false;
+            }
+
+            if (ok) {
+                // $SET tagged response: silently routed to Python stream buffer
+                // (Python _motor_serial_reader routes '$'-prefixed lines to motor_stream_lines)
+                Serial.print("$SET,");
+                Serial.print(key);
+                Serial.print(",");
+                Serial.print(val, 4);
+                Serial.println(",ok");
+            }
+        }
+    }
     else {
         Serial.print("Unknown command: '");
         Serial.print(cmd);
