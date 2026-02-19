@@ -354,11 +354,11 @@ class SpectralViewerImGui:
         # Position PID
         self.ms_pid_p_pos = 20.0         # PID_P_POSITION
         self.ms_pid_i_pos = 0.0          # PID_I_POSITION
-        self.ms_pid_d_pos = 0.0          # PID_D_POSITION (0 per SimpleFOC angle-mode docs)
+        self.ms_pid_d_pos = 0.2          # PID_D_POSITION
         self.ms_pid_ramp_pos = 1000.0    # PID_RAMP_POSITION_DEG (deg/s)
         # Velocity PID
         self.ms_pid_p_vel = 0.2          # PID_P_VELOCITY
-        self.ms_pid_i_vel = 20.0         # PID_I_VELOCITY (official SimpleFOC gimbal example)
+        self.ms_pid_i_vel = 5.0          # PID_I_VELOCITY
         self.ms_pid_d_vel = 0.0          # PID_D_VELOCITY
         self.ms_pid_ramp_vel = 1000.0    # PID_RAMP_VELOCITY (deg/s)
         self.ms_lpf_vel = 0.01           # PID_LPF_VELOCITY (s, official SimpleFOC gimbal example)
@@ -959,10 +959,12 @@ class SpectralViewerImGui:
         imgui.same_line()
         imgui.set_cursor_pos_x(input_x)
         imgui.push_item_width(input_w)
-        changed, new_val = imgui.input_float(f"##{key}", value, 0.0, 0.0, fmt_display)
+        enter_pressed, new_val = imgui.input_float(
+            f"##{key}", value, 0.0, 0.0, fmt_display,
+            imgui.INPUT_TEXT_ENTER_RETURNS_TRUE)
         imgui.pop_item_width()
         imgui.same_line()
-        if imgui.small_button(f"Set##{key}"):
+        if imgui.small_button(f"Set##{key}") or enter_pressed:
             self._motor_set(key, new_val, fmt_send)
         return new_val
 
@@ -970,8 +972,8 @@ class SpectralViewerImGui:
     # Keep in sync with config.h when values are changed there.
     _MS_DEFAULTS = dict(
         ms_vel_max=180.0, ms_accel=286.5, ms_vlim=6.0, ms_cur_lim=2.0,
-        ms_pid_p_pos=20.0, ms_pid_i_pos=0.0, ms_pid_d_pos=0.0, ms_pid_ramp_pos=1000.0,
-        ms_pid_p_vel=0.2,  ms_pid_i_vel=20.0, ms_pid_d_vel=0.0, ms_pid_ramp_vel=1000.0,
+        ms_pid_p_pos=20.0, ms_pid_i_pos=0.0, ms_pid_d_pos=0.2, ms_pid_ramp_pos=1000.0,
+        ms_pid_p_vel=0.2,  ms_pid_i_vel=5.0,  ms_pid_d_vel=0.0, ms_pid_ramp_vel=1000.0,
         ms_lpf_vel=0.01,
         ms_pos_tol=0.5, ms_vel_thresh=0.57,
     )
@@ -1081,7 +1083,7 @@ class SpectralViewerImGui:
         self.ms_pid_d_pos = self._param_row(
             "D", "pid_d_pos", self.ms_pid_d_pos, "%.3f", ".6g",
             tooltip="Derivative — damping to reduce overshoot and ringing.\n"
-                    "Increase if motor bounces past target. (default 1.0)")
+                    "Increase if motor bounces past target. (default 0.2)")
         self.ms_pid_ramp_pos = self._param_row(
             "Ramp (deg/s)", "pid_ramp_pos", self.ms_pid_ramp_pos, "%.1f", ".4g",
             tooltip="Max rate the position loop's speed command can change.\n"
@@ -1099,7 +1101,7 @@ class SpectralViewerImGui:
         self.ms_pid_i_vel = self._param_row(
             "I", "pid_i_vel", self.ms_pid_i_vel, "%.3f", ".6g",
             tooltip="Integral — compensates for friction and load.\n"
-                    "High I can cause windup/oscillation; reduce if motor hunts. (default 10.0)")
+                    "High I can cause windup/oscillation; reduce if motor hunts. (default 5.0)")
         self.ms_pid_d_vel = self._param_row(
             "D", "pid_d_vel", self.ms_pid_d_vel, "%.3f", ".6g",
             tooltip="Derivative — rarely used in velocity loops, usually 0. (default 0.0)")

@@ -92,15 +92,9 @@ void checkTuneSequence() {
         Serial.printf("[TUNE] Step %d/%d: %.0f° (origin%+.0f°)\n",
             tune_step + 1, TUNE_NUM_STEPS, target, TUNE_OFFSETS[tune_step]);
     } else {
-        // Wait for arrival or timeout, then advance to next step
-        bool reached   = motorControl.isAtTarget();
-        bool timed_out = (now - tune_step_start_ms > TUNE_TIMEOUT_MS);
-
-        if (reached || timed_out) {
-            if (timed_out && !reached) {
-                Serial.printf("[TUNE] Step %d timeout at %.1f°\n",
-                    tune_step + 1, motorControl.getPosition());
-            }
+        // Always wait the full timeout before advancing — lets you observe
+        // oscillations and settling behaviour without the step cutting short.
+        if (now - tune_step_start_ms > TUNE_TIMEOUT_MS) {
             tune_step = (tune_step + 1) % TUNE_NUM_STEPS;
             tune_move_issued = false;
         }
