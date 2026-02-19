@@ -235,10 +235,9 @@ class MotorTuner:
         "lpf_vel": (0.001, 0.1, "log"),
     }
 
-    # Test movement sequence: walk through quadrant positions with alternating
-    # forward/backward direction. Covers all 4 quadrants (cancels eccentricity)
-    # and exercises both CW and CCW movement.
-    # 0 → 90(fwd) → 180(back) → 270(fwd) → 0(back) → repeat
+    # Test movement sequence: walk through quadrant positions in 90° steps.
+    # All shortest-path moves are +90° (same direction), testing consistency
+    # across 4 quadrants which helps cancel mechanical eccentricity.
     MOVE_SEQUENCE = [0.0, 90.0, 180.0, 270.0, 0.0]
 
     # Scoring weights (lower total = better)
@@ -257,8 +256,8 @@ class MotorTuner:
     # still return a real score so Optuna can learn the gradient.
     EARLY_EXIT_OVERSHOOT_DEG = 15.0
     EARLY_EXIT_OSCILLATIONS = 10
-    EARLY_EXIT_VELOCITY_REVERSALS = 5
-    LIVE_OSCILLATION_LIMIT = 4   # position direction reversals → instant abort
+    EARLY_EXIT_VELOCITY_REVERSALS = 15
+    LIVE_OSCILLATION_LIMIT = 10  # position direction reversals → instant abort
     REVERSAL_NOISE_DEG = 0.15   # ignore position deltas smaller than this
     MOVE_TIMEOUT_S = 2.0
     SETTLE_DETECT_S = 0.3
@@ -370,23 +369,10 @@ class MotorTuner:
         score_sum = 0.0
         n_moves = len(self.MOVE_SEQUENCE) - 1  # transitions between positions
 
-        # Move to starting position — also check for oscillation here so
-        # we abort immediately instead of wasting 2s on a doomed setup move.
+        # Move to starting position (best-effort — we start scored moves from
+        # wherever the motor ends up, so no abort on oscillation here).
         self.send_fn(f"m {self.MOVE_SEQUENCE[0]:.2f}")
-        setup_samples, setup_reversals = self._wait_for_settle(
-            self.MOVE_SEQUENCE[0])
-        if setup_reversals >= self.LIVE_OSCILLATION_LIMIT:
-            start_pos = (setup_samples[0]["position_deg"]
-                         if setup_samples else self._origin_deg)
-            metrics = self._analyze_aborted_move(
-                setup_samples, start_pos, self.MOVE_SEQUENCE[0],
-                setup_reversals)
-            all_metrics.append(metrics)
-            score = self._score_move(metrics)
-            self._notify_trial_complete(
-                trial, score, params, all_metrics, n_moves,
-                abort_reason=f"oscillating on setup move ({setup_reversals} reversals)")
-            return score
+        self._wait_for_settle(self.MOVE_SEQUENCE[0])
         time.sleep(0.15)
 
         for i in range(n_moves):
@@ -460,26 +446,30 @@ class MotorTuner:
         self, trial, score, params, all_metrics, n_moves, abort_reason=None,
     ):
         """Build metrics summary and notify UI callback."""
+        def _safe_mean(vals):
+            """np.mean that returns 0.0 instead of nan for empty/bad input."""
+            if not vals:
+                return 0.0
+            v = float(np.mean(vals))
+            return v if np.isfinite(v) else 0.0
+
         metrics_summary = {
-            "avg_rise_time": float(np.mean([m.rise_time_s for m in all_metrics])),
-            "avg_settling_time": float(
-                np.mean([m.settling_time_s for m in all_metrics])
-            ),
-            "avg_overshoot": float(np.mean([m.overshoot_deg for m in all_metrics])),
-            "avg_oscillations": float(
-                np.mean([m.oscillation_count for m in all_metrics])
-            ),
-            "avg_vel_reversals": float(
-                np.mean([m.velocity_reversals for m in all_metrics])
-            ),
-            "avg_ss_error": float(
-                np.mean([m.steady_state_error_deg for m in all_metrics])
-            ),
-            "avg_settle_accuracy": float(
-                np.mean([m.settle_accuracy_deg for m in all_metrics])
-            ),
-            "avg_smoothness": float(np.mean([m.smoothness for m in all_metrics])),
+            "avg_rise_time": _safe_mean([m.rise_time_s for m in all_metrics]),
+            "avg_settling_time": _safe_mean(
+                [m.settling_time_s for m in all_metrics]),
+            "avg_overshoot": _safe_mean([m.overshoot_deg for m in all_metrics]),
+            "avg_oscillations": _safe_mean(
+                [m.oscillation_count for m in all_metrics]),
+            "avg_vel_reversals": _safe_mean(
+                [m.velocity_reversals for m in all_metrics]),
+            "avg_ss_error": _safe_mean(
+                [m.steady_state_error_deg for m in all_metrics]),
+            "avg_settle_accuracy": _safe_mean(
+                [m.settle_accuracy_deg for m in all_metrics]),
+            "avg_smoothness": _safe_mean([m.smoothness for m in all_metrics]),
         }
+        # abort_reason stored separately so JS doesn't crash calling
+        # .toFixed() on a string value in the metrics table.
         if abort_reason:
             metrics_summary["abort_reason"] = abort_reason
         trial.set_user_attr("metrics", metrics_summary)
@@ -585,8 +575,8 @@ class MotorTuner:
 
         # Live oscillation detection: count direction reversals in position.
         # A reversal = position delta changed sign (motor switched direction).
-        # Normal move: 0-1 reversals (straight shot, or one overshoot).
-        # 4+ reversals = clearly oscillating, regardless of where or when.
+        # Normal settling has a few reversals (overshoot + correct).
+        # 10+ reversals = sustained oscillation, worth aborting early.
         last_pos: Optional[float] = None
         last_direction: Optional[int] = None  # +1 = increasing, -1 = decreasing
         reversal_count = 0
@@ -986,6 +976,7 @@ function copyCommands() {{
   }};
   let html = '<table><tr><th>Metric</th><th>Value</th></tr>';
   for (const [k, v] of Object.entries(bestMetrics)) {{
+    if (typeof v !== 'number') continue;  // skip abort_reason etc.
     const [name, unit] = labels[k] || [k, ''];
     const cls = v < 0.5 ? 'good' : v < 2 ? 'warn' : 'bad';
     html += `<tr><td>${{name}}</td><td class="${{cls}}">${{v.toFixed(4)}} ${{unit}}</td></tr>`;
@@ -1003,13 +994,14 @@ function copyCommands() {{
   }}
   const container = document.getElementById('allTrialsTable');
   const pNames = Object.keys(trialData[0].params || {{}});
-  let html = '<table><tr><th>#</th><th>Score</th>';
+  let html = '<table><tr><th>#</th><th>Score</th><th>Status</th>';
   pNames.forEach(p => html += `<th>${{p}}</th>`);
   html += '</tr>';
   const bestScore = Math.min(...trialData.map(t => t.score));
   trialData.forEach(t => {{
     const cls = t.score === bestScore ? 'good' : '';
-    html += `<tr><td>${{t.number}}</td><td class="${{cls}}">${{t.score.toFixed(3)}}</td>`;
+    const reason = t.metrics?.abort_reason || 'ok';
+    html += `<tr><td>${{t.number}}</td><td class="${{cls}}">${{t.score.toFixed(3)}}</td><td>${{reason}}</td>`;
     pNames.forEach(p => html += `<td>${{t.params[p]?.toFixed(4) || ''}}</td>`);
     html += '</tr>';
   }});
