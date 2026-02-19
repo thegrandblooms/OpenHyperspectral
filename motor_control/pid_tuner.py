@@ -260,7 +260,6 @@ class MotorTuner:
     EARLY_EXIT_VELOCITY_REVERSALS = 5
     LIVE_OSCILLATION_LIMIT = 4   # position direction reversals → instant abort
     REVERSAL_NOISE_DEG = 0.15   # ignore position deltas smaller than this
-    OSCILLATION_PENALTY = 500.0  # fixed score for oscillation abort (very bad)
     MOVE_TIMEOUT_S = 2.0
     SETTLE_DETECT_S = 0.3
     INTER_MOVE_DELAY_S = 0.5
@@ -374,15 +373,20 @@ class MotorTuner:
         # Move to starting position — also check for oscillation here so
         # we abort immediately instead of wasting 2s on a doomed setup move.
         self.send_fn(f"m {self.MOVE_SEQUENCE[0]:.2f}")
-        _, setup_oscillating = self._wait_for_settle(self.MOVE_SEQUENCE[0])
-        if setup_oscillating:
-            metrics = MoveMetrics(timeout=True)
-            metrics.oscillation_count = self.LIVE_OSCILLATION_LIMIT
+        setup_samples, setup_reversals = self._wait_for_settle(
+            self.MOVE_SEQUENCE[0])
+        if setup_reversals >= self.LIVE_OSCILLATION_LIMIT:
+            start_pos = (setup_samples[0]["position_deg"]
+                         if setup_samples else self._origin_deg)
+            metrics = self._analyze_aborted_move(
+                setup_samples, start_pos, self.MOVE_SEQUENCE[0],
+                setup_reversals)
             all_metrics.append(metrics)
+            score = self._score_move(metrics)
             self._notify_trial_complete(
-                trial, self.OSCILLATION_PENALTY, params, all_metrics, n_moves,
-                abort_reason="oscillating on setup move")
-            return self.OSCILLATION_PENALTY
+                trial, score, params, all_metrics, n_moves,
+                abort_reason=f"oscillating on setup move ({setup_reversals} reversals)")
+            return score
         time.sleep(0.15)
 
         for i in range(n_moves):
@@ -393,21 +397,22 @@ class MotorTuner:
             start_pos = self._read_current_position()
             self.send_fn(f"m {target:.2f}")
 
-            samples, oscillation_aborted = self._wait_for_settle(target)
+            samples, reversals = self._wait_for_settle(target)
 
-            if oscillation_aborted:
-                # Motor is oscillating wildly — don't even bother analyzing.
-                # Give it a harsh fixed penalty so Optuna steers far away from
-                # these params.  Still a real (large) number, not inf, so the
-                # optimizer keeps a usable gradient.
-                metrics = MoveMetrics(timeout=True)
-                metrics.oscillation_count = self.LIVE_OSCILLATION_LIMIT
+            if reversals >= self.LIVE_OSCILLATION_LIMIT:
+                # Oscillating — analyze the real samples so Optuna gets a
+                # gradient (amplitude, distance from target, reversal count
+                # all feed into the score).  Skip remaining moves.
+                metrics = self._analyze_aborted_move(
+                    samples, start_pos, target, reversals)
                 all_metrics.append(metrics)
-                penalty = self.OSCILLATION_PENALTY
+                move_score = self._score_move(metrics)
+                # Extrapolate: assume remaining moves equally bad
+                total_score = move_score + (score_sum / (i + 1) if i > 0 else move_score)
                 self._notify_trial_complete(
-                    trial, penalty, params, all_metrics, n_moves,
-                    abort_reason=f"oscillating ({self.LIVE_OSCILLATION_LIMIT}+ direction reversals)")
-                return penalty
+                    trial, total_score, params, all_metrics, n_moves,
+                    abort_reason=f"oscillating ({reversals} reversals)")
+                return total_score
 
             try:
                 metrics = self.analyzer.analyze_move(samples, start_pos, target)
@@ -482,6 +487,26 @@ class MotorTuner:
 
     # -- Scoring --
 
+    def _analyze_aborted_move(
+        self, samples: List[dict], start_pos: float, target: float,
+        live_reversals: int,
+    ) -> MoveMetrics:
+        """Analyze a move that was aborted due to oscillation.
+
+        Runs the normal analyzer to get real metrics (overshoot, error, etc.)
+        so Optuna gets gradient-informative scores instead of a flat penalty.
+        Patches in the live reversal count which may be more accurate than
+        post-hoc analysis.
+        """
+        try:
+            metrics = self.analyzer.analyze_move(samples, start_pos, target)
+        except Exception:
+            metrics = MoveMetrics(timeout=True)
+        # Ensure the live-detected reversal count is reflected
+        metrics.velocity_reversals = max(metrics.velocity_reversals,
+                                         live_reversals)
+        return metrics
+
     def _score_move(self, m: MoveMetrics) -> float:
         w = self.WEIGHTS
         score = (
@@ -537,11 +562,12 @@ class MotorTuner:
             time.sleep(0.02)
         return self._origin_deg
 
-    def _wait_for_settle(self, target_deg: float) -> Tuple[List[dict], bool]:
+    def _wait_for_settle(self, target_deg: float) -> Tuple[List[dict], int]:
         """Wait for motor to reach target, collecting encoder samples.
 
-        Returns (samples, oscillation_aborted) — oscillation_aborted is True
-        if the motor reversed direction too many times (oscillating).
+        Returns (samples, reversal_count) — reversal_count is the number of
+        direction reversals detected.  The caller compares against
+        LIVE_OSCILLATION_LIMIT to decide whether to abort.
         """
         collected: List[dict] = []
         start_time = time.time()
@@ -591,7 +617,7 @@ class MotorTuner:
                 last_pos = pos
 
             if reversal_count >= self.LIVE_OSCILLATION_LIMIT:
-                return collected, True
+                return collected, reversal_count
 
             latest = collected[-1]
             error = abs(MovementAnalyzer._angle_error(
@@ -603,11 +629,11 @@ class MotorTuner:
                 if settle_start is None:
                     settle_start = time.time()
                 elif time.time() - settle_start >= self.SETTLE_DETECT_S:
-                    return collected, False
+                    return collected, reversal_count
             else:
                 settle_start = None
 
-        return collected, False
+        return collected, reversal_count
 
     # -- Helpers --
 
