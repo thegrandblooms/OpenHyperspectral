@@ -22,3 +22,6 @@ imgui[glfw]>=2.0.0
 # Plotting and visualization
 matplotlib>=3.5.0
 seaborn>=0.11.0
+
+# PID auto-tuning (Bayesian optimization via TPE)
+optuna>=3.0.0
