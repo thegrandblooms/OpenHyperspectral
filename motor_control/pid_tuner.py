@@ -258,7 +258,7 @@ class MotorTuner:
     EARLY_EXIT_OVERSHOOT_DEG = 15.0
     EARLY_EXIT_OSCILLATIONS = 10
     EARLY_EXIT_VELOCITY_REVERSALS = 5
-    LIVE_OSCILLATION_LIMIT = 5   # velocity reversals during a move → instant abort
+    LIVE_OSCILLATION_LIMIT = 6   # target crossings during a move → instant abort
     OSCILLATION_PENALTY = 500.0  # fixed score for oscillation abort (very bad)
     MOVE_TIMEOUT_S = 2.0
     SETTLE_DETECT_S = 0.3
@@ -401,8 +401,7 @@ class MotorTuner:
                 penalty = self.OSCILLATION_PENALTY
                 self._notify_trial_complete(
                     trial, penalty, params, all_metrics, n_moves,
-                    abort_reason=f"oscillating ({self.LIVE_OSCILLATION_LIMIT}+ "
-                                 f"reversals in <1s)")
+                    abort_reason=f"oscillating ({self.LIVE_OSCILLATION_LIMIT}+ target crossings)")
                 return penalty
 
             try:
@@ -537,7 +536,8 @@ class MotorTuner:
         """Wait for motor to reach target, collecting encoder samples.
 
         Returns (samples, oscillation_aborted) — oscillation_aborted is True
-        if the move was cut short due to excessive velocity reversals.
+        if the move was cut short because the motor kept crossing the target
+        back and forth (oscillating).
         """
         collected: List[dict] = []
         start_time = time.time()
@@ -548,9 +548,11 @@ class MotorTuner:
         # so we track our read cursor to avoid quadratic accumulation.
         baseline = len(self._flush_and_collect_enc())
 
-        # Live oscillation detection: count velocity sign flips as they arrive.
-        last_vel_sign: Optional[int] = None
-        reversal_count = 0
+        # Live oscillation detection: count how many times position crosses
+        # the target.  A normal move crosses 1-2 times (arrival + overshoot).
+        # 6+ crossings = 3+ full oscillation cycles = definitely unstable.
+        last_error_sign: Optional[int] = None
+        crossing_count = 0
 
         while time.time() - start_time < self.MOVE_TIMEOUT_S:
             time.sleep(0.02)
@@ -563,19 +565,19 @@ class MotorTuner:
             if not collected:
                 continue
 
-            # Track velocity reversals on new samples as they arrive
+            # Track target crossings on new samples as they arrive
             for s in new_samples:
-                v = s["velocity_deg_s"]
-                sign = 1 if v > 0 else (-1 if v < 0 else 0)
+                err = MovementAnalyzer._angle_error(
+                    s["position_deg"], target_deg
+                )
+                sign = 1 if err > 0.5 else (-1 if err < -0.5 else 0)
                 if sign != 0:
-                    if last_vel_sign is not None and sign != last_vel_sign:
-                        reversal_count += 1
-                    last_vel_sign = sign
+                    if last_error_sign is not None and sign != last_error_sign:
+                        crossing_count += 1
+                    last_error_sign = sign
 
-            # Abort early if motor is oscillating wildly (5+ reversals
-            # within the first second — no point waiting longer).
-            elapsed = time.time() - start_time
-            if reversal_count >= self.LIVE_OSCILLATION_LIMIT and elapsed < 1.0:
+            # Abort if motor keeps crossing back and forth over the target
+            if crossing_count >= self.LIVE_OSCILLATION_LIMIT:
                 return collected, True
 
             latest = collected[-1]
