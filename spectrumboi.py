@@ -383,6 +383,7 @@ class SpectralViewerImGui:
         self.pid_tuner_status = ""         # Status text ("Trial 5/50: score=12.3")
         self.pid_tuner_param_importance = {}  # {param_name: importance_float}
         self.pid_tuner_show_results = False   # Show results section
+        self.pid_tuner_report_path = ""      # Path to last HTML report
         self.pid_tuner_n_trials = 50       # Configurable trial count
         self.pid_tuner_move_timeout = 2.0  # Seconds per move before timeout
         
@@ -1236,61 +1237,8 @@ class SpectralViewerImGui:
         # Results section (shown after completion)
         if self.pid_tuner_show_results and not running:
             imgui.separator()
-            imgui.text_colored("Results", 0.9, 0.85, 0.4, 1.0)
-
-            # Parameter importance bars
-            if self.pid_tuner_param_importance:
-                imgui.text("Parameter Importance:")
-                sorted_imp = sorted(
-                    self.pid_tuner_param_importance.items(),
-                    key=lambda x: x[1], reverse=True)
-                max_imp = max(v for _, v in sorted_imp) if sorted_imp else 1.0
-
-                bar_width = imgui.get_content_region_available()[0] - 140
-                for name, imp in sorted_imp:
-                    ratio = imp / max_imp if max_imp > 0 else 0.0
-                    # Draw colored bar using progress bar
-                    imgui.text(f"  {name:<12s}")
-                    imgui.same_line(150)
-                    imgui.push_style_color(imgui.COLOR_PLOT_HISTOGRAM, 0.3, 0.7, 1.0, 0.9)
-                    imgui.progress_bar(ratio, (bar_width, 14), f"{imp:.2f}")
-                    imgui.pop_style_color()
-
-            # Best metrics table
-            bm = self.pid_tuner_best_metrics
-            bp = self.pid_tuner_best_params
-            if bm and bp:
-                imgui.spacing()
-                imgui.columns(2, "pid_results_cols", border=True)
-                imgui.set_column_width(0, 160)
-                # Left column: best params
-                imgui.text_colored("Parameters", 0.4, 0.8, 1.0, 1.0)
-                for key in ["pid_p_pos", "pid_d_pos", "pid_i_pos",
-                            "pid_p_vel", "pid_i_vel", "lpf_vel"]:
-                    if key in bp:
-                        imgui.text(f"  {key} = {bp[key]:.4g}")
-                # Right column: metrics
-                imgui.next_column()
-                imgui.text_colored("Performance", 0.4, 1.0, 0.6, 1.0)
-                metric_labels = [
-                    ("avg_rise_time", "Rise time", "s"),
-                    ("avg_settling_time", "Settle time", "s"),
-                    ("avg_overshoot", "Overshoot", "deg"),
-                    ("avg_oscillations", "Oscillations", ""),
-                    ("avg_ss_error", "SS Error", "deg"),
-                    ("avg_settle_accuracy", "Accuracy", "deg"),
-                ]
-                for mkey, label, unit in metric_labels:
-                    if mkey in bm:
-                        val = bm[mkey]
-                        if unit:
-                            imgui.text(f"  {label}: {val:.3f} {unit}")
-                        else:
-                            imgui.text(f"  {label}: {val:.1f}")
-                imgui.columns(1)
 
             # Action buttons
-            imgui.spacing()
             if imgui.button("Apply Best##pid_apply"):
                 if self.pid_tuner_best_params:
                     for key, val in self.pid_tuner_best_params.items():
@@ -1303,6 +1251,11 @@ class SpectralViewerImGui:
             if imgui.button("Reset to Defaults##pid_reset"):
                 self._reset_motor_settings()
                 self.pid_tuner_status = "Reset to config.h defaults"
+            if self.pid_tuner_report_path:
+                imgui.same_line()
+                if imgui.button("Open Report##pid_report"):
+                    import webbrowser
+                    webbrowser.open(self.pid_tuner_report_path)
 
     def _start_pid_tuner(self):
         """Launch PID auto-tuner in a background thread."""
@@ -1381,6 +1334,19 @@ class SpectralViewerImGui:
             if self.pid_tuner is not None:
                 self.pid_tuner_param_importance = self.pid_tuner.get_param_importance()
             self.pid_tuner_show_results = True
+            # Generate HTML report
+            if self.pid_tuner is not None and self.pid_tuner_trial_scores:
+                try:
+                    self.pid_tuner_report_path = self.pid_tuner.generate_report(
+                        trial_scores=self.pid_tuner_trial_scores,
+                        best_params=self.pid_tuner_best_params,
+                        best_metrics=self.pid_tuner_best_metrics,
+                        param_importance=self.pid_tuner_param_importance,
+                    )
+                    import webbrowser
+                    webbrowser.open(self.pid_tuner_report_path)
+                except Exception as exc:
+                    logger.warning("Failed to generate PID report: %s", exc)
             if "Error" not in self.pid_tuner_status:
                 n_done = len(self.pid_tuner_trial_scores)
                 self.pid_tuner_status = (

@@ -11,9 +11,13 @@ does NOT own the serial port; it receives send/read functions from the caller.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import time
+import webbrowser
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
 import numpy as np
@@ -152,12 +156,11 @@ class MovementAnalyzer:
             m.timeout = True
 
         # -- Overshoot: how far past the target in the direction of movement --
+        # Use displacement (wrap-safe) to find how far past the target we went.
         if move_dist > 0:
-            # Positive move: overshoot = max position - target (if position exceeds target)
-            m.overshoot_deg = max(0.0, float(np.max(pos) - target_deg))
+            m.overshoot_deg = max(0.0, float(np.max(displacement) - move_dist))
         else:
-            # Negative move: overshoot = target - min position (if position undershoots target)
-            m.overshoot_deg = max(0.0, float(target_deg - np.min(pos)))
+            m.overshoot_deg = max(0.0, float(move_dist - np.min(displacement)))
         m.overshoot_ratio = m.overshoot_deg / m.move_distance_deg
 
         # -- Oscillation count: sign changes of error after first arrival --
@@ -177,23 +180,32 @@ class MovementAnalyzer:
             m.steady_state_error_deg = float(np.mean(abs_error[ss_mask]))
 
         # -- Smoothness: integral of |jerk| --
-        dt = np.diff(ts)
-        valid_dt = dt > 0
-        if np.sum(valid_dt) > 2:
-            accel = np.diff(vel)[valid_dt[: len(np.diff(vel))]] / dt[
-                valid_dt[: len(np.diff(vel))]
-            ]
-            m.accel_variance = float(np.var(accel)) if len(accel) > 1 else 0.0
+        # Resample at valid (non-zero dt) intervals to keep arrays aligned.
+        try:
+            dt = np.diff(ts)
+            ok = dt > 0
+            if np.sum(ok) > 2:
+                dt_ok = dt[ok]
+                vel_ok = vel[:-1][ok]  # velocities at start of each interval
+                vel_next = vel[1:][ok]
+                accel = (vel_next - vel_ok) / dt_ok
+                m.accel_variance = float(np.var(accel)) if len(accel) > 1 else 0.0
 
-            dt2 = dt[1:][valid_dt[1 : len(accel) + 1] if len(accel) > 1 else []]
-            if len(accel) > 1 and len(dt2) > 0:
-                valid_dt2 = dt2 > 0
-                if np.any(valid_dt2):
-                    jerk = np.diff(accel)[: len(dt2)][valid_dt2] / dt2[valid_dt2]
-                    ts_jerk = ts[2 : 2 + len(jerk)]
-                    if len(jerk) > 1 and len(ts_jerk) == len(jerk):
-                        _trapz = getattr(np, "trapezoid", getattr(np, "trapz", None))
-                        m.smoothness = float(_trapz(np.abs(jerk), ts_jerk))
+                if len(accel) > 2:
+                    dt_a = dt_ok[1:]  # intervals between accel samples
+                    jerk = np.diff(accel) / dt_a
+                    ok_j = dt_a > 0
+                    if np.any(ok_j):
+                        # Timestamps for jerk samples (midpoints of accel intervals)
+                        ts_ok = ts[:-1][ok]
+                        ts_j = 0.5 * (ts_ok[1:-1] + ts_ok[2:])
+                        jerk_v = np.abs(jerk[ok_j[: len(jerk)]])
+                        ts_j = ts_j[: len(jerk_v)]
+                        if len(jerk_v) > 1 and len(ts_j) == len(jerk_v):
+                            _trapz = getattr(np, "trapezoid", getattr(np, "trapz", None))
+                            m.smoothness = float(_trapz(jerk_v, ts_j))
+        except (IndexError, ValueError):
+            pass  # Non-fatal — leave smoothness at default 0.0
 
         return m
 
@@ -359,7 +371,11 @@ class MotorTuner:
             self.send_fn(f"m {target:.2f}")
 
             samples = self._wait_for_settle(target)
-            metrics = self.analyzer.analyze_move(samples, start_pos, target)
+            try:
+                metrics = self.analyzer.analyze_move(samples, start_pos, target)
+            except Exception as exc:
+                logger.warning("analyze_move error (move %d): %s", i, exc)
+                metrics = MoveMetrics(timeout=True)
             all_metrics.append(metrics)
 
             # Safety abort
@@ -506,3 +522,354 @@ class MotorTuner:
             study.stop()
         if not self._should_continue():
             study.stop()
+
+    # -- HTML report --
+
+    def generate_report(
+        self,
+        trial_scores: List[tuple],
+        best_params: Dict[str, float],
+        best_metrics: Dict[str, float],
+        param_importance: Dict[str, float],
+        output_dir: str = ".",
+    ) -> str:
+        """Generate a self-contained HTML report and return the file path."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"pid_tuning_report_{timestamp}.html"
+        filepath = os.path.join(output_dir, filename)
+
+        # Collect per-trial data from the Optuna study for richer charts
+        trial_data = []
+        if self.study is not None:
+            for t in self.study.trials:
+                if t.state.name == "COMPLETE":
+                    trial_data.append({
+                        "number": t.number + 1,
+                        "score": t.value,
+                        "params": t.params,
+                        "metrics": t.user_attrs.get("metrics", {}),
+                    })
+
+        # Fall back to the simple (trial_num, score) list if study unavailable
+        scores_json = json.dumps(
+            [{"trial": n, "score": s} for n, s in trial_scores])
+        trial_data_json = json.dumps(trial_data)
+        best_params_json = json.dumps(best_params, indent=2)
+        best_metrics_json = json.dumps(best_metrics, indent=2)
+        importance_json = json.dumps(
+            sorted(param_importance.items(), key=lambda x: x[1], reverse=True))
+
+        best_score = min((s for _, s in trial_scores), default=0)
+        n_trials = len(trial_scores)
+        duration_min = (time.time() - self._start_time) / 60 if self._start_time else 0
+
+        html = _REPORT_TEMPLATE.format(
+            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            n_trials=n_trials,
+            best_score=f"{best_score:.3f}",
+            duration_min=f"{duration_min:.1f}",
+            scores_json=scores_json,
+            trial_data_json=trial_data_json,
+            best_params_json=best_params_json,
+            best_metrics_json=best_metrics_json,
+            importance_json=importance_json,
+            move_sequence=" → ".join(f"{p:.0f}°" for p in self.MOVE_SEQUENCE),
+            move_timeout_s=self.MOVE_TIMEOUT_S,
+        )
+
+        with open(filepath, "w") as f:
+            f.write(html)
+        logger.info("PID tuning report saved to %s", filepath)
+        return filepath
+
+
+# ---------------------------------------------------------------------------
+# HTML report template (self-contained, uses Chart.js from CDN)
+# ---------------------------------------------------------------------------
+
+_REPORT_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PID Tuning Report — {timestamp}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+  :root {{
+    --bg: #1a1a2e; --surface: #16213e; --card: #0f3460;
+    --accent: #e94560; --accent2: #53d8fb; --text: #eee; --muted: #889;
+  }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    padding: 24px; line-height: 1.5;
+  }}
+  h1 {{ color: var(--accent2); margin-bottom: 4px; font-size: 1.6em; }}
+  h2 {{ color: var(--accent2); margin: 24px 0 12px; font-size: 1.2em;
+        border-bottom: 1px solid #334; padding-bottom: 4px; }}
+  .subtitle {{ color: var(--muted); font-size: 0.9em; margin-bottom: 20px; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+           gap: 16px; margin-bottom: 20px; }}
+  .card {{
+    background: var(--surface); border-radius: 10px; padding: 18px;
+    border: 1px solid #253; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }}
+  .stat {{ text-align: center; }}
+  .stat .value {{ font-size: 2em; font-weight: 700; color: var(--accent); }}
+  .stat .label {{ color: var(--muted); font-size: 0.85em; }}
+  .chart-container {{ position: relative; height: 260px; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th, td {{ text-align: left; padding: 6px 12px; border-bottom: 1px solid #253; }}
+  th {{ color: var(--accent2); font-weight: 600; font-size: 0.85em; }}
+  td {{ font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.9em; }}
+  .bar-cell {{ position: relative; }}
+  .bar {{ position: absolute; left: 0; top: 2px; bottom: 2px;
+          background: var(--accent); opacity: 0.25; border-radius: 3px; }}
+  .param-name {{ color: var(--accent2); }}
+  .good {{ color: #4ecdc4; }} .warn {{ color: #ffe66d; }} .bad {{ color: var(--accent); }}
+  .copy-btn {{
+    background: var(--card); color: var(--accent2); border: 1px solid var(--accent2);
+    border-radius: 5px; padding: 6px 16px; cursor: pointer; font-size: 0.85em;
+    margin-top: 8px; transition: 0.2s;
+  }}
+  .copy-btn:hover {{ background: var(--accent2); color: var(--bg); }}
+  .footer {{ text-align: center; color: var(--muted); font-size: 0.8em; margin-top: 32px; }}
+</style>
+</head>
+<body>
+
+<h1>PID Auto-Tune Report</h1>
+<p class="subtitle">{timestamp} &nbsp;|&nbsp; Move pattern: {move_sequence}
+   &nbsp;|&nbsp; Timeout: {move_timeout_s}s/move</p>
+
+<!-- Summary stats -->
+<div class="grid">
+  <div class="card stat">
+    <div class="value">{n_trials}</div><div class="label">Trials</div>
+  </div>
+  <div class="card stat">
+    <div class="value">{best_score}</div><div class="label">Best Score</div>
+  </div>
+  <div class="card stat">
+    <div class="value">{duration_min} min</div><div class="label">Duration</div>
+  </div>
+</div>
+
+<!-- Charts row -->
+<div class="grid">
+  <div class="card">
+    <h2>Score vs Trial</h2>
+    <div class="chart-container"><canvas id="scoreChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Parameter Importance</h2>
+    <div class="chart-container"><canvas id="importanceChart"></canvas></div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Parameter Exploration</h2>
+    <div class="chart-container"><canvas id="paramChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Metrics Over Trials</h2>
+    <div class="chart-container"><canvas id="metricsChart"></canvas></div>
+  </div>
+</div>
+
+<!-- Best parameters table -->
+<div class="card">
+  <h2>Best Parameters</h2>
+  <table>
+    <tr><th>Parameter</th><th>Value</th><th>Firmware Command</th></tr>
+  </table>
+  <div id="paramsTable"></div>
+  <button class="copy-btn" onclick="copyCommands()">Copy All Commands</button>
+</div>
+
+<!-- Best metrics -->
+<div class="card">
+  <h2>Best Performance Metrics</h2>
+  <div id="metricsTable"></div>
+</div>
+
+<!-- All trials table -->
+<div class="card">
+  <h2>All Trials</h2>
+  <div style="max-height:400px; overflow-y:auto;">
+    <div id="allTrialsTable"></div>
+  </div>
+</div>
+
+<p class="footer">Generated by OpenHyperspectral PID Auto-Tuner (Optuna TPE)</p>
+
+<script>
+const scores = {scores_json};
+const trialData = {trial_data_json};
+const bestParams = {best_params_json};
+const bestMetrics = {best_metrics_json};
+const importance = {importance_json};
+
+// Shared chart defaults
+Chart.defaults.color = '#889';
+Chart.defaults.borderColor = '#253';
+Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
+
+// 1. Score vs Trial (with running-best overlay)
+(() => {{
+  const labels = scores.map(s => s.trial);
+  const vals = scores.map(s => s.score);
+  let runBest = []; let best = Infinity;
+  vals.forEach(v => {{ best = Math.min(best, v); runBest.push(best); }});
+
+  new Chart(document.getElementById('scoreChart'), {{
+    type: 'line',
+    data: {{
+      labels,
+      datasets: [
+        {{ label: 'Trial Score', data: vals, borderColor: '#e94560',
+           backgroundColor: 'rgba(233,69,96,0.1)', fill: true,
+           pointRadius: 2, borderWidth: 1.5, tension: 0.1 }},
+        {{ label: 'Best So Far', data: runBest, borderColor: '#53d8fb',
+           borderWidth: 2, borderDash: [5,3], pointRadius: 0, fill: false }}
+      ]
+    }},
+    options: {{
+      responsive: true, maintainAspectRatio: false,
+      plugins: {{ legend: {{ position: 'top', labels: {{ boxWidth: 12 }} }} }},
+      scales: {{ y: {{ title: {{ display: true, text: 'Score (lower=better)' }} }} }}
+    }}
+  }});
+}})();
+
+// 2. Parameter Importance (horizontal bar)
+(() => {{
+  if (!importance.length) return;
+  new Chart(document.getElementById('importanceChart'), {{
+    type: 'bar',
+    data: {{
+      labels: importance.map(i => i[0]),
+      datasets: [{{ data: importance.map(i => i[1]),
+        backgroundColor: importance.map((_, idx) =>
+          `hsl(${{200 + idx * 30}}, 70%, 55%)`),
+        borderRadius: 4 }}]
+    }},
+    options: {{
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: {{ legend: {{ display: false }} }},
+      scales: {{ x: {{ title: {{ display: true, text: 'Importance' }} }} }}
+    }}
+  }});
+}})();
+
+// 3. Parameter exploration scatter (score vs each param, colored by score)
+(() => {{
+  if (!trialData.length) return;
+  const paramNames = Object.keys(trialData[0].params || {{}});
+  const datasets = paramNames.map((p, idx) => ({{
+    label: p,
+    data: trialData.map(t => ({{ x: t.params[p], y: t.score }})),
+    backgroundColor: `hsla(${{idx * 55}}, 70%, 55%, 0.6)`,
+    pointRadius: 3, hidden: idx > 1,
+  }}));
+  new Chart(document.getElementById('paramChart'), {{
+    type: 'scatter',
+    data: {{ datasets }},
+    options: {{
+      responsive: true, maintainAspectRatio: false,
+      plugins: {{ legend: {{ position: 'top', labels: {{ boxWidth: 10, font: {{ size: 11 }} }} }} }},
+      scales: {{
+        x: {{ title: {{ display: true, text: 'Parameter Value' }} }},
+        y: {{ title: {{ display: true, text: 'Score' }} }}
+      }}
+    }}
+  }});
+}})();
+
+// 4. Metrics over trials
+(() => {{
+  if (!trialData.length) return;
+  const metricKeys = ['avg_rise_time', 'avg_settling_time', 'avg_overshoot', 'avg_ss_error'];
+  const labels = trialData.map(t => t.number);
+  const colors = ['#e94560', '#53d8fb', '#ffe66d', '#4ecdc4'];
+  const datasets = metricKeys.map((k, idx) => ({{
+    label: k.replace('avg_', ''),
+    data: trialData.map(t => t.metrics[k] || 0),
+    borderColor: colors[idx % colors.length],
+    borderWidth: 1.5, pointRadius: 1.5, tension: 0.15, fill: false,
+    hidden: idx > 1,
+  }}));
+  new Chart(document.getElementById('metricsChart'), {{
+    type: 'line',
+    data: {{ labels, datasets }},
+    options: {{
+      responsive: true, maintainAspectRatio: false,
+      plugins: {{ legend: {{ position: 'top', labels: {{ boxWidth: 10, font: {{ size: 11 }} }} }} }},
+      scales: {{ y: {{ title: {{ display: true, text: 'Value' }} }} }}
+    }}
+  }});
+}})();
+
+// Best params table
+(() => {{
+  const container = document.getElementById('paramsTable');
+  let html = '<table><tr><th>Parameter</th><th>Value</th><th>Firmware Command</th></tr>';
+  for (const [k, v] of Object.entries(bestParams)) {{
+    const cmd = `set ${{k}} ${{v.toPrecision(6)}}`;
+    html += `<tr><td class="param-name">${{k}}</td><td>${{v.toFixed(6)}}</td><td><code>${{cmd}}</code></td></tr>`;
+  }}
+  html += '</table>';
+  container.innerHTML = html;
+}})();
+
+function copyCommands() {{
+  const cmds = Object.entries(bestParams).map(([k,v]) => `set ${{k}} ${{v.toPrecision(6)}}`).join('\\n');
+  navigator.clipboard.writeText(cmds).then(() => {{
+    const btn = document.querySelector('.copy-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy All Commands', 1500);
+  }});
+}}
+
+// Best metrics table
+(() => {{
+  const container = document.getElementById('metricsTable');
+  const labels = {{
+    'avg_rise_time': ['Rise Time', 's'], 'avg_settling_time': ['Settling Time', 's'],
+    'avg_overshoot': ['Overshoot', 'deg'], 'avg_oscillations': ['Oscillations', ''],
+    'avg_ss_error': ['Steady-State Error', 'deg'], 'avg_settle_accuracy': ['Accuracy', 'deg'],
+    'avg_smoothness': ['Smoothness', ''],
+  }};
+  let html = '<table><tr><th>Metric</th><th>Value</th></tr>';
+  for (const [k, v] of Object.entries(bestMetrics)) {{
+    const [name, unit] = labels[k] || [k, ''];
+    const cls = v < 0.5 ? 'good' : v < 2 ? 'warn' : 'bad';
+    html += `<tr><td>${{name}}</td><td class="${{cls}}">${{v.toFixed(4)}} ${{unit}}</td></tr>`;
+  }}
+  html += '</table>';
+  container.innerHTML = html;
+}})();
+
+// All trials table
+(() => {{
+  if (!trialData.length) return;
+  const container = document.getElementById('allTrialsTable');
+  const pNames = Object.keys(trialData[0].params || {{}});
+  let html = '<table><tr><th>#</th><th>Score</th>';
+  pNames.forEach(p => html += `<th>${{p}}</th>`);
+  html += '</tr>';
+  const bestScore = Math.min(...trialData.map(t => t.score));
+  trialData.forEach(t => {{
+    const cls = t.score === bestScore ? 'good' : '';
+    html += `<tr><td>${{t.number}}</td><td class="${{cls}}">${{t.score.toFixed(3)}}</td>`;
+    pNames.forEach(p => html += `<td>${{t.params[p]?.toFixed(4) || ''}}</td>`);
+    html += '</tr>';
+  }});
+  html += '</table>';
+  container.innerHTML = html;
+}})();
+</script>
+</body>
+</html>"""
