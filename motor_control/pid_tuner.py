@@ -18,7 +18,7 @@ import time
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -258,6 +258,8 @@ class MotorTuner:
     EARLY_EXIT_OVERSHOOT_DEG = 15.0
     EARLY_EXIT_OSCILLATIONS = 10
     EARLY_EXIT_VELOCITY_REVERSALS = 5
+    LIVE_OSCILLATION_LIMIT = 5   # velocity reversals during a move → instant abort
+    OSCILLATION_PENALTY = 500.0  # fixed score for oscillation abort (very bad)
     MOVE_TIMEOUT_S = 2.0
     SETTLE_DETECT_S = 0.3
     INTER_MOVE_DELAY_S = 0.5
@@ -374,7 +376,7 @@ class MotorTuner:
 
         # Move to starting position
         self.send_fn(f"m {self.MOVE_SEQUENCE[0]:.2f}")
-        self._wait_for_settle(self.MOVE_SEQUENCE[0])
+        self._wait_for_settle(self.MOVE_SEQUENCE[0])  # result ignored for setup move
         time.sleep(0.15)
 
         for i in range(n_moves):
@@ -386,7 +388,23 @@ class MotorTuner:
             self._enc_buffer.clear()
             self.send_fn(f"m {target:.2f}")
 
-            samples = self._wait_for_settle(target)
+            samples, oscillation_aborted = self._wait_for_settle(target)
+
+            if oscillation_aborted:
+                # Motor is oscillating wildly — don't even bother analyzing.
+                # Give it a harsh fixed penalty so Optuna steers far away from
+                # these params.  Still a real (large) number, not inf, so the
+                # optimizer keeps a usable gradient.
+                metrics = MoveMetrics(timeout=True)
+                metrics.oscillation_count = self.LIVE_OSCILLATION_LIMIT
+                all_metrics.append(metrics)
+                penalty = self.OSCILLATION_PENALTY
+                self._notify_trial_complete(
+                    trial, penalty, params, all_metrics, n_moves,
+                    abort_reason=f"oscillating ({self.LIVE_OSCILLATION_LIMIT}+ "
+                                 f"reversals in <1s)")
+                return penalty
+
             try:
                 metrics = self.analyzer.analyze_move(samples, start_pos, target)
             except Exception as exc:
@@ -515,8 +533,12 @@ class MotorTuner:
             time.sleep(0.02)
         return self._origin_deg
 
-    def _wait_for_settle(self, target_deg: float) -> List[dict]:
-        """Wait for motor to reach target, collecting encoder samples."""
+    def _wait_for_settle(self, target_deg: float) -> Tuple[List[dict], bool]:
+        """Wait for motor to reach target, collecting encoder samples.
+
+        Returns (samples, oscillation_aborted) — oscillation_aborted is True
+        if the move was cut short due to excessive velocity reversals.
+        """
         collected: List[dict] = []
         start_time = time.time()
         settle_start: Optional[float] = None
@@ -525,6 +547,10 @@ class MotorTuner:
         # _drain_enc_lines reads without consuming (the UI also needs them),
         # so we track our read cursor to avoid quadratic accumulation.
         baseline = len(self._flush_and_collect_enc())
+
+        # Live oscillation detection: count velocity sign flips as they arrive.
+        last_vel_sign: Optional[int] = None
+        reversal_count = 0
 
         while time.time() - start_time < self.MOVE_TIMEOUT_S:
             time.sleep(0.02)
@@ -537,6 +563,21 @@ class MotorTuner:
             if not collected:
                 continue
 
+            # Track velocity reversals on new samples as they arrive
+            for s in new_samples:
+                v = s["velocity_deg_s"]
+                sign = 1 if v > 0 else (-1 if v < 0 else 0)
+                if sign != 0:
+                    if last_vel_sign is not None and sign != last_vel_sign:
+                        reversal_count += 1
+                    last_vel_sign = sign
+
+            # Abort early if motor is oscillating wildly (5+ reversals
+            # within the first second — no point waiting longer).
+            elapsed = time.time() - start_time
+            if reversal_count >= self.LIVE_OSCILLATION_LIMIT and elapsed < 1.0:
+                return collected, True
+
             latest = collected[-1]
             error = abs(MovementAnalyzer._angle_error(
                 latest["position_deg"], target_deg
@@ -547,11 +588,11 @@ class MotorTuner:
                 if settle_start is None:
                     settle_start = time.time()
                 elif time.time() - settle_start >= self.SETTLE_DETECT_S:
-                    return collected
+                    return collected, False
             else:
                 settle_start = None
 
-        return collected
+        return collected, False
 
     # -- Helpers --
 
