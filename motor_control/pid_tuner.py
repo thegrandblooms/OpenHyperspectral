@@ -48,6 +48,7 @@ class MoveMetrics:
     overshoot_deg: float = 0.0
     overshoot_ratio: float = 0.0
     oscillation_count: int = 0
+    velocity_reversals: int = 0
     steady_state_error_deg: float = 0.0
     settle_accuracy_deg: float = 0.0
     smoothness: float = 0.0
@@ -174,6 +175,13 @@ class MovementAnalyzer:
                     sign_changes = np.sum(np.diff(signs) != 0)
                     m.oscillation_count = int(sign_changes // 2)
 
+        # -- Velocity reversals: sign flips in velocity (catches vibration
+        #    even when motor never reaches target) --
+        vel_signs = np.sign(vel)
+        vel_signs = vel_signs[vel_signs != 0]  # drop zero-velocity samples
+        if len(vel_signs) > 1:
+            m.velocity_reversals = int(np.sum(np.diff(vel_signs) != 0))
+
         # -- Steady-state error: mean |error| over final ss_window --
         ss_mask = ts >= (ts[-1] - self.ss_window)
         if np.any(ss_mask):
@@ -239,6 +247,7 @@ class MotorTuner:
         "settling_time": 3.0,
         "overshoot_ratio": 10.0,
         "oscillation_count": 2.0,
+        "velocity_reversals": 3.0,
         "smoothness": 0.5,
         "steady_state_error": 5.0,
         "settle_accuracy": 8.0,
@@ -247,6 +256,7 @@ class MotorTuner:
     # Safety
     MAX_OVERSHOOT_DEG = 15.0
     MAX_OSCILLATIONS = 10
+    MAX_VELOCITY_REVERSALS = 5
     MOVE_TIMEOUT_S = 2.0
     SETTLE_DETECT_S = 0.3
     INTER_MOVE_DELAY_S = 0.5
@@ -395,6 +405,11 @@ class MotorTuner:
                     trial, self.PENALTY_SCORE, params, all_metrics, n_moves,
                     abort_reason=f"{metrics.oscillation_count} oscillations")
                 return self.PENALTY_SCORE
+            if metrics.velocity_reversals > self.MAX_VELOCITY_REVERSALS:
+                self._notify_trial_complete(
+                    trial, self.PENALTY_SCORE, params, all_metrics, n_moves,
+                    abort_reason=f"{metrics.velocity_reversals} vel reversals")
+                return self.PENALTY_SCORE
 
             move_score = self._score_move(metrics)
             score_sum += move_score
@@ -425,6 +440,9 @@ class MotorTuner:
             "avg_oscillations": float(
                 np.mean([m.oscillation_count for m in all_metrics])
             ),
+            "avg_vel_reversals": float(
+                np.mean([m.velocity_reversals for m in all_metrics])
+            ),
             "avg_ss_error": float(
                 np.mean([m.steady_state_error_deg for m in all_metrics])
             ),
@@ -447,6 +465,7 @@ class MotorTuner:
             + w["settling_time"] * m.settling_time_s
             + w["overshoot_ratio"] * m.overshoot_ratio
             + w["oscillation_count"] * m.oscillation_count
+            + w["velocity_reversals"] * m.velocity_reversals
             + w["smoothness"] * min(m.smoothness, 100.0)
             + w["steady_state_error"] * m.steady_state_error_deg
             + w["settle_accuracy"] * m.settle_accuracy_deg
@@ -699,9 +718,6 @@ _REPORT_TEMPLATE = r"""<!DOCTYPE html>
 <!-- Best parameters table -->
 <div class="card">
   <h2>Best Parameters</h2>
-  <table>
-    <tr><th>Parameter</th><th>Value</th><th>Firmware Command</th></tr>
-  </table>
   <div id="paramsTable"></div>
   <button class="copy-btn" onclick="copyCommands()">Copy All Commands</button>
 </div>
@@ -736,6 +752,11 @@ Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
 
 // 1. Score vs Trial (with running-best overlay)
 (() => {{
+  if (!scores.length) {{
+    document.getElementById('scoreChart').parentElement.innerHTML =
+      '<p style="color:var(--muted);text-align:center;padding:40px">No trial data recorded</p>';
+    return;
+  }}
   const labels = scores.map(s => s.trial);
   const vals = scores.map(s => s.score);
   let runBest = []; let best = Infinity;
@@ -763,7 +784,11 @@ Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
 
 // 2. Parameter Importance (horizontal bar)
 (() => {{
-  if (!importance.length) return;
+  if (!importance.length) {{
+    document.getElementById('importanceChart').parentElement.innerHTML =
+      '<p style="color:var(--muted);text-align:center;padding:40px">Need 5+ trials for importance analysis</p>';
+    return;
+  }}
   new Chart(document.getElementById('importanceChart'), {{
     type: 'bar',
     data: {{
@@ -783,7 +808,11 @@ Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
 
 // 3. Parameter exploration scatter (score vs each param, colored by score)
 (() => {{
-  if (!trialData.length) return;
+  if (!trialData.length) {{
+    document.getElementById('paramChart').parentElement.innerHTML =
+      '<p style="color:var(--muted);text-align:center;padding:40px">No completed trials</p>';
+    return;
+  }}
   const paramNames = Object.keys(trialData[0].params || {{}});
   const datasets = paramNames.map((p, idx) => ({{
     label: p,
@@ -807,10 +836,14 @@ Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
 
 // 4. Metrics over trials
 (() => {{
-  if (!trialData.length) return;
-  const metricKeys = ['avg_rise_time', 'avg_settling_time', 'avg_overshoot', 'avg_ss_error'];
+  if (!trialData.length) {{
+    document.getElementById('metricsChart').parentElement.innerHTML =
+      '<p style="color:var(--muted);text-align:center;padding:40px">No completed trials</p>';
+    return;
+  }}
+  const metricKeys = ['avg_rise_time', 'avg_settling_time', 'avg_overshoot', 'avg_vel_reversals', 'avg_ss_error'];
   const labels = trialData.map(t => t.number);
-  const colors = ['#e94560', '#53d8fb', '#ffe66d', '#4ecdc4'];
+  const colors = ['#e94560', '#53d8fb', '#ffe66d', '#4ecdc4', '#ff6b9d'];
   const datasets = metricKeys.map((k, idx) => ({{
     label: k.replace('avg_', ''),
     data: trialData.map(t => t.metrics[k] || 0),
@@ -856,6 +889,7 @@ function copyCommands() {{
   const labels = {{
     'avg_rise_time': ['Rise Time', 's'], 'avg_settling_time': ['Settling Time', 's'],
     'avg_overshoot': ['Overshoot', 'deg'], 'avg_oscillations': ['Oscillations', ''],
+    'avg_vel_reversals': ['Vel Reversals', ''],
     'avg_ss_error': ['Steady-State Error', 'deg'], 'avg_settle_accuracy': ['Accuracy', 'deg'],
     'avg_smoothness': ['Smoothness', ''],
   }};
@@ -871,7 +905,11 @@ function copyCommands() {{
 
 // All trials table
 (() => {{
-  if (!trialData.length) return;
+  if (!trialData.length) {{
+    document.getElementById('allTrialsTable').innerHTML =
+      '<p style="color:var(--muted);padding:12px">No completed trials to display.</p>';
+    return;
+  }}
   const container = document.getElementById('allTrialsTable');
   const pNames = Object.keys(trialData[0].params || {{}});
   let html = '<table><tr><th>#</th><th>Score</th>';
