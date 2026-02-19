@@ -38,6 +38,8 @@ from io import BytesIO
 import serial
 import serial.tools.list_ports
 
+from motor_control.pid_tuner import MotorTuner, MovementAnalyzer
+
 # Set seaborn style
 sns.set_theme(style="darkgrid")
 plt.style.use('dark_background')
@@ -369,6 +371,19 @@ class SpectralViewerImGui:
         self.ms_filter_set_cmds = True   # Hide "set" command echoes from monitor
         # Tune cycle
         self.ms_tune_active = False      # Repeating ±30/60/90° PID tune cycle
+
+        # PID auto-tuner state (Bayesian optimization via Optuna)
+        self.pid_tuner = None              # MotorTuner instance (or None)
+        self.pid_tuner_thread = None       # Background thread
+        self.pid_tuner_running = False     # Thread control flag
+        self.pid_tuner_trial_scores = []   # [(trial_num, score), ...] for history plot
+        self.pid_tuner_best_params = {}    # Best params found so far
+        self.pid_tuner_best_score = None   # Best score
+        self.pid_tuner_best_metrics = {}   # Best metrics summary
+        self.pid_tuner_status = ""         # Status text ("Trial 5/50: score=12.3")
+        self.pid_tuner_param_importance = {}  # {param_name: importance_float}
+        self.pid_tuner_show_results = False   # Show results section
+        self.pid_tuner_n_trials = 50       # Configurable trial count
         
     def init_glfw(self):
         """Initialize GLFW and ImGui"""
@@ -1129,6 +1144,245 @@ class SpectralViewerImGui:
             "Vel Threshold (deg/s)", "vel_thresh", self.ms_vel_thresh, "%.3f", ".6g",
             tooltip="How slow the motor must be moving (deg/s) before the firmware\n"
                     "considers it settled at the target. Pairs with Pos Tolerance. (default 0.57)")
+
+        # ── PID Auto-Tune (Bayesian) ─────────────────────────────────
+        imgui.separator()
+        self._render_pid_autotune()
+
+    # ------------------------------------------------------------------
+    # PID Auto-Tuner UI + thread management
+    # ------------------------------------------------------------------
+
+    def _render_pid_autotune(self):
+        """Render the PID auto-tuning section inside Motor Settings."""
+        imgui.text_colored("PID Auto-Tune (Bayesian)", 1.0, 0.75, 0.3, 1.0)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Uses Optuna (TPE Bayesian optimization) to automatically\n"
+                "find optimal PID parameters by running a series of test\n"
+                "movements and measuring motor performance.\n\n"
+                "Tunes: Position P/I/D, Velocity P/I, Velocity LPF\n"
+                "Test pattern: ±10°, ±30°, ±60°, ±90° movements")
+
+        connected = self.motor_serial is not None and self.motor_serial.is_open
+        running = self.pid_tuner_running
+
+        if not running:
+            # Trial count input
+            imgui.push_item_width(80)
+            _, self.pid_tuner_n_trials = imgui.input_int(
+                "Trials##pid_n", self.pid_tuner_n_trials, 10, 25)
+            self.pid_tuner_n_trials = max(5, min(500, self.pid_tuner_n_trials))
+            imgui.pop_item_width()
+            if imgui.is_item_hovered():
+                imgui.set_tooltip("Number of parameter combinations to try.\n"
+                                  "More trials = better results but longer runtime.\n"
+                                  "Each trial takes ~15-45 seconds.")
+
+            imgui.same_line()
+            if connected:
+                if imgui.button("Run PID Calibration##pid_run"):
+                    self._start_pid_tuner()
+            else:
+                imgui.text_colored("(connect serial first)", 0.7, 0.5, 0.2)
+        else:
+            # Stop button
+            if imgui.button("Stop Calibration##pid_stop"):
+                self.pid_tuner_running = False
+                self.pid_tuner_status = "Stopping..."
+
+        # Status line
+        if self.pid_tuner_status:
+            if running:
+                imgui.text_colored(self.pid_tuner_status, 0.4, 1.0, 0.6, 1.0)
+            else:
+                imgui.text(self.pid_tuner_status)
+
+        # Best score so far (during or after run)
+        if self.pid_tuner_best_score is not None:
+            best_p = self.pid_tuner_best_params
+            imgui.text_colored(
+                f"Best: {self.pid_tuner_best_score:.2f}  "
+                f"P={best_p.get('pid_p_pos', 0):.1f} "
+                f"D={best_p.get('pid_d_pos', 0):.2f} "
+                f"I={best_p.get('pid_i_pos', 0):.2f}",
+                0.3, 0.9, 1.0, 1.0)
+
+        # Optimization history plot (score vs trial)
+        if len(self.pid_tuner_trial_scores) > 1:
+            scores = [s for _, s in self.pid_tuner_trial_scores]
+            # Cap display at reasonable range for plot readability
+            max_display = max(scores) * 1.1 if scores else 100.0
+            scores_arr = [min(s, max_display) for s in scores]
+
+            imgui.text(f"Score History ({len(scores)} trials)")
+            plot_data = np.array(scores_arr, dtype=np.float32)
+            imgui.plot_lines(
+                "##pid_history",
+                plot_data,
+                overlay_text=f"best: {min(scores):.2f}",
+                scale_min=0.0,
+                scale_max=max_display,
+                graph_size=(imgui.get_content_region_available()[0], 80),
+            )
+
+        # Results section (shown after completion)
+        if self.pid_tuner_show_results and not running:
+            imgui.separator()
+            imgui.text_colored("Results", 0.9, 0.85, 0.4, 1.0)
+
+            # Parameter importance bars
+            if self.pid_tuner_param_importance:
+                imgui.text("Parameter Importance:")
+                sorted_imp = sorted(
+                    self.pid_tuner_param_importance.items(),
+                    key=lambda x: x[1], reverse=True)
+                max_imp = max(v for _, v in sorted_imp) if sorted_imp else 1.0
+
+                bar_width = imgui.get_content_region_available()[0] - 140
+                for name, imp in sorted_imp:
+                    ratio = imp / max_imp if max_imp > 0 else 0.0
+                    # Draw colored bar using progress bar
+                    imgui.text(f"  {name:<12s}")
+                    imgui.same_line(150)
+                    imgui.push_style_color(imgui.COLOR_PLOT_HISTOGRAM, 0.3, 0.7, 1.0, 0.9)
+                    imgui.progress_bar(ratio, (bar_width, 14), f"{imp:.2f}")
+                    imgui.pop_style_color()
+
+            # Best metrics table
+            bm = self.pid_tuner_best_metrics
+            bp = self.pid_tuner_best_params
+            if bm and bp:
+                imgui.spacing()
+                imgui.columns(2, "pid_results_cols", border=True)
+                imgui.set_column_width(0, 160)
+                # Left column: best params
+                imgui.text_colored("Parameters", 0.4, 0.8, 1.0, 1.0)
+                for key in ["pid_p_pos", "pid_d_pos", "pid_i_pos",
+                            "pid_p_vel", "pid_i_vel", "lpf_vel"]:
+                    if key in bp:
+                        imgui.text(f"  {key} = {bp[key]:.4g}")
+                # Right column: metrics
+                imgui.next_column()
+                imgui.text_colored("Performance", 0.4, 1.0, 0.6, 1.0)
+                metric_labels = [
+                    ("avg_rise_time", "Rise time", "s"),
+                    ("avg_settling_time", "Settle time", "s"),
+                    ("avg_overshoot", "Overshoot", "deg"),
+                    ("avg_oscillations", "Oscillations", ""),
+                    ("avg_ss_error", "SS Error", "deg"),
+                    ("avg_settle_accuracy", "Accuracy", "deg"),
+                ]
+                for mkey, label, unit in metric_labels:
+                    if mkey in bm:
+                        val = bm[mkey]
+                        if unit:
+                            imgui.text(f"  {label}: {val:.3f} {unit}")
+                        else:
+                            imgui.text(f"  {label}: {val:.1f}")
+                imgui.columns(1)
+
+            # Action buttons
+            imgui.spacing()
+            if imgui.button("Apply Best##pid_apply"):
+                if self.pid_tuner_best_params:
+                    for key, val in self.pid_tuner_best_params.items():
+                        self._motor_set(key, val)
+                        attr = f"ms_{key}"
+                        if hasattr(self, attr):
+                            setattr(self, attr, val)
+                    self.pid_tuner_status = "Best parameters applied to firmware"
+            imgui.same_line()
+            if imgui.button("Reset to Defaults##pid_reset"):
+                self._reset_motor_settings()
+                self.pid_tuner_status = "Reset to config.h defaults"
+
+    def _start_pid_tuner(self):
+        """Launch PID auto-tuner in a background thread."""
+        if self.pid_tuner_running:
+            return
+
+        # Disable tune cycle if active
+        if self.ms_tune_active:
+            self.ms_tune_active = False
+            self.motor_serial_send("tune off")
+
+        # Enable encoder streaming
+        self.motor_serial_send("stream on")
+
+        # Reset state
+        self.pid_tuner_trial_scores.clear()
+        self.pid_tuner_best_params.clear()
+        self.pid_tuner_best_score = None
+        self.pid_tuner_best_metrics.clear()
+        self.pid_tuner_param_importance.clear()
+        self.pid_tuner_show_results = False
+        self.pid_tuner_status = "Starting..."
+
+        # Create tuner with callbacks bridging to our serial + UI
+        self.pid_tuner = MotorTuner(
+            send_fn=self.motor_serial_send,
+            set_param_fn=lambda k, v: self._motor_set(k, v),
+            get_stream_fn=self._drain_enc_lines,
+            on_trial_complete_fn=self._on_tuner_trial_complete,
+            n_trials=self.pid_tuner_n_trials,
+        )
+        self.pid_tuner_running = True
+        self.pid_tuner_thread = threading.Thread(
+            target=self._pid_tuner_worker, daemon=True)
+        self.pid_tuner_thread.start()
+
+    def _drain_enc_lines(self):
+        """Pop all $ENC lines from stream buffer (called by tuner thread)."""
+        with self.motor_serial_lock:
+            enc = [l for l in self.motor_stream_lines if l.startswith("$ENC,")]
+            # Keep non-ENC lines (e.g. $SET, $SCAN), remove consumed ENC lines
+            remaining = deque(
+                (l for l in self.motor_stream_lines if not l.startswith("$ENC,")),
+                maxlen=2000,
+            )
+            self.motor_stream_lines.clear()
+            self.motor_stream_lines.extend(remaining)
+        return enc
+
+    def _on_tuner_trial_complete(self, trial_num, score, params, metrics):
+        """Callback from tuner thread — update UI state."""
+        self.pid_tuner_trial_scores.append((trial_num, score))
+        n = self.pid_tuner_n_trials
+        self.pid_tuner_status = f"Trial {trial_num}/{n} — score: {score:.2f}"
+        if self.pid_tuner_best_score is None or score < self.pid_tuner_best_score:
+            self.pid_tuner_best_score = score
+            self.pid_tuner_best_params = dict(params)
+            self.pid_tuner_best_metrics = dict(metrics)
+        # Update sliders to show current trial's params
+        for key, val in params.items():
+            attr = f"ms_{key}"
+            if hasattr(self, attr):
+                setattr(self, attr, val)
+
+    def _pid_tuner_worker(self):
+        """Background thread: runs the Optuna optimization loop."""
+        try:
+            self.pid_tuner.run(lambda: self.pid_tuner_running)
+        except Exception as e:
+            self.pid_tuner_status = f"Error: {e}"
+        finally:
+            self.pid_tuner_running = False
+            # Apply best params on completion
+            if self.pid_tuner_best_params:
+                for key, val in self.pid_tuner_best_params.items():
+                    self._motor_set(key, val)
+                    attr = f"ms_{key}"
+                    if hasattr(self, attr):
+                        setattr(self, attr, val)
+            # Compute parameter importance from study
+            if self.pid_tuner is not None:
+                self.pid_tuner_param_importance = self.pid_tuner.get_param_importance()
+            self.pid_tuner_show_results = True
+            if "Error" not in self.pid_tuner_status:
+                n_done = len(self.pid_tuner_trial_scores)
+                self.pid_tuner_status = (
+                    f"Complete — {n_done} trials, best params applied")
 
     def render_motor_control(self):
         """Render the Motor Control accordion section."""
