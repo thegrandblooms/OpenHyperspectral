@@ -75,7 +75,8 @@ void printHelp() {
     Serial.println("  sweep          5-position accuracy test");
     Serial.println("  phase_test     Driver phase verification");
     Serial.println("  align          Motor holding strength test");
-    Serial.println("  encoder_test   Interactive encoder reading\n");
+    Serial.println("  encoder_test   Interactive encoder reading");
+    Serial.println("  tune on/off    Repeating ±30/60/90° PID tune cycle\n");
 }
 
 void printSystemInfo() {
