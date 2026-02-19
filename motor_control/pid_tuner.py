@@ -465,9 +465,9 @@ class MotorTuner:
         score = (
             w["rise_time"] * m.rise_time_s
             + w["settling_time"] * m.settling_time_s
-            + w["overshoot_ratio"] * m.overshoot_ratio
-            + w["oscillation_count"] * m.oscillation_count
-            + w["velocity_reversals"] * m.velocity_reversals
+            + w["overshoot_ratio"] * min(m.overshoot_ratio, 5.0)
+            + w["oscillation_count"] * min(m.oscillation_count, 20)
+            + w["velocity_reversals"] * min(m.velocity_reversals, 20)
             + w["smoothness"] * min(m.smoothness, 100.0)
             + w["steady_state_error"] * m.steady_state_error_deg
             + w["settle_accuracy"] * m.settle_accuracy_deg
@@ -521,10 +521,17 @@ class MotorTuner:
         start_time = time.time()
         settle_start: Optional[float] = None
 
+        # Snapshot how many $ENC lines exist now so we only take new ones.
+        # _drain_enc_lines reads without consuming (the UI also needs them),
+        # so we track our read cursor to avoid quadratic accumulation.
+        baseline = len(self._flush_and_collect_enc())
+
         while time.time() - start_time < self.MOVE_TIMEOUT_S:
             time.sleep(0.02)
 
-            new_samples = self._flush_and_collect_enc()
+            all_samples = self._flush_and_collect_enc()
+            new_samples = all_samples[baseline:]
+            baseline = len(all_samples)
             collected.extend(new_samples)
 
             if not collected:
