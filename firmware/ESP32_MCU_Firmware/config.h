@@ -42,7 +42,10 @@
 #define VOLTAGE_LIMIT_GIMBAL 6.0        // Voltage limit for gimbal motor (V) - conservative for smooth operation
 
 // Motor characteristics (Mitoot 2804 100kv Gimbal Motor)
-#define MOTOR_RESISTANCE 10.0           // Phase resistance (Ohms) - gimbal motors typically R>10Ω
+// Phase resistance measured from SimpleFOC community thread for GBM2804-100T:
+//   community.simplefoc.com/t/simplefocmini-gbm2804h-how-much-voltage/7892
+// At 6V limit: ~0.95A peak phase current (6V / 6.3Ω ≈ 0.95A)
+#define MOTOR_RESISTANCE 6.3            // Phase resistance (Ohms) - measured GBM2804-100T
 #define MOTOR_KV         100            // Motor KV rating (RPM/V)
 
 // SENSOR DIRECTION OVERRIDE
@@ -83,25 +86,27 @@
 #define DEFAULT_ACCELERATION_DEG 286.5  // Default acceleration (deg/s²)
 #define DEFAULT_ACCELERATION 5.0        // Default acceleration (rad/s²)
 
-// Position control PID parameters - TUNED FOR POSITION CONTROL
-// CRITICAL FIX: Previous P=1.0 was based on incorrect gimbal motor guidance
-// SimpleFOC documentation and smart knob projects use P=15-25 for position control
-// Even gimbal motors need sufficient P gain to overcome static friction!
-// Start with SimpleFOC default P=20, tune down if oscillations occur
-#define PID_P_POSITION   20.0           // Proportional gain
-#define PID_I_POSITION   0.0            // Integral gain (usually not needed for position)
-#define PID_D_POSITION   1.0            // Derivative gain - provides damping to prevent overshoot
+// Position control PID parameters
+// Source: Official SimpleFOC angle control docs + SmartKnob reference project
+//   docs.simplefoc.com/angle_loop — P_angle.P=20 is the standard starting value
+// D is left at 0: the position loop's output is a velocity command (not torque),
+// so derivative here amplifies velocity noise rather than damping position overshoot.
+// Damping is better handled by increasing velocity PID P or the LPF time constant.
+#define PID_P_POSITION   20.0           // Proportional gain (SimpleFOC default / docs recommendation)
+#define PID_I_POSITION   0.0            // Integral gain (not needed; pure P is sufficient)
+#define PID_D_POSITION   0.0            // Derivative gain — left at 0 per SimpleFOC docs for angle mode
 #define PID_RAMP_POSITION_DEG 1000.0    // Output ramp (deg/s)
 #define PID_RAMP_POSITION 100.0         // Output ramp (rad/s) - for SimpleFOC
 
 // Velocity control PID parameters - Inner loop (more critical for stability)
-// CRITICAL: These values are based on SimpleFOC gimbal motor recommendations
-// Research shows gimbal motors typically use: P=0.2, I=20, output_ramp=1000, voltage_limit=6V
-#define PID_P_VELOCITY   0.2            // Standard for gimbal motors (was 0.1)
-#define PID_I_VELOCITY   10.0            // Reduced from 20 to 5 to combat integral windup?
-#define PID_D_VELOCITY   0.0            // Usually 0 for gimbal motors
-#define PID_RAMP_VELOCITY 1000.0        // Higher ramp for smoother control (was 100.0)
-#define PID_LPF_VELOCITY 0.03           // Low-pass filter time constant (30ms, filters cogging ripple)
+// Source: Official SimpleFOC gimbal controller example
+//   docs.simplefoc.com/gimbal_velocity_example
+//   motor.PID_velocity.P = 0.2; motor.PID_velocity.I = 20; motor.LPF_velocity.Tf = 0.01;
+#define PID_P_VELOCITY   0.2            // Standard for gimbal motors
+#define PID_I_VELOCITY   20.0           // Official SimpleFOC gimbal example value
+#define PID_D_VELOCITY   0.0            // Always 0 for gimbal motors (amplifies noise)
+#define PID_RAMP_VELOCITY 1000.0        // V/s output ramp (official gimbal example value)
+#define PID_LPF_VELOCITY 0.01           // Low-pass filter time constant (10ms, official gimbal example)
 
 // Current control PID parameters (for FOC)
 #define PID_P_CURRENT    5.0            // Proportional gain for current control

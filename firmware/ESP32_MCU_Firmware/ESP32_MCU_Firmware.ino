@@ -43,6 +43,71 @@ bool debug_status_enabled = DEBUG_SERIAL;
 String serialCommandBuffer = "";
 
 //=============================================================================
+// TUNE CYCLE STATE (non-blocking repeating movement pattern for PID tuning)
+//=============================================================================
+// Pattern: +30°, +60°, +90°, -30°, -60°, -90° from origin, repeating indefinitely.
+// Controlled via 'tune on/off' command and the SpectrumBoi Motor Settings checkbox.
+// Each step has a 3-second timeout so the cycle continues even if the motor stalls.
+
+bool tune_enabled = false;
+float tune_origin_deg = 0.0f;
+int   tune_step = 0;
+unsigned long tune_step_start_ms = 0;
+bool  tune_move_issued = false;
+
+static const float TUNE_OFFSETS[]        = {30.0f, 60.0f, 90.0f, -30.0f, -60.0f, -90.0f};
+static const int   TUNE_NUM_STEPS        = 6;
+static const unsigned long TUNE_TIMEOUT_MS = 3000;
+
+//=============================================================================
+// TUNE CYCLE HANDLER
+//=============================================================================
+
+void checkTuneSequence() {
+    if (!tune_enabled) return;
+
+    if (!motorControl.isCalibrated()) {
+        Serial.println("[TUNE] Motor not calibrated — stopping");
+        tune_enabled = false;
+        return;
+    }
+
+    // Auto-enable motor if it became disabled (e.g., idle timeout)
+    if (!motorControl.isEnabled()) {
+        motorControl.enable();
+        motorControl.setAutoEnabled(true);
+        motorControl.notifyCommandActivity();
+        return;  // Let enable settle; re-enters next loop tick
+    }
+
+    unsigned long now = millis();
+
+    if (!tune_move_issued) {
+        // Issue the move for the current step
+        float target = fmod(tune_origin_deg + TUNE_OFFSETS[tune_step] + 360.0f, 360.0f);
+        motorControl.moveToPosition(target);
+        motorControl.notifyCommandActivity();  // Reset idle timer
+        tune_step_start_ms = now;
+        tune_move_issued = true;
+        Serial.printf("[TUNE] Step %d/%d: %.0f° (origin%+.0f°)\n",
+            tune_step + 1, TUNE_NUM_STEPS, target, TUNE_OFFSETS[tune_step]);
+    } else {
+        // Wait for arrival or timeout, then advance to next step
+        bool reached   = motorControl.isAtTarget();
+        bool timed_out = (now - tune_step_start_ms > TUNE_TIMEOUT_MS);
+
+        if (reached || timed_out) {
+            if (timed_out && !reached) {
+                Serial.printf("[TUNE] Step %d timeout at %.1f°\n",
+                    tune_step + 1, motorControl.getPosition());
+            }
+            tune_step = (tune_step + 1) % TUNE_NUM_STEPS;
+            tune_move_issued = false;
+        }
+    }
+}
+
+//=============================================================================
 // COMMAND PROCESSING
 //=============================================================================
 
@@ -519,6 +584,28 @@ void processSerialCommand(String cmd) {
             Serial.println("Format: $ENC,timestamp_ms,pos_deg,vel_deg_s,target_deg");
         }
     }
+    else if (command == "tune") {
+        if (args == "on") {
+            if (!motorControl.isCalibrated()) {
+                Serial.println("[TUNE] Error: calibrate motor first ('c')");
+            } else {
+                tune_origin_deg = motorControl.getPosition();
+                tune_step = 0;
+                tune_move_issued = false;
+                tune_enabled = true;
+                Serial.printf("[TUNE] Started from %.1f°\n", tune_origin_deg);
+                Serial.println("[TUNE] Pattern: +30, +60, +90, -30, -60, -90 deg (repeating)");
+                Serial.println("[TUNE] 3s timeout per step. 'tune off' to stop.");
+            }
+        } else if (args == "off") {
+            tune_enabled = false;
+            Serial.println("[TUNE] Stopped");
+        } else {
+            Serial.printf("[TUNE] Tune cycle: %s\n", tune_enabled ? "RUNNING" : "stopped");
+            Serial.println("  tune on   - start repeating +30/+60/+90/-30/-60/-90 cycle");
+            Serial.println("  tune off  - stop");
+        }
+    }
     else if (command == "debug") {
         if (args.length() > 0) {
             int level = args.toInt();
@@ -726,6 +813,9 @@ void loop() {
 
     // Update motor control (FOC algorithm + encoder stream emission)
     motorControl.update();
+
+    // Advance tune cycle state machine (non-blocking; no-op when tune_enabled=false)
+    checkTuneSequence();
 
     // Check for auto-disable on idle (only affects auto-enabled motors)
     motorControl.checkIdleDisable();

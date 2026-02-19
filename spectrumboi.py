@@ -354,19 +354,21 @@ class SpectralViewerImGui:
         # Position PID
         self.ms_pid_p_pos = 20.0         # PID_P_POSITION
         self.ms_pid_i_pos = 0.0          # PID_I_POSITION
-        self.ms_pid_d_pos = 1.0          # PID_D_POSITION
+        self.ms_pid_d_pos = 0.0          # PID_D_POSITION (0 per SimpleFOC angle-mode docs)
         self.ms_pid_ramp_pos = 1000.0    # PID_RAMP_POSITION_DEG (deg/s)
         # Velocity PID
         self.ms_pid_p_vel = 0.2          # PID_P_VELOCITY
-        self.ms_pid_i_vel = 10.0         # PID_I_VELOCITY
+        self.ms_pid_i_vel = 20.0         # PID_I_VELOCITY (official SimpleFOC gimbal example)
         self.ms_pid_d_vel = 0.0          # PID_D_VELOCITY
         self.ms_pid_ramp_vel = 1000.0    # PID_RAMP_VELOCITY (deg/s)
-        self.ms_lpf_vel = 0.03           # PID_LPF_VELOCITY (s)
+        self.ms_lpf_vel = 0.01           # PID_LPF_VELOCITY (s, official SimpleFOC gimbal example)
         # Position tracking
         self.ms_pos_tol = 0.5            # POSITION_TOLERANCE_DEG (deg)
         self.ms_vel_thresh = 0.57        # VELOCITY_THRESHOLD_DEG (deg/s)
         # Monitor filter
         self.ms_filter_set_cmds = True   # Hide "set" command echoes from monitor
+        # Tune cycle
+        self.ms_tune_active = False      # Repeating ±30/60/90° PID tune cycle
         
     def init_glfw(self):
         """Initialize GLFW and ImGui"""
@@ -965,11 +967,12 @@ class SpectralViewerImGui:
         return new_val
 
     # config.h defaults — used by Reset to Defaults
+    # Keep in sync with config.h when values are changed there.
     _MS_DEFAULTS = dict(
         ms_vel_max=180.0, ms_accel=286.5, ms_vlim=6.0, ms_cur_lim=2.0,
-        ms_pid_p_pos=20.0, ms_pid_i_pos=0.0, ms_pid_d_pos=1.0, ms_pid_ramp_pos=1000.0,
-        ms_pid_p_vel=0.2,  ms_pid_i_vel=10.0, ms_pid_d_vel=0.0, ms_pid_ramp_vel=1000.0,
-        ms_lpf_vel=0.03,
+        ms_pid_p_pos=20.0, ms_pid_i_pos=0.0, ms_pid_d_pos=0.0, ms_pid_ramp_pos=1000.0,
+        ms_pid_p_vel=0.2,  ms_pid_i_vel=20.0, ms_pid_d_vel=0.0, ms_pid_ramp_vel=1000.0,
+        ms_lpf_vel=0.01,
         ms_pos_tol=0.5, ms_vel_thresh=0.57,
     )
     # Maps attr name → (serial key, send format)
@@ -1024,6 +1027,20 @@ class SpectralViewerImGui:
             imgui.set_tooltip(
                 "Resets all values below to config.h defaults\n"
                 "and sends each one to the board immediately.")
+
+        # ── Tune Cycle ─────────────────────────────────────────────────
+        imgui.separator()
+        changed, new_tune = imgui.checkbox("Tune Cycle##ms", self.ms_tune_active)
+        if changed:
+            self.ms_tune_active = new_tune
+            self.motor_serial_send("tune on" if new_tune else "tune off")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Runs a repeating ±30 / ±60 / ±90° move pattern\n"
+                "from the motor's current position, with a 3-second\n"
+                "timeout per step. Great for watching the encoder plot\n"
+                "while tweaking PID gains above.\n\n"
+                "Sequence: +30°, +60°, +90°, -30°, -60°, -90° (loops)")
 
         imgui.separator()
 
