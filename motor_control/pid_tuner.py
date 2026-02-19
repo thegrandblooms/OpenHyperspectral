@@ -9,10 +9,12 @@ Designed to be driven from spectrumboi.py via callback interface — the tuner
 does NOT own the serial port; it receives send/read functions from the caller.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -22,7 +24,10 @@ try:
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 except ImportError:
-    optuna = None
+    optuna = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:
+    import optuna as _optuna_type  # noqa: F811
 
 logger = logging.getLogger(__name__)
 
@@ -210,8 +215,11 @@ class MotorTuner:
         "lpf_vel": (0.001, 0.1, "log"),
     }
 
-    # Test movement offsets (degrees from origin)
-    MOVE_PATTERN = [+30.0, -30.0, +60.0, -60.0, +90.0, -90.0, +10.0, -10.0]
+    # Test movement sequence: walk through quadrant positions with alternating
+    # forward/backward direction. Covers all 4 quadrants (cancels eccentricity)
+    # and exercises both CW and CCW movement.
+    # 0 → 90(fwd) → 180(back) → 270(fwd) → 0(back) → repeat
+    MOVE_SEQUENCE = [0.0, 90.0, 180.0, 270.0, 0.0]
 
     # Scoring weights (lower total = better)
     WEIGHTS = {
@@ -325,21 +333,26 @@ class MotorTuner:
             self.set_param_fn(key, value)
         time.sleep(0.15)  # Let firmware process all set commands
 
-        # Run movement pattern
+        # Walk through quadrant positions: 0→90→180→270→0
+        # Alternates forward/backward, covers all quadrants (cancels eccentricity).
         all_metrics: List[MoveMetrics] = []
         score_sum = 0.0
+        n_moves = len(self.MOVE_SEQUENCE) - 1  # transitions between positions
 
         # Flush encoder buffer before starting moves
         self._flush_and_collect_enc()
 
-        for i, offset in enumerate(self.MOVE_PATTERN):
+        # Move to starting position
+        self.send_fn(f"m {self.MOVE_SEQUENCE[0]:.2f}")
+        self._wait_for_settle(self.MOVE_SEQUENCE[0])
+        time.sleep(0.15)
+
+        for i in range(n_moves):
             if not self._should_continue():
                 raise optuna.TrialPruned()
 
-            target = self._wrap_angle(self._origin_deg + offset)
+            target = self.MOVE_SEQUENCE[i + 1]
             start_pos = self._read_current_position()
-
-            # Collect encoder data for this move
             self._enc_buffer.clear()
             self.send_fn(f"m {target:.2f}")
 
@@ -364,7 +377,7 @@ class MotorTuner:
             time.sleep(self.INTER_MOVE_DELAY_S)
 
         # Aggregate
-        avg_score = score_sum / len(self.MOVE_PATTERN)
+        avg_score = score_sum / n_moves
 
         metrics_summary = {
             "avg_rise_time": float(np.mean([m.rise_time_s for m in all_metrics])),
