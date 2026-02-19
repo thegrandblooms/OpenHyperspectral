@@ -253,14 +253,14 @@ class MotorTuner:
         "settle_accuracy": 8.0,
     }
 
-    # Safety
-    MAX_OVERSHOOT_DEG = 15.0
-    MAX_OSCILLATIONS = 10
-    MAX_VELOCITY_REVERSALS = 5
+    # Early-exit thresholds — skip remaining moves (not worth waiting) but
+    # still return a real score so Optuna can learn the gradient.
+    EARLY_EXIT_OVERSHOOT_DEG = 15.0
+    EARLY_EXIT_OSCILLATIONS = 10
+    EARLY_EXIT_VELOCITY_REVERSALS = 5
     MOVE_TIMEOUT_S = 2.0
     SETTLE_DETECT_S = 0.3
     INTER_MOVE_DELAY_S = 0.5
-    PENALTY_SCORE = 1000.0
 
     def __init__(
         self,
@@ -394,25 +394,27 @@ class MotorTuner:
                 metrics = MoveMetrics(timeout=True)
             all_metrics.append(metrics)
 
-            # Safety abort — still count as a completed trial so UI stays updated
-            if metrics.overshoot_deg > self.MAX_OVERSHOOT_DEG:
-                self._notify_trial_complete(
-                    trial, self.PENALTY_SCORE, params, all_metrics, n_moves,
-                    abort_reason=f"overshoot {metrics.overshoot_deg:.1f}°")
-                return self.PENALTY_SCORE
-            if metrics.oscillation_count > self.MAX_OSCILLATIONS:
-                self._notify_trial_complete(
-                    trial, self.PENALTY_SCORE, params, all_metrics, n_moves,
-                    abort_reason=f"{metrics.oscillation_count} oscillations")
-                return self.PENALTY_SCORE
-            if metrics.velocity_reversals > self.MAX_VELOCITY_REVERSALS:
-                self._notify_trial_complete(
-                    trial, self.PENALTY_SCORE, params, all_metrics, n_moves,
-                    abort_reason=f"{metrics.velocity_reversals} vel reversals")
-                return self.PENALTY_SCORE
-
             move_score = self._score_move(metrics)
             score_sum += move_score
+
+            # Early exit — skip remaining moves if this one is clearly bad,
+            # but keep the real score so Optuna can learn the gradient.
+            abort_reason = None
+            if metrics.overshoot_deg > self.EARLY_EXIT_OVERSHOOT_DEG:
+                abort_reason = f"overshoot {metrics.overshoot_deg:.1f}°"
+            elif metrics.velocity_reversals > self.EARLY_EXIT_VELOCITY_REVERSALS:
+                abort_reason = f"{metrics.velocity_reversals} vel reversals"
+            elif metrics.oscillation_count > self.EARLY_EXIT_OSCILLATIONS:
+                abort_reason = f"{metrics.oscillation_count} oscillations"
+
+            if abort_reason:
+                # Estimate total score as if remaining moves were equally bad
+                avg_so_far = score_sum / (i + 1)
+                total_score = avg_so_far + 50.0  # surcharge for early exit
+                self._notify_trial_complete(
+                    trial, total_score, params, all_metrics, n_moves,
+                    abort_reason=abort_reason)
+                return total_score
 
             # Report intermediate for pruning
             trial.report(score_sum / (i + 1), step=i)
