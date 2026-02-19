@@ -1190,16 +1190,11 @@ class SpectralViewerImGui:
             else:
                 imgui.text_colored("(connect serial first)", 0.7, 0.5, 0.2)
         else:
-            # Show current iteration inline with stop button
-            n_done = len(self.pid_tuner_trial_scores)
-            n_total = self.pid_tuner_n_trials
-            imgui.text_colored(f"Trial {n_done + 1}/{n_total}", 0.4, 1.0, 0.6, 1.0)
-            imgui.same_line()
             if imgui.button("Stop Calibration##pid_stop"):
                 self.pid_tuner_running = False
                 self.pid_tuner_status = "Stopping..."
 
-        # Status line
+        # Status line (progress during run, result after)
         if self.pid_tuner_status:
             if running:
                 imgui.text_colored(self.pid_tuner_status, 0.4, 1.0, 0.6, 1.0)
@@ -1285,6 +1280,7 @@ class SpectralViewerImGui:
             set_param_fn=lambda k, v: self._motor_set(k, v),
             get_stream_fn=self._drain_enc_lines,
             on_trial_complete_fn=self._on_tuner_trial_complete,
+            on_trial_start_fn=self._on_tuner_trial_start,
             n_trials=self.pid_tuner_n_trials,
             move_timeout_s=self.pid_tuner_move_timeout,
         )
@@ -1300,20 +1296,37 @@ class SpectralViewerImGui:
             enc = [l for l in self.motor_stream_lines if l.startswith("$ENC,")]
         return enc
 
-    def _on_tuner_trial_complete(self, trial_num, score, params, metrics):
-        """Callback from tuner thread — update UI state."""
-        self.pid_tuner_trial_scores.append((trial_num, score))
+    def _on_tuner_trial_start(self, trial_num, params):
+        """Callback from tuner thread — trial is about to begin."""
         n = self.pid_tuner_n_trials
-        self.pid_tuner_status = f"Trial {trial_num}/{n} — score: {score:.2f}"
-        if self.pid_tuner_best_score is None or score < self.pid_tuner_best_score:
-            self.pid_tuner_best_score = score
-            self.pid_tuner_best_params = dict(params)
-            self.pid_tuner_best_metrics = dict(metrics)
-        # Update sliders to show current trial's params
+        param_str = (
+            f"P={params.get('pid_p_pos', 0):.1f} "
+            f"D={params.get('pid_d_pos', 0):.2f} "
+            f"I={params.get('pid_i_pos', 0):.2f} "
+            f"Pv={params.get('pid_p_vel', 0):.3f} "
+            f"Iv={params.get('pid_i_vel', 0):.1f} "
+            f"LPF={params.get('lpf_vel', 0):.4f}"
+        )
+        self.pid_tuner_status = f"Trial {trial_num}/{n} — testing {param_str}"
+        # Update UI fields to show the params being tested
         for key, val in params.items():
             attr = f"ms_{key}"
             if hasattr(self, attr):
                 setattr(self, attr, val)
+
+    def _on_tuner_trial_complete(self, trial_num, score, params, metrics):
+        """Callback from tuner thread — update UI state."""
+        self.pid_tuner_trial_scores.append((trial_num, score))
+        n = self.pid_tuner_n_trials
+        abort = metrics.get("abort_reason")
+        if abort:
+            self.pid_tuner_status = f"Trial {trial_num}/{n} — aborted ({abort})"
+        else:
+            self.pid_tuner_status = f"Trial {trial_num}/{n} — score: {score:.2f}"
+        if self.pid_tuner_best_score is None or score < self.pid_tuner_best_score:
+            self.pid_tuner_best_score = score
+            self.pid_tuner_best_params = dict(params)
+            self.pid_tuner_best_metrics = dict(metrics)
 
     def _pid_tuner_worker(self):
         """Background thread: runs the Optuna optimization loop."""

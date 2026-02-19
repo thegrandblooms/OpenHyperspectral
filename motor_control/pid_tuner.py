@@ -258,6 +258,7 @@ class MotorTuner:
         set_param_fn: Callable[[str, float], None],
         get_stream_fn: Callable[[], List[str]],
         on_trial_complete_fn: Callable[[int, float, dict, dict], None],
+        on_trial_start_fn: Optional[Callable[[int, dict], None]] = None,
         n_trials: int = 50,
         timeout_minutes: float = 10.0,
         move_timeout_s: float = MOVE_TIMEOUT_S,
@@ -266,6 +267,7 @@ class MotorTuner:
         self.set_param_fn = set_param_fn
         self.get_stream_fn = get_stream_fn
         self.on_trial_complete_fn = on_trial_complete_fn
+        self.on_trial_start_fn = on_trial_start_fn
         self.n_trials = n_trials
         self.timeout_minutes = timeout_minutes
         self.MOVE_TIMEOUT_S = move_timeout_s
@@ -342,6 +344,10 @@ class MotorTuner:
             else:
                 params[key] = trial.suggest_float(key, lo, hi)
 
+        # Notify UI that a new trial is starting (with the params we're about to test)
+        if self.on_trial_start_fn is not None:
+            self.on_trial_start_fn(trial.number + 1, params)
+
         # Apply parameters to firmware
         for key, value in params.items():
             self.set_param_fn(key, value)
@@ -378,10 +384,16 @@ class MotorTuner:
                 metrics = MoveMetrics(timeout=True)
             all_metrics.append(metrics)
 
-            # Safety abort
+            # Safety abort — still count as a completed trial so UI stays updated
             if metrics.overshoot_deg > self.MAX_OVERSHOOT_DEG:
+                self._notify_trial_complete(
+                    trial, self.PENALTY_SCORE, params, all_metrics, n_moves,
+                    abort_reason=f"overshoot {metrics.overshoot_deg:.1f}°")
                 return self.PENALTY_SCORE
             if metrics.oscillation_count > self.MAX_OSCILLATIONS:
+                self._notify_trial_complete(
+                    trial, self.PENALTY_SCORE, params, all_metrics, n_moves,
+                    abort_reason=f"{metrics.oscillation_count} oscillations")
                 return self.PENALTY_SCORE
 
             move_score = self._score_move(metrics)
@@ -396,7 +408,14 @@ class MotorTuner:
 
         # Aggregate
         avg_score = score_sum / n_moves
+        self._notify_trial_complete(trial, avg_score, params, all_metrics, n_moves)
 
+        return avg_score
+
+    def _notify_trial_complete(
+        self, trial, score, params, all_metrics, n_moves, abort_reason=None,
+    ):
+        """Build metrics summary and notify UI callback."""
         metrics_summary = {
             "avg_rise_time": float(np.mean([m.rise_time_s for m in all_metrics])),
             "avg_settling_time": float(
@@ -414,12 +433,10 @@ class MotorTuner:
             ),
             "avg_smoothness": float(np.mean([m.smoothness for m in all_metrics])),
         }
+        if abort_reason:
+            metrics_summary["abort_reason"] = abort_reason
         trial.set_user_attr("metrics", metrics_summary)
-
-        # Notify UI
-        self.on_trial_complete_fn(trial.number + 1, avg_score, params, metrics_summary)
-
-        return avg_score
+        self.on_trial_complete_fn(trial.number + 1, score, params, metrics_summary)
 
     # -- Scoring --
 
