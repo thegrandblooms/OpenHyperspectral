@@ -1214,8 +1214,12 @@ class SpectralViewerImGui:
         # Optimization history plot (score vs trial)
         if len(self.pid_tuner_trial_scores) > 1:
             scores = [s for _, s in self.pid_tuner_trial_scores]
-            # Cap display at reasonable range for plot readability
-            max_display = max(scores) * 1.1 if scores else 100.0
+            # Cap penalty scores so the chart stays readable
+            non_penalty = [s for s in scores if s < 999]
+            if non_penalty:
+                max_display = max(non_penalty) * 1.2
+            else:
+                max_display = 100.0  # all penalty — show flat line at top
             scores_arr = [min(s, max_display) for s in scores]
 
             imgui.text(f"Score History ({len(scores)} trials)")
@@ -1225,7 +1229,7 @@ class SpectralViewerImGui:
                 plot_data,
                 overlay_text=f"best: {min(scores):.2f}",
                 scale_min=0.0,
-                scale_max=max_display,
+                scale_max=float(max_display),
                 graph_size=(imgui.get_content_region_available()[0], 80),
             )
 
