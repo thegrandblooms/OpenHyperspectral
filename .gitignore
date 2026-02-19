@@ -3,3 +3,4 @@ __pycache__/
 camera_control/__pycache__/
 camera_control/mightex_driver/__pycache__/
 motor_control/__pycache__/
+logs/
