@@ -258,7 +258,8 @@ class MotorTuner:
     EARLY_EXIT_OVERSHOOT_DEG = 15.0
     EARLY_EXIT_OSCILLATIONS = 10
     EARLY_EXIT_VELOCITY_REVERSALS = 5
-    LIVE_OSCILLATION_LIMIT = 6   # position direction reversals → instant abort
+    LIVE_OSCILLATION_LIMIT = 4   # position direction reversals → instant abort
+    REVERSAL_NOISE_DEG = 0.15   # ignore position deltas smaller than this
     OSCILLATION_PENALTY = 500.0  # fixed score for oscillation abort (very bad)
     MOVE_TIMEOUT_S = 2.0
     SETTLE_DETECT_S = 0.3
@@ -288,7 +289,6 @@ class MotorTuner:
         self.study: Optional[optuna.Study] = None
         self._origin_deg: float = 0.0
         self._start_time: float = 0.0
-        self._enc_buffer: List[dict] = []
 
     # -- Public API --
 
@@ -371,12 +371,18 @@ class MotorTuner:
         score_sum = 0.0
         n_moves = len(self.MOVE_SEQUENCE) - 1  # transitions between positions
 
-        # Flush encoder buffer before starting moves
-        self._flush_and_collect_enc()
-
-        # Move to starting position
+        # Move to starting position — also check for oscillation here so
+        # we abort immediately instead of wasting 2s on a doomed setup move.
         self.send_fn(f"m {self.MOVE_SEQUENCE[0]:.2f}")
-        self._wait_for_settle(self.MOVE_SEQUENCE[0])  # result ignored for setup move
+        _, setup_oscillating = self._wait_for_settle(self.MOVE_SEQUENCE[0])
+        if setup_oscillating:
+            metrics = MoveMetrics(timeout=True)
+            metrics.oscillation_count = self.LIVE_OSCILLATION_LIMIT
+            all_metrics.append(metrics)
+            self._notify_trial_complete(
+                trial, self.OSCILLATION_PENALTY, params, all_metrics, n_moves,
+                abort_reason="oscillating on setup move")
+            return self.OSCILLATION_PENALTY
         time.sleep(0.15)
 
         for i in range(n_moves):
@@ -385,7 +391,6 @@ class MotorTuner:
 
             target = self.MOVE_SEQUENCE[i + 1]
             start_pos = self._read_current_position()
-            self._enc_buffer.clear()
             self.send_fn(f"m {target:.2f}")
 
             samples, oscillation_aborted = self._wait_for_settle(target)
@@ -542,15 +547,20 @@ class MotorTuner:
         start_time = time.time()
         settle_start: Optional[float] = None
 
-        # Snapshot how many $ENC lines exist now so we only take new ones.
-        # _drain_enc_lines reads without consuming (the UI also needs them),
-        # so we track our read cursor to avoid quadratic accumulation.
-        baseline = len(self._flush_and_collect_enc())
+        # Use timestamp-based deduplication to identify new samples.
+        # The underlying deque has a max length — once full, new entries push
+        # old ones off the front, keeping total count ~constant.  Index-based
+        # slicing (all_samples[baseline:]) silently returns empty in that case.
+        # Firmware timestamps are monotonic, so "ts > last_seen" is reliable.
+        last_enc_ts = 0
+        initial = self._flush_and_collect_enc()
+        if initial:
+            last_enc_ts = initial[-1]["timestamp_ms"]
 
         # Live oscillation detection: count direction reversals in position.
         # A reversal = position delta changed sign (motor switched direction).
         # Normal move: 0-1 reversals (straight shot, or one overshoot).
-        # 6+ reversals = clearly oscillating, regardless of where or when.
+        # 4+ reversals = clearly oscillating, regardless of where or when.
         last_pos: Optional[float] = None
         last_direction: Optional[int] = None  # +1 = increasing, -1 = decreasing
         reversal_count = 0
@@ -559,9 +569,11 @@ class MotorTuner:
             time.sleep(0.02)
 
             all_samples = self._flush_and_collect_enc()
-            new_samples = all_samples[baseline:]
-            baseline = len(all_samples)
-            collected.extend(new_samples)
+            new_samples = [s for s in all_samples
+                           if s["timestamp_ms"] > last_enc_ts]
+            if new_samples:
+                last_enc_ts = new_samples[-1]["timestamp_ms"]
+                collected.extend(new_samples)
 
             if not collected:
                 continue
@@ -571,8 +583,7 @@ class MotorTuner:
                 pos = s["position_deg"]
                 if last_pos is not None:
                     delta = MovementAnalyzer._angle_error(pos, last_pos)
-                    # Ignore tiny movements (encoder noise)
-                    if abs(delta) > 0.5:
+                    if abs(delta) > self.REVERSAL_NOISE_DEG:
                         direction = 1 if delta > 0 else -1
                         if last_direction is not None and direction != last_direction:
                             reversal_count += 1
