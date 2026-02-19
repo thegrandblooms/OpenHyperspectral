@@ -156,12 +156,11 @@ class MovementAnalyzer:
             m.timeout = True
 
         # -- Overshoot: how far past the target in the direction of movement --
+        # Use displacement (wrap-safe) to find how far past the target we went.
         if move_dist > 0:
-            # Positive move: overshoot = max position - target (if position exceeds target)
-            m.overshoot_deg = max(0.0, float(np.max(pos) - target_deg))
+            m.overshoot_deg = max(0.0, float(np.max(displacement) - move_dist))
         else:
-            # Negative move: overshoot = target - min position (if position undershoots target)
-            m.overshoot_deg = max(0.0, float(target_deg - np.min(pos)))
+            m.overshoot_deg = max(0.0, float(move_dist - np.min(displacement)))
         m.overshoot_ratio = m.overshoot_deg / m.move_distance_deg
 
         # -- Oscillation count: sign changes of error after first arrival --
