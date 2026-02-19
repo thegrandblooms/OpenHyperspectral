@@ -215,10 +215,11 @@ class MotorTuner:
         "lpf_vel": (0.001, 0.1, "log"),
     }
 
-    # Test move distances (degrees). Each distance is tested from 4 quadrant
-    # positions (0, 90, 180, 270) to average out encoder/motor eccentricity.
-    MOVE_DISTANCES = [+30.0, -30.0, +60.0, -60.0, +10.0, -10.0]
-    QUADRANT_ORIGINS = [0.0, 90.0, 180.0, 270.0]
+    # Test movement sequence: walk through quadrant positions with alternating
+    # forward/backward direction. Covers all 4 quadrants (cancels eccentricity)
+    # and exercises both CW and CCW movement.
+    # 0 → 90(fwd) → 180(back) → 270(fwd) → 0(back) → repeat
+    MOVE_SEQUENCE = [0.0, 90.0, 180.0, 270.0, 0.0]
 
     # Scoring weights (lower total = better)
     WEIGHTS = {
@@ -332,61 +333,51 @@ class MotorTuner:
             self.set_param_fn(key, value)
         time.sleep(0.15)  # Let firmware process all set commands
 
-        # Run movement pattern: for each move distance, test from 4 quadrant
-        # positions (0, 90, 180, 270) to average out eccentricity errors.
+        # Walk through quadrant positions: 0→90→180→270→0
+        # Alternates forward/backward, covers all quadrants (cancels eccentricity).
         all_metrics: List[MoveMetrics] = []
         score_sum = 0.0
-        step_idx = 0
+        n_moves = len(self.MOVE_SEQUENCE) - 1  # transitions between positions
 
         # Flush encoder buffer before starting moves
         self._flush_and_collect_enc()
 
-        for dist in self.MOVE_DISTANCES:
-            quadrant_metrics: List[MoveMetrics] = []
+        # Move to starting position
+        self.send_fn(f"m {self.MOVE_SEQUENCE[0]:.2f}")
+        self._wait_for_settle(self.MOVE_SEQUENCE[0])
+        time.sleep(0.15)
 
-            for origin in self.QUADRANT_ORIGINS:
-                if not self._should_continue():
-                    raise optuna.TrialPruned()
+        for i in range(n_moves):
+            if not self._should_continue():
+                raise optuna.TrialPruned()
 
-                # Move to quadrant origin first
-                origin_pos = self._wrap_angle(origin)
-                self.send_fn(f"m {origin_pos:.2f}")
-                self._wait_for_settle(origin_pos)
-                time.sleep(0.15)
+            target = self.MOVE_SEQUENCE[i + 1]
+            start_pos = self._read_current_position()
+            self._enc_buffer.clear()
+            self.send_fn(f"m {target:.2f}")
 
-                # Now execute the test move from this quadrant
-                target = self._wrap_angle(origin + dist)
-                start_pos = self._read_current_position()
-                self._enc_buffer.clear()
-                self.send_fn(f"m {target:.2f}")
+            samples = self._wait_for_settle(target)
+            metrics = self.analyzer.analyze_move(samples, start_pos, target)
+            all_metrics.append(metrics)
 
-                samples = self._wait_for_settle(target)
-                metrics = self.analyzer.analyze_move(samples, start_pos, target)
-                quadrant_metrics.append(metrics)
+            # Safety abort
+            if metrics.overshoot_deg > self.MAX_OVERSHOOT_DEG:
+                return self.PENALTY_SCORE
+            if metrics.oscillation_count > self.MAX_OSCILLATIONS:
+                return self.PENALTY_SCORE
 
-                # Safety abort
-                if metrics.overshoot_deg > self.MAX_OVERSHOOT_DEG:
-                    return self.PENALTY_SCORE
-                if metrics.oscillation_count > self.MAX_OSCILLATIONS:
-                    return self.PENALTY_SCORE
-
-                time.sleep(self.INTER_MOVE_DELAY_S)
-
-            # Average the 4 quadrant results for this move distance
-            avg_m = self._average_metrics(quadrant_metrics)
-            all_metrics.append(avg_m)
-
-            move_score = self._score_move(avg_m)
+            move_score = self._score_move(metrics)
             score_sum += move_score
-            step_idx += 1
 
-            # Report intermediate for pruning (one step per move distance)
-            trial.report(score_sum / step_idx, step=step_idx - 1)
+            # Report intermediate for pruning
+            trial.report(score_sum / (i + 1), step=i)
             if trial.should_prune():
                 raise optuna.TrialPruned()
 
+            time.sleep(self.INTER_MOVE_DELAY_S)
+
         # Aggregate
-        avg_score = score_sum / len(self.MOVE_DISTANCES)
+        avg_score = score_sum / n_moves
 
         metrics_summary = {
             "avg_rise_time": float(np.mean([m.rise_time_s for m in all_metrics])),
@@ -428,29 +419,6 @@ class MotorTuner:
         if not m.completed or m.timeout:
             score += 50.0
         return score
-
-    @staticmethod
-    def _average_metrics(metrics_list: List[MoveMetrics]) -> MoveMetrics:
-        """Average MoveMetrics across quadrant positions to cancel eccentricity."""
-        n = len(metrics_list)
-        if n == 0:
-            return MoveMetrics(timeout=True)
-        if n == 1:
-            return metrics_list[0]
-        return MoveMetrics(
-            rise_time_s=sum(m.rise_time_s for m in metrics_list) / n,
-            settling_time_s=sum(m.settling_time_s for m in metrics_list) / n,
-            overshoot_deg=sum(m.overshoot_deg for m in metrics_list) / n,
-            overshoot_ratio=sum(m.overshoot_ratio for m in metrics_list) / n,
-            oscillation_count=round(sum(m.oscillation_count for m in metrics_list) / n),
-            steady_state_error_deg=sum(m.steady_state_error_deg for m in metrics_list) / n,
-            settle_accuracy_deg=sum(m.settle_accuracy_deg for m in metrics_list) / n,
-            smoothness=sum(m.smoothness for m in metrics_list) / n,
-            accel_variance=sum(m.accel_variance for m in metrics_list) / n,
-            move_distance_deg=sum(m.move_distance_deg for m in metrics_list) / n,
-            completed=all(m.completed for m in metrics_list),
-            timeout=any(m.timeout for m in metrics_list),
-        )
 
     # -- Encoder data handling --
 
