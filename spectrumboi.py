@@ -370,7 +370,7 @@ class SpectralViewerImGui:
         # Monitor filter
         self.ms_filter_set_cmds = True   # Hide "set" command echoes from monitor
         # Tune cycle
-        self.ms_tune_active = False      # Repeating ±30/60/90° PID tune cycle
+        self.ms_tune_active = False      # Repeating 0→90→180→270→0° tune cycle
 
         # PID auto-tuner state (Bayesian optimization via Optuna)
         self.pid_tuner = None              # MotorTuner instance (or None)
@@ -384,6 +384,7 @@ class SpectralViewerImGui:
         self.pid_tuner_param_importance = {}  # {param_name: importance_float}
         self.pid_tuner_show_results = False   # Show results section
         self.pid_tuner_n_trials = 50       # Configurable trial count
+        self.pid_tuner_move_timeout = 2.0  # Seconds per move before timeout
         
     def init_glfw(self):
         """Initialize GLFW and ImGui"""
@@ -951,25 +952,20 @@ class SpectralViewerImGui:
 
     def _param_row(self, label, key, value, fmt_display="%.4f", fmt_send=".6g", tooltip=""):
         """
-        Render one motor-settings parameter row: [label .............. input | Set]
-        Label is left-aligned; input + Set button are right-aligned to the panel edge.
-        Returns the (possibly edited) value.  Sends 'set key value' when Set is clicked.
+        Render one motor-settings parameter row: [label .............. input]
+        Label is left-aligned; input is right-aligned. Press Enter to send.
+        Returns the (possibly edited) value.
         """
-        btn_w = 34
-        input_w = 78
-        spacing = 5   # gap between input and button
+        input_w = 90
 
         imgui.text(label)
         if tooltip and imgui.is_item_hovered():
             imgui.set_tooltip(tooltip)
 
-        # After imgui.text() the cursor has advanced to the next line.
-        # Capture the right edge of the content region from that position,
-        # then same_line back and jump the cursor to the right-aligned position.
         next_x = imgui.get_cursor_pos_x()
         avail   = imgui.get_content_region_available()[0]
         right_edge = next_x + avail
-        input_x = right_edge - input_w - spacing - btn_w
+        input_x = right_edge - input_w
 
         imgui.same_line()
         imgui.set_cursor_pos_x(input_x)
@@ -978,8 +974,7 @@ class SpectralViewerImGui:
             f"##{key}", value, 0.0, 0.0, fmt_display,
             imgui.INPUT_TEXT_ENTER_RETURNS_TRUE)
         imgui.pop_item_width()
-        imgui.same_line()
-        if imgui.small_button(f"Set##{key}") or enter_pressed:
+        if enter_pressed:
             self._motor_set(key, new_val, fmt_send)
         return new_val
 
@@ -1053,11 +1048,9 @@ class SpectralViewerImGui:
             self.motor_serial_send("tune on" if new_tune else "tune off")
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                "Runs a repeating ±30 / ±60 / ±90° move pattern\n"
-                "from the motor's current position, with a 3-second\n"
-                "timeout per step. Great for watching the encoder plot\n"
-                "while tweaking PID gains above.\n\n"
-                "Sequence: +30°, +60°, +90°, -30°, -60°, -90° (loops)")
+                "Runs a repeating 0° → 90° → 180° → 270° → 0° walk\n"
+                "with a 2-second timeout per step. Great for watching\n"
+                "the encoder plot while tweaking PID gains above.")
 
         imgui.separator()
 
@@ -1162,7 +1155,7 @@ class SpectralViewerImGui:
                 "find optimal PID parameters by running a series of test\n"
                 "movements and measuring motor performance.\n\n"
                 "Tunes: Position P/I/D, Velocity P/I, Velocity LPF\n"
-                "Test pattern: ±10°, ±30°, ±60°, ±90° movements")
+                "Test pattern: 0° → 90° → 180° → 270° → 0° (quadrant walk)")
 
         connected = self.motor_serial is not None and self.motor_serial.is_open
         running = self.pid_tuner_running
@@ -1180,13 +1173,27 @@ class SpectralViewerImGui:
                                   "Each trial takes ~15-45 seconds.")
 
             imgui.same_line()
+            imgui.push_item_width(60)
+            _, self.pid_tuner_move_timeout = imgui.input_float(
+                "Timeout (s)##pid_timeout", self.pid_tuner_move_timeout, 0.0, 0.0, "%.1f")
+            self.pid_tuner_move_timeout = max(0.5, min(10.0, self.pid_tuner_move_timeout))
+            imgui.pop_item_width()
+            if imgui.is_item_hovered():
+                imgui.set_tooltip("Seconds to wait for the motor to settle each move.\n"
+                                  "Lower = faster trials, higher = more time to settle.")
+
+            imgui.same_line()
             if connected:
                 if imgui.button("Run PID Calibration##pid_run"):
                     self._start_pid_tuner()
             else:
                 imgui.text_colored("(connect serial first)", 0.7, 0.5, 0.2)
         else:
-            # Stop button
+            # Show current iteration inline with stop button
+            n_done = len(self.pid_tuner_trial_scores)
+            n_total = self.pid_tuner_n_trials
+            imgui.text_colored(f"Trial {n_done + 1}/{n_total}", 0.4, 1.0, 0.6, 1.0)
+            imgui.same_line()
             if imgui.button("Stop Calibration##pid_stop"):
                 self.pid_tuner_running = False
                 self.pid_tuner_status = "Stopping..."
@@ -1326,6 +1333,7 @@ class SpectralViewerImGui:
             get_stream_fn=self._drain_enc_lines,
             on_trial_complete_fn=self._on_tuner_trial_complete,
             n_trials=self.pid_tuner_n_trials,
+            move_timeout_s=self.pid_tuner_move_timeout,
         )
         self.pid_tuner_running = True
         self.pid_tuner_thread = threading.Thread(
@@ -1333,16 +1341,10 @@ class SpectralViewerImGui:
         self.pid_tuner_thread.start()
 
     def _drain_enc_lines(self):
-        """Pop all $ENC lines from stream buffer (called by tuner thread)."""
+        """Copy $ENC lines from stream buffer for the tuner, leaving originals
+        in place so the encoder graph can still display them."""
         with self.motor_serial_lock:
             enc = [l for l in self.motor_stream_lines if l.startswith("$ENC,")]
-            # Keep non-ENC lines (e.g. $SET, $SCAN), remove consumed ENC lines
-            remaining = deque(
-                (l for l in self.motor_stream_lines if not l.startswith("$ENC,")),
-                maxlen=2000,
-            )
-            self.motor_stream_lines.clear()
-            self.motor_stream_lines.extend(remaining)
         return enc
 
     def _on_tuner_trial_complete(self, trial_num, score, params, metrics):

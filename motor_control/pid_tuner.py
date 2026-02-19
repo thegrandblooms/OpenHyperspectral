@@ -235,7 +235,7 @@ class MotorTuner:
     # Safety
     MAX_OVERSHOOT_DEG = 15.0
     MAX_OSCILLATIONS = 10
-    MOVE_TIMEOUT_S = 5.0
+    MOVE_TIMEOUT_S = 2.0
     SETTLE_DETECT_S = 0.3
     INTER_MOVE_DELAY_S = 0.5
     PENALTY_SCORE = 1000.0
@@ -248,6 +248,7 @@ class MotorTuner:
         on_trial_complete_fn: Callable[[int, float, dict, dict], None],
         n_trials: int = 50,
         timeout_minutes: float = 10.0,
+        move_timeout_s: float = MOVE_TIMEOUT_S,
     ):
         self.send_fn = send_fn
         self.set_param_fn = set_param_fn
@@ -255,6 +256,7 @@ class MotorTuner:
         self.on_trial_complete_fn = on_trial_complete_fn
         self.n_trials = n_trials
         self.timeout_minutes = timeout_minutes
+        self.MOVE_TIMEOUT_S = move_timeout_s
 
         self.analyzer = MovementAnalyzer()
         self.study: Optional[optuna.Study] = None
