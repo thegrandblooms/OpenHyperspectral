@@ -23,5 +23,8 @@ imgui[glfw]>=2.0.0
 matplotlib>=3.5.0
 seaborn>=0.11.0
 
-# PID auto-tuning (Bayesian optimization via TPE)
-optuna>=3.0.0
+# Serial communication with the ESP32 motor controller
+pyserial>=3.5
+
+# NOTE: optuna (gimbal-era PID auto-tuning) is no longer required.
+# It is only needed if running archive/motor_control_gimbal/pid_tuner.py.
