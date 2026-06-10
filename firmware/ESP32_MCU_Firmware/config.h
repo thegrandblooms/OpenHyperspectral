@@ -64,6 +64,13 @@
 // true  = Let SimpleFOC auto-calibrate (runs alignment and calculates offset)
 #define USE_SIMPLEFOC_AUTO_CALIBRATION true  // ENABLED: Use SimpleFOC's proven calibration
 
+// CalibratedSensor: encoder nonlinearity correction via LUT (Arduino-FOC-drivers v1.0.9+)
+// Wraps MT6701Sensor with a forward+reverse open-loop scan that builds a per-position
+// correction table, cancelling the MT6701's ±1.0° typical INL.
+// Expected improvement: ±0.5–1.0° → ±0.1–0.2° (addresses sensor INL, not PID error)
+// Note: adds ~10s to calibration time at every boot (no flash persistence yet)
+#define USE_CALIBRATED_SENSOR false
+
 //=============================================================================
 // MOTION CONTROL PARAMETERS
 //=============================================================================
@@ -86,30 +93,90 @@
 #define DEFAULT_ACCELERATION_DEG 286.5  // Default acceleration (deg/s²)
 #define DEFAULT_ACCELERATION 5.0        // Default acceleration (rad/s²)
 
-// Position control PID parameters
+//=============================================================================
+// CONTROL ARCHITECTURE SELECTOR
+//=============================================================================
+// Toggle between two FOC control architectures:
+//
+//   USE_TORQUE_MODE = false  →  Angle mode (cascaded PID)
+//     Position P → Velocity PI → Voltage → FOC → Motor
+//     Pros: SimpleFOC built-in, easy to configure
+//     Cons: Velocity loop integrates noisy I2C-derived velocity → widespread
+//           limit-cycle oscillation confirmed (see Dev_Log/MOTOR_CONTROL_STATE.md)
+//
+//   USE_TORQUE_MODE = true   →  Torque mode + manual PD (SmartKnob pattern)
+//     voltage = Kp × pos_error − Kd × velocity → FOC → Motor
+//     Pros: No velocity integral → no windup → stable at all positions
+//     Cons: Proportional droop (steady-state error = friction/Kp); no built-in
+//           velocity limit (handled by setpoint ramp, already implemented)
+//
+// Start with true. Switch to false to compare.
+#define USE_TORQUE_MODE  false
+
+// Torque mode PD gains (used only when USE_TORQUE_MODE = true)
+// Units: Kp in V/rad, Kd in V/(rad/s)
+// Kd tuned for REAL velocity (position-delta, not LPF-corrupted motor.shaft_velocity).
+// At 400°/s actual: Kd=0.05 → 0.35V braking (light); Kd=0.3 → 2.09V (too strong → oscillation).
+// I_CAP=1.0V: enough to break friction (motor needs ~0.8-1.2V to overcome cogging) without
+// violent overshoot when integral charges during momentary slow patches of oscillation.
+#define TORQUE_KP         4.0f   // V/rad — raised from 3.0 to compensate for lower I_CAP; at 3° static error: 4.0×0.052=0.21V + 0.6V integral = 0.81V (enough to break cogging ~0.8V)
+#define TORQUE_KD         0.0f   // V/(rad/s) — set to 0: position-delta vel at 11ms amplifies cogging noise into oscillation. Back-EMF provides natural damping. High-vel Kd (>100°/s) tested at 0.15 — still caused ±400°/s oscillation.
+// Sweep velocity control: PI controller that tracks target sweep speed directly,
+// avoiding the stall-and-snap of position ramp tracking.
+// During stall: integral builds until breaking through the detent (adaptive torque).
+// During snap-through: velocity >> target → large negative error → integral drains quickly,
+// preventing overshoot build-up. Natural damping without velocity-based braking.
+#define SWEEP_VEL_KP   0.01f   // V / (deg/s): gentle proportional (0.01 × 1deg/s = 0.01V)
+#define SWEEP_VEL_KI   1.5f    // V / (deg): integral rate (1.5V/s at stall → 2V cap reached in 1.33s < 2s threshold)
+#define SWEEP_VEL_I_CAP 2.0f   // V: integral anti-windup cap (max cogging force is ~1.5V)
+#define SWEEP_VEL_TAU  0.15f   // s: LPF time constant for encoder-delta velocity noise
+#define TORQUE_KI         20.0f  // V/(rad·s) — integral to overcome friction deadband (rate = KI×error V/s, loop-rate independent with real dt)
+#define TORQUE_I_CAP      0.8f   // V — integral anti-windup cap: 0.6V too low (can't escape cogging at 0.76° error), 1.0V too high (overshoots → limit cycle). 0.8V: at 0.76° error: Kp=0.053V + 0.8V = 0.85V — just enough to break cogging threshold ~0.8V
+
+// Position control PID parameters (used when USE_TORQUE_MODE = false)
 // Source: Official SimpleFOC angle control docs + SmartKnob reference project
 //   docs.simplefoc.com/angle_loop — P_angle.P=20 is the standard starting value
-#define PID_P_POSITION   20.0           // Proportional gain (SimpleFOC default / docs recommendation)
+#define PID_P_POSITION   20.0           // Ceiling at LPF=0.05: P=25 → 1 oscillating, P=30 → 2 chaotic. 20 is stable 24/24.
 #define PID_I_POSITION   0.0            // Integral gain (not needed; pure P is sufficient)
 #define PID_D_POSITION   0.2            // Derivative gain — light damping to reduce overshoot
 #define PID_RAMP_POSITION_DEG 1000.0    // Output ramp (deg/s)
 #define PID_RAMP_POSITION 100.0         // Output ramp (rad/s) - for SimpleFOC
 
-// Velocity control PID parameters - Inner loop (more critical for stability)
+// Velocity control PID parameters (used when USE_TORQUE_MODE = false — inner loop)
 // Source: Official SimpleFOC gimbal controller example
 //   docs.simplefoc.com/gimbal_velocity_example
 //   motor.PID_velocity.P = 0.2; motor.LPF_velocity.Tf = 0.01;
-#define PID_P_VELOCITY   0.2            // Standard for gimbal motors
-#define PID_I_VELOCITY   5.0            // Tuned for our 2804 — lower than generic example to reduce windup
+// NOTE: I_vel=5.0 confirmed to cause widespread limit-cycle oscillation (canary test 2026-03-25).
+//       In torque mode these values are configured but not used.
+#define PID_P_VELOCITY   0.3            // Standard for gimbal motors — P=0.5 caused widespread oscillation; LPF=0.02 requires 0.2 but is marginal
+#define PID_I_VELOCITY   0.1            // OPTIMAL: I=5.0 oscillates, I=0.5 borderline, I=0.2 → 2 positions oscillate, I=0.15 → 3 positions oscillate, I=0.1 → 24/24 stable
 #define PID_D_VELOCITY   0.0            // Always 0 for gimbal motors (amplifies noise)
 #define PID_RAMP_VELOCITY 1000.0        // V/s output ramp (official gimbal example value)
-#define PID_LPF_VELOCITY 0.01           // Low-pass filter time constant (10ms, official gimbal example)
+#define PID_LPF_VELOCITY 0.05           // 50ms filter — 3.2Hz bandwidth. Ceiling: LPF=0.03 more oscillation (noise floor), LPF=0.02 marginal.
 
 // Current control PID parameters (for FOC)
 #define PID_P_CURRENT    5.0            // Proportional gain for current control
 #define PID_I_CURRENT    100.0          // Integral gain for current control
 #define PID_D_CURRENT    0.0            // Derivative gain for current control
 #define PID_RAMP_CURRENT 1000.0         // Output ramp for current control
+
+//=============================================================================
+// ANTI-COGGING FEEDFORWARD
+//=============================================================================
+// Sinusoidal voltage injected onto motor.voltage.q after the PID output to
+// cancel the dominant cogging harmonic.
+//
+// Motor: 12 stator slots × 14 poles (7 PP) → LCM(12,14)=84 cogging detents/rev
+//   → 4 cogging cycles per electrical revolution → inject at 4× electrical_angle
+//
+// Disabled by default (AMP=0). Tune at runtime via:
+//   set cog_amp <V>    — amplitude in volts (start 0, step up 0.05V at worst position)
+//   set cog_phase <rad>— phase offset (sweep 0→6.28 at worst position, find minimum noise)
+//
+// Use 'cogmap' command to measure steady-state voltage.q at all 24 test positions.
+// That map reveals the cogging pattern and guides AMP/PHASE selection.
+#define COG_FF_AMP    0.0f    // Feedforward amplitude (V) — 0 = disabled
+#define COG_FF_PHASE  0.0f    // Feedforward phase offset (rad)
 
 //=============================================================================
 // SYSTEM STATES
@@ -149,8 +216,8 @@
 // SimpleFOC examples and smart knob projects use ~0.1°-0.5°
 #define POSITION_TOLERANCE_DEG 0.5      // Position tolerance (degrees) - FIXED from 5.7°
 #define POSITION_TOLERANCE 0.009        // Position tolerance (radians) ~0.5° - for SimpleFOC
-#define VELOCITY_THRESHOLD_DEG 0.57     // Velocity threshold (deg/s)
-#define VELOCITY_THRESHOLD 0.01         // Velocity threshold (rad/s) - for SimpleFOC
+#define VELOCITY_THRESHOLD_DEG 5.0      // Velocity threshold (deg/s) — raised from 0.57: LPF noise floor at 100Hz loop is ~1-3°/s
+#define VELOCITY_THRESHOLD 0.087        // Velocity threshold (rad/s) - for SimpleFOC (~5°/s)
 
 //=============================================================================
 // SYSTEM TIMING

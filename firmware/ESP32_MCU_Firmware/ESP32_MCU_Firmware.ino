@@ -443,6 +443,105 @@ void processSerialCommand(String cmd) {
             Serial.println("FAILED");
         }
     }
+    else if (command == "recalibrate") {
+        // Clear saved NVS calibration and run a fresh 5-pass averaged calibration.
+        // Use this when you want to force a new thorough calibration (e.g. after hardware change).
+        Serial.println("Running fresh 5-pass calibration (clears saved calibration)...");
+        if (motorControl.recalibrate()) {
+            Serial.println("OK");
+        } else {
+            Serial.println("FAILED");
+        }
+    }
+    else if (command == "cogmap") {
+        // Cogging map: move to 24 positions (0–360° in 15° steps), wait for settle,
+        // then print steady-state voltage.q and electrical_angle at each position.
+        // voltage.q at steady state ≈ the cogging torque the PID is fighting.
+        // Use this data to choose COG_FF_AMP and COG_FF_PHASE.
+        // Output: $COG,<target_deg>,<actual_deg>,<error_deg>,<voltage_q>,<elec_angle_deg>
+        if (!motorControl.isCalibrated()) {
+            Serial.println("cogmap: motor not calibrated");
+        } else {
+            motorControl.enable();
+            delay(200);
+            Serial.println("$COGMAP_START");
+            float positions[] = {0,15,30,45,60,75,90,105,120,135,150,165,180,195,210,225,240,255,270,285,300,315,330,345};
+            for (int i = 0; i < 24; i++) {
+                motorControl.moveToPosition(positions[i]);
+                // Wait up to 5s for motor to settle
+                unsigned long t0 = millis();
+                while (millis() - t0 < 5000) {
+                    motorControl.update();
+                    delay(1);
+                    if (motorControl.isAtTarget()) break;
+                }
+                // Let it dwell 500ms to get stable voltage.q reading
+                for (int j = 0; j < 500; j++) { motorControl.update(); delay(1); }
+                float actual  = motorControl.getPosition();
+                float err     = actual - positions[i];
+                if (err > 180.0f) err -= 360.0f;
+                if (err < -180.0f) err += 360.0f;
+                float vq      = motorControl.getVoltage();
+                float elec_d  = radiansToDegrees(motorControl.getMotor().electrical_angle);
+                Serial.print("$COG,");
+                Serial.print(positions[i], 1);  Serial.print(',');
+                Serial.print(actual, 2);         Serial.print(',');
+                Serial.print(err, 3);            Serial.print(',');
+                Serial.print(vq, 4);             Serial.print(',');
+                Serial.println(elec_d, 1);
+            }
+            Serial.println("$COGMAP_END");
+        }
+    }
+    else if (command == "cogmap_dense") {
+        // Dense cogging map: measure 360 positions (0°–359° in 1° steps, ~6 min).
+        // Stores Vq at each position directly into the cogging LUT and enables it.
+        // After completion, the LUT feedforward is live — no separate upload needed.
+        // Output: same $COG,... lines as cogmap, plus [COG_LUT] summary at the end.
+        if (!motorControl.isCalibrated()) {
+            Serial.println("cogmap_dense: motor not calibrated — run 'c' first");
+        } else {
+            motorControl.enable();
+            delay(200);
+            motorControl.clearCogLut();
+            Serial.print("$COGMAP_START");
+            Serial.println(",dense,360");
+            for (int i = 0; i < 360; i++) {
+                float pos = i * 1.0f;
+                motorControl.moveToPosition(pos);
+                // Wait up to 600ms for motor to settle (1° steps settle fast; 600ms = 3× safety margin).
+                // Previously 5000ms — no detent needs more than 600ms for a 1° move.
+                unsigned long t0 = millis();
+                while (millis() - t0 < 600) {
+                    motorControl.update();
+                    delay(1);
+                    if (motorControl.isAtTarget()) break;
+                }
+                // Dwell 150ms: LPF_velocity Tf=50ms → 3τ=150ms for Vq to reach steady state.
+                // Previously 500ms — 150ms is sufficient for the LPF to settle.
+                for (int j = 0; j < 150; j++) { motorControl.update(); delay(1); }
+                float actual = motorControl.getPosition();
+                float err    = actual - pos;
+                if (err >  180.0f) err -= 360.0f;
+                if (err < -180.0f) err += 360.0f;
+                float vq     = motorControl.getVoltage();
+                float elec_d = radiansToDegrees(motorControl.getMotor().electrical_angle);
+                motorControl.setCogLutEntry(i, vq);
+                Serial.print("$COG,");
+                Serial.print(pos, 1);    Serial.print(',');
+                Serial.print(actual, 2); Serial.print(',');
+                Serial.print(err, 3);    Serial.print(',');
+                Serial.print(vq, 4);     Serial.print(',');
+                Serial.println(elec_d, 1);
+            }
+            motorControl.finalizeCogLut();  // enables LUT, prints summary
+            Serial.println("$COGMAP_END");
+        }
+    }
+    else if (command == "cogreset") {
+        // Disable dense cogging LUT feedforward (does not affect sinusoidal feedforward).
+        motorControl.clearCogLut();
+    }
     else if (command == "p" || command == "pidtune") {
         if (!motorControl.isCalibrated()) {
             Serial.println("Error: Motor must be calibrated first!");
@@ -528,6 +627,41 @@ void processSerialCommand(String cmd) {
             Serial.println("Error: Please specify mode (e.g., 'mode 0')");
         }
     }
+    else if (command == "sync") {
+        // Clock synchronization handshake for scan module.
+        // Desktop sends "sync\n", reads $SYNC,<ms> response, brackets with time.time()
+        // to compute clock offset: offset = (t_before + t_after)/2 * 1000 - esp_ms
+        Serial.print("$SYNC,");
+        Serial.println(millis());
+    }
+    else if (command == "sweep" && args.length() > 0) {
+        // Continuous position-tracking sweep for hyperspectral scan.
+        // Usage: sweep <deg_per_sec>   (positive = CW, negative = CCW)
+        // Advances the position setpoint at the given speed; the position PID tracks
+        // it and handles cogging automatically (up to 6V transient at detents).
+        // No stalling — same PID that passes T5 at all 24 positions.
+        // Emits $SWEEP_START,<ms>. Stop with: sweep_stop
+        if (!motorControl.isCalibrated()) {
+            Serial.println("[SWEEP] Motor not calibrated — run 'c' first");
+        } else {
+            float speed_deg_s = args.toFloat();
+            if (!motorControl.isEnabled()) {
+                motorControl.enable();
+                motorControl.setAutoEnabled(true);
+                motorControl.notifyCommandActivity();
+            }
+            motorControl.startSweep(speed_deg_s);
+        }
+    }
+    else if (command == "sweep_stop") {
+        // Stop velocity sweep, return to position hold at current angle.
+        // Emits $SWEEP_END,<ms>.
+        if (motorControl.isSweepActive()) {
+            motorControl.stopSweep();
+        } else {
+            Serial.println("[SWEEP] No sweep active");
+        }
+    }
     else if (command == "test" || command == "diag" || command == "diagnostic") {
         // Combined system diagnostic: calibration + hardware tests + motor control
         runSystemDiagnostic(motorControl);
@@ -535,7 +669,7 @@ void processSerialCommand(String cmd) {
     else if (command == "motor_test") {
         runMotorTest(motorControl);
     }
-    else if (command == "sweep" || command == "position_sweep") {
+    else if (command == "position_sweep") {
         runPositionSweepTest(motorControl);
     }
     else if (command == "encoder_test") {
@@ -674,6 +808,10 @@ void processSerialCommand(String cmd) {
                 motorControl.setPositionTolerance(val);
             } else if (key == "vel_thresh") {
                 motorControl.setVelocityThreshold(val);
+            } else if (key == "cog_amp") {
+                motorControl.setCogFFAmp(constrain(val, 0.0f, 1.5f));
+            } else if (key == "cog_phase") {
+                motorControl.setCogFFPhase(val);
             } else {
                 Serial.print("Unknown setting key: '");
                 Serial.print(key);

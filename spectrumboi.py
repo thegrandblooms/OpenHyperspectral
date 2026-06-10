@@ -38,8 +38,6 @@ from io import BytesIO
 import serial
 import serial.tools.list_ports
 
-from motor_control.pid_tuner import MotorTuner, MovementAnalyzer
-
 # Set seaborn style
 sns.set_theme(style="darkgrid")
 plt.style.use('dark_background')
@@ -346,46 +344,26 @@ class SpectralViewerImGui:
         self.motor_cmd_input = ""            # Command text input buffer
         self.motor_auto_scroll = True        # Auto-scroll to bottom
 
-        # Motor settings state — values mirror config.h defaults so the panel
-        # always shows what the firmware booted with (no query needed).
-        # Motion control
-        self.ms_vel_max = 180.0          # MAX_VELOCITY_DEG (deg/s)
-        self.ms_accel = 286.5            # DEFAULT_ACCELERATION_DEG (deg/s²)
-        self.ms_vlim = 6.0               # VOLTAGE_LIMIT_GIMBAL (V)
-        self.ms_cur_lim = 2.0            # CURRENT_LIMIT (A)
-        # Position PID
-        self.ms_pid_p_pos = 20.0         # PID_P_POSITION
-        self.ms_pid_i_pos = 0.0          # PID_I_POSITION
-        self.ms_pid_d_pos = 0.2          # PID_D_POSITION
-        self.ms_pid_ramp_pos = 1000.0    # PID_RAMP_POSITION_DEG (deg/s)
-        # Velocity PID
-        self.ms_pid_p_vel = 0.2          # PID_P_VELOCITY
-        self.ms_pid_i_vel = 5.0          # PID_I_VELOCITY
-        self.ms_pid_d_vel = 0.0          # PID_D_VELOCITY
-        self.ms_pid_ramp_vel = 1000.0    # PID_RAMP_VELOCITY (deg/s)
-        self.ms_lpf_vel = 0.01           # PID_LPF_VELOCITY (s, official SimpleFOC gimbal example)
-        # Position tracking
-        self.ms_pos_tol = 0.5            # POSITION_TOLERANCE_DEG (deg)
-        self.ms_vel_thresh = 0.57        # VELOCITY_THRESHOLD_DEG (deg/s)
+        # Motor settings state — values mirror the STEPPER firmware's config.h
+        # defaults (firmware/ESP32_Stepper_Firmware) so the panel always shows
+        # what the firmware booted with (no query needed).
+        self.ms_vel_max = 60.0           # MAX_VELOCITY_DEG (deg/s)
+        self.ms_accel = 120.0            # MAX_ACCELERATION_DEG (deg/s²)
+        self.ms_cur_lim = 0.8            # TMC_RMS_CURRENT_MA / 1000 (A rms)
+        self.ms_pos_tol = 0.05           # POSITION_TOLERANCE_DEG (deg)
+        self.ms_vel_thresh = 0.5         # VELOCITY_THRESHOLD_DEG (deg/s)
+        self.ms_trim = True              # TRIM_ENABLED_DEFAULT (closed-loop trim)
+        self.ms_trim_tol = 0.02          # TRIM_TOLERANCE_DEG (deg)
         # Monitor filter
         self.ms_filter_set_cmds = True   # Hide "set" command echoes from monitor
-        # Tune cycle
-        self.ms_tune_active = False      # Repeating 0→90→180→270→0° tune cycle
 
-        # PID auto-tuner state (Bayesian optimization via Optuna)
-        self.pid_tuner = None              # MotorTuner instance (or None)
-        self.pid_tuner_thread = None       # Background thread
-        self.pid_tuner_running = False     # Thread control flag
-        self.pid_tuner_trial_scores = []   # [(trial_num, score), ...] for history plot
-        self.pid_tuner_best_params = {}    # Best params found so far
-        self.pid_tuner_best_score = None   # Best score
-        self.pid_tuner_best_metrics = {}   # Best metrics summary
-        self.pid_tuner_status = ""         # Status text ("Trial 5/50: score=12.3")
-        self.pid_tuner_param_importance = {}  # {param_name: importance_float}
-        self.pid_tuner_show_results = False   # Show results section
-        self.pid_tuner_report_path = ""      # Path to last HTML report
-        self.pid_tuner_n_trials = 50       # Configurable trial count
-        self.pid_tuner_move_timeout = 2.0  # Seconds per move before timeout
+        # Scan control state (mirrors the scan_step / scan_smooth firmware
+        # commands — the two capture strategies under evaluation)
+        self.scan_start_deg = 0.0
+        self.scan_end_deg = 60.0
+        self.scan_inc_deg = 0.5          # stepped mode: per-frame increment (deg)
+        self.scan_dwell_ms = 500         # stepped mode: capture window per frame
+        self.scan_speed_deg_s = 0.5      # smooth mode: sweep rate (deg/s)
         
     def init_glfw(self):
         """Initialize GLFW and ImGui"""
@@ -816,12 +794,15 @@ class SpectralViewerImGui:
             return
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"encoder_log_{timestamp}.csv"
+        os.makedirs("logs", exist_ok=True)
+        filename = os.path.join("logs", f"encoder_log_{timestamp}.csv")
         try:
             with open(filename, "w") as f:
-                f.write("timestamp_ms,position_deg,velocity_deg_s,target_deg\n")
+                # Stepper firmware $ENC format (6 fields):
+                # $ENC,<ms>,<enc_pos>,<enc_vel>,<target>,<cmd_pos>,<trim_err>
+                f.write("timestamp_ms,position_deg,velocity_deg_s,target_deg,"
+                        "cmd_pos_deg,trim_err_deg\n")
                 for line in lines:
-                    # $ENC,ts,pos,vel,target -> ts,pos,vel,target
                     f.write(line[5:] + "\n")
             with self.motor_serial_lock:
                 self.motor_debug_lines.append(
@@ -979,32 +960,20 @@ class SpectralViewerImGui:
             self._motor_set(key, new_val, fmt_send)
         return new_val
 
-    # config.h defaults — used by Reset to Defaults
-    # Keep in sync with config.h when values are changed there.
+    # Stepper firmware config.h defaults — used by Reset to Defaults.
+    # Keep in sync with firmware/ESP32_Stepper_Firmware/config.h.
     _MS_DEFAULTS = dict(
-        ms_vel_max=180.0, ms_accel=286.5, ms_vlim=6.0, ms_cur_lim=2.0,
-        ms_pid_p_pos=20.0, ms_pid_i_pos=0.0, ms_pid_d_pos=0.2, ms_pid_ramp_pos=1000.0,
-        ms_pid_p_vel=0.2,  ms_pid_i_vel=5.0,  ms_pid_d_vel=0.0, ms_pid_ramp_vel=1000.0,
-        ms_lpf_vel=0.01,
-        ms_pos_tol=0.5, ms_vel_thresh=0.57,
+        ms_vel_max=60.0, ms_accel=120.0, ms_cur_lim=0.8,
+        ms_pos_tol=0.05, ms_vel_thresh=0.5, ms_trim_tol=0.02,
     )
     # Maps attr name → (serial key, send format)
     _MS_KEYS = [
-        ("ms_vel_max",      "vel_max",      ".4g"),
-        ("ms_accel",        "accel",        ".4g"),
-        ("ms_vlim",         "vlim",         ".4g"),
-        ("ms_cur_lim",      "cur_lim",      ".4g"),
-        ("ms_pid_p_pos",    "pid_p_pos",    ".6g"),
-        ("ms_pid_i_pos",    "pid_i_pos",    ".6g"),
-        ("ms_pid_d_pos",    "pid_d_pos",    ".6g"),
-        ("ms_pid_ramp_pos", "pid_ramp_pos", ".4g"),
-        ("ms_pid_p_vel",    "pid_p_vel",    ".6g"),
-        ("ms_pid_i_vel",    "pid_i_vel",    ".6g"),
-        ("ms_pid_d_vel",    "pid_d_vel",    ".6g"),
-        ("ms_pid_ramp_vel", "pid_ramp_vel", ".4g"),
-        ("ms_lpf_vel",      "lpf_vel",      ".6g"),
-        ("ms_pos_tol",      "pos_tol",      ".6g"),
-        ("ms_vel_thresh",   "vel_thresh",   ".6g"),
+        ("ms_vel_max",    "vel_max",    ".4g"),
+        ("ms_accel",      "accel",      ".4g"),
+        ("ms_cur_lim",    "cur_lim",    ".4g"),
+        ("ms_pos_tol",    "pos_tol",    ".6g"),
+        ("ms_vel_thresh", "vel_thresh", ".6g"),
+        ("ms_trim_tol",   "trim_tol",   ".6g"),
     ]
 
     def _reset_motor_settings(self):
@@ -1013,6 +982,8 @@ class SpectralViewerImGui:
             setattr(self, attr, default)
         for attr, key, fmt in self._MS_KEYS:
             self._motor_set(key, getattr(self, attr), fmt)
+        self.ms_trim = True
+        self.motor_serial_send("set trim 1")
 
     def _render_motor_settings(self):
         """Render the Motor Settings sub-panel (called from Motor Settings tree node)."""
@@ -1041,18 +1012,6 @@ class SpectralViewerImGui:
                 "Resets all values below to config.h defaults\n"
                 "and sends each one to the board immediately.")
 
-        # ── Tune Cycle ─────────────────────────────────────────────────
-        imgui.separator()
-        changed, new_tune = imgui.checkbox("Tune Cycle##ms", self.ms_tune_active)
-        if changed:
-            self.ms_tune_active = new_tune
-            self.motor_serial_send("tune on" if new_tune else "tune off")
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Runs a repeating 0° → 90° → 180° → 270° → 0° walk\n"
-                "with a 2-second timeout per step. Great for watching\n"
-                "the encoder plot while tweaking PID gains above.")
-
         imgui.separator()
 
         # ── Motion Control ─────────────────────────────────────────────
@@ -1060,69 +1019,38 @@ class SpectralViewerImGui:
 
         self.ms_vel_max = self._param_row(
             "Vel Max (deg/s)", "vel_max", self.ms_vel_max, "%.1f", ".4g",
-            tooltip="Top speed cap. Lower to keep motion gentle;\n"
-                    "higher to allow faster sweeps. (default 180 deg/s)")
+            tooltip="Cruise speed for point-to-point moves at the output shaft.\n"
+                    "(default 60 deg/s)")
         self.ms_accel = self._param_row(
             "Accel (deg/s\xb2)", "accel", self.ms_accel, "%.1f", ".4g",
-            tooltip="How quickly the motor ramps up and slows down.\n"
-                    "Lower = smoother start/stop, higher = snappier. (default 286.5)")
-        self.ms_vlim = self._param_row(
-            "Voltage Limit (V)", "vlim", self.ms_vlim, "%.2f", ".4g",
-            tooltip="Max voltage applied to the motor coils.\n"
-                    "Lower = cooler and smoother but less torque.\n"
-                    "Gimbal motors work best around 5–7 V. (default 6.0)")
+            tooltip="Trapezoid profile acceleration/deceleration.\n"
+                    "Lower = gentler start/stop. (default 120)")
         self.ms_cur_lim = self._param_row(
-            "Current Limit (A)", "cur_lim", self.ms_cur_lim, "%.2f", ".4g",
-            tooltip="Hard ceiling on coil current — a safety cap.\n"
-                    "SimpleFOC Mini supports up to 2 A continuous. (default 2.0)")
+            "Motor Current (A rms)", "cur_lim", self.ms_cur_lim, "%.2f", ".4g",
+            tooltip="TMC2209 RMS coil current — set at or below the stepper's\n"
+                    "rated current. Needs the TMC UART wire; without it the\n"
+                    "Vref pot on the driver board sets current. (default 0.8)")
 
         imgui.separator()
 
-        # ── Position PID ───────────────────────────────────────────────
-        imgui.text_colored("Position PID", 0.4, 0.8, 1.0, 1.0)
+        # ── Closed-Loop Trim ───────────────────────────────────────────
+        imgui.text_colored("Closed-Loop Trim", 0.4, 0.8, 1.0, 1.0)
 
-        self.ms_pid_p_pos = self._param_row(
-            "P", "pid_p_pos", self.ms_pid_p_pos, "%.3f", ".6g",
-            tooltip="Proportional — how hard the motor pulls toward the target.\n"
-                    "Too low: sluggish or stalls. Too high: oscillates. (default 20.0)")
-        self.ms_pid_i_pos = self._param_row(
-            "I", "pid_i_pos", self.ms_pid_i_pos, "%.3f", ".6g",
-            tooltip="Integral — corrects lingering offset from target.\n"
-                    "Usually left at 0; only add if motor consistently misses. (default 0.0)")
-        self.ms_pid_d_pos = self._param_row(
-            "D", "pid_d_pos", self.ms_pid_d_pos, "%.3f", ".6g",
-            tooltip="Derivative — damping to reduce overshoot and ringing.\n"
-                    "Increase if motor bounces past target. (default 0.2)")
-        self.ms_pid_ramp_pos = self._param_row(
-            "Ramp (deg/s)", "pid_ramp_pos", self.ms_pid_ramp_pos, "%.1f", ".4g",
-            tooltip="Max rate the position loop's speed command can change.\n"
-                    "Acts as a secondary acceleration limiter. (default 1000)")
+        changed, new_trim = imgui.checkbox("Trim enabled##ms", self.ms_trim)
+        if changed:
+            self.ms_trim = new_trim
+            self.motor_serial_send(f"set trim {1 if new_trim else 0}")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "After each move: read the output encoder and remove the\n"
+                "residual error (belt lash, compliance) with small correction\n"
+                "moves. Disable to see raw open-loop accuracy. (default on)")
 
-        imgui.separator()
-
-        # ── Velocity PID ───────────────────────────────────────────────
-        imgui.text_colored("Velocity PID", 0.4, 1.0, 0.6, 1.0)
-
-        self.ms_pid_p_vel = self._param_row(
-            "P", "pid_p_vel", self.ms_pid_p_vel, "%.4f", ".6g",
-            tooltip="Proportional — responsiveness of the speed control inner loop.\n"
-                    "Typical range for gimbal motors: 0.1–0.5. (default 0.2)")
-        self.ms_pid_i_vel = self._param_row(
-            "I", "pid_i_vel", self.ms_pid_i_vel, "%.3f", ".6g",
-            tooltip="Integral — compensates for friction and load.\n"
-                    "High I can cause windup/oscillation; reduce if motor hunts. (default 5.0)")
-        self.ms_pid_d_vel = self._param_row(
-            "D", "pid_d_vel", self.ms_pid_d_vel, "%.3f", ".6g",
-            tooltip="Derivative — rarely used in velocity loops, usually 0. (default 0.0)")
-        self.ms_pid_ramp_vel = self._param_row(
-            "Ramp (deg/s)", "pid_ramp_vel", self.ms_pid_ramp_vel, "%.1f", ".4g",
-            tooltip="How fast the velocity loop's output voltage can change.\n"
-                    "Higher = more responsive, lower = smoother. (default 1000)")
-        self.ms_lpf_vel = self._param_row(
-            "LPF Tf (s)", "lpf_vel", self.ms_lpf_vel, "%.4f", ".6g",
-            tooltip="Low-pass filter time constant on velocity measurement.\n"
-                    "Higher = smoother signal but slower response to speed changes.\n"
-                    "Helps suppress cogging noise in gimbal motors. (default 0.03)")
+        self.ms_trim_tol = self._param_row(
+            "Trim Tolerance (deg)", "trim_tol", self.ms_trim_tol, "%.4f", ".6g",
+            tooltip="Stop trimming when the encoder is within this of the target.\n"
+                    "Encoder resolution is 0.00017 deg, so 0.005-0.02 is realistic.\n"
+                    "(default 0.02)")
 
         imgui.separator()
 
@@ -1131,243 +1059,109 @@ class SpectralViewerImGui:
 
         self.ms_pos_tol = self._param_row(
             "Pos Tolerance (deg)", "pos_tol", self.ms_pos_tol, "%.3f", ".6g",
-            tooltip="How close the motor must be (in degrees) before the firmware\n"
-                    "considers the target reached. Tighter = more accurate but\n"
-                    "motor may never fully settle. (default 0.5°)")
+            tooltip="How close the output encoder must be before the firmware\n"
+                    "reports the target reached (AT_TARGET). (default 0.05)")
         self.ms_vel_thresh = self._param_row(
             "Vel Threshold (deg/s)", "vel_thresh", self.ms_vel_thresh, "%.3f", ".6g",
-            tooltip="How slow the motor must be moving (deg/s) before the firmware\n"
-                    "considers it settled at the target. Pairs with Pos Tolerance. (default 0.57)")
-
-        # ── PID Auto-Tune (Bayesian) ─────────────────────────────────
-        imgui.separator()
-        self._render_pid_autotune()
+            tooltip="How slow the encoder velocity must be before the firmware\n"
+                    "considers the motor settled. (default 0.5)")
 
     # ------------------------------------------------------------------
-    # PID Auto-Tuner UI + thread management
+    # Scan control UI (stepped capture vs smooth video scan)
     # ------------------------------------------------------------------
 
-    def _render_pid_autotune(self):
-        """Render the PID auto-tuning section inside Motor Settings."""
-        imgui.text_colored("PID Auto-Tune (Bayesian)", 1.0, 0.75, 0.3, 1.0)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Uses Optuna (TPE Bayesian optimization) to automatically\n"
-                "find optimal PID parameters by running a series of test\n"
-                "movements and measuring motor performance.\n\n"
-                "Tunes: Position P/I/D, Velocity P/I, Velocity LPF\n"
-                "Test pattern: 0° → 90° → 180° → 270° → 0° (quadrant walk)")
+    def _render_scan_controls(self):
+        """Render the Scan sub-panel: the two capture strategies under test.
 
+        Stepped: firmware visits each position (settle + closed-loop trim),
+        emits a $FRAME marker, and dwells so the host can capture a frame.
+        Smooth: firmware sweeps the range at a constant step rate while
+        streaming $ENC; host records video and frame-matches afterwards
+        (clock sync via the 'sync' command).
+        """
         connected = self.motor_serial is not None and self.motor_serial.is_open
-        running = self.pid_tuner_running
-
-        if not running:
-            # Trial count input
-            imgui.push_item_width(80)
-            _, self.pid_tuner_n_trials = imgui.input_int(
-                "Trials##pid_n", self.pid_tuner_n_trials, 10, 25)
-            self.pid_tuner_n_trials = max(5, min(500, self.pid_tuner_n_trials))
-            imgui.pop_item_width()
-            if imgui.is_item_hovered():
-                imgui.set_tooltip("Number of parameter combinations to try.\n"
-                                  "More trials = better results but longer runtime.\n"
-                                  "Each trial takes ~15-45 seconds.")
-
-            imgui.same_line()
-            imgui.push_item_width(60)
-            _, self.pid_tuner_move_timeout = imgui.input_float(
-                "Timeout (s)##pid_timeout", self.pid_tuner_move_timeout, 0.0, 0.0, "%.1f")
-            self.pid_tuner_move_timeout = max(0.5, min(10.0, self.pid_tuner_move_timeout))
-            imgui.pop_item_width()
-            if imgui.is_item_hovered():
-                imgui.set_tooltip("Seconds to wait for the motor to settle each move.\n"
-                                  "Lower = faster trials, higher = more time to settle.")
-
-            imgui.same_line()
-            if connected:
-                if imgui.button("Run PID Calibration##pid_run"):
-                    self._start_pid_tuner()
-            else:
-                imgui.text_colored("(connect serial first)", 0.7, 0.5, 0.2)
-        else:
-            if imgui.button("Stop Calibration##pid_stop"):
-                self.pid_tuner_running = False
-                self.pid_tuner_status = "Stopping..."
-
-        # Status line (progress during run, result after)
-        if self.pid_tuner_status:
-            if running:
-                imgui.text_colored(self.pid_tuner_status, 0.4, 1.0, 0.6, 1.0)
-            else:
-                imgui.text(self.pid_tuner_status)
-
-        # Best score so far (during or after run)
-        if self.pid_tuner_best_score is not None:
-            best_p = self.pid_tuner_best_params
-            imgui.text_colored(
-                f"Best: {self.pid_tuner_best_score:.2f}  "
-                f"P={best_p.get('pid_p_pos', 0):.1f} "
-                f"D={best_p.get('pid_d_pos', 0):.2f} "
-                f"I={best_p.get('pid_i_pos', 0):.2f}",
-                0.3, 0.9, 1.0, 1.0)
-
-        # Optimization history plot (score vs trial)
-        if len(self.pid_tuner_trial_scores) > 1:
-            scores = [s for _, s in self.pid_tuner_trial_scores]
-            # Cap penalty scores so the chart stays readable
-            non_penalty = [s for s in scores if s < 999]
-            if non_penalty:
-                max_display = max(non_penalty) * 1.2
-            else:
-                max_display = 100.0  # all penalty — show flat line at top
-            scores_arr = [min(s, max_display) for s in scores]
-
-            imgui.text(f"Score History ({len(scores)} trials)")
-            plot_data = np.array(scores_arr, dtype=np.float32)
-            imgui.plot_lines(
-                "##pid_history",
-                plot_data,
-                overlay_text=f"best: {min(scores):.2f}",
-                scale_min=0.0,
-                scale_max=float(max_display),
-                graph_size=(imgui.get_content_region_available()[0], 80),
-            )
-
-        # Results section (shown after completion)
-        if self.pid_tuner_show_results and not running:
+        if not connected:
+            imgui.text_colored("Connect serial to run scans", 0.7, 0.5, 0.2)
             imgui.separator()
 
-            # Action buttons
-            if imgui.button("Apply Best##pid_apply"):
-                if self.pid_tuner_best_params:
-                    for key, val in self.pid_tuner_best_params.items():
-                        self._motor_set(key, val)
-                        attr = f"ms_{key}"
-                        if hasattr(self, attr):
-                            setattr(self, attr, val)
-                    self.pid_tuner_status = "Best parameters applied to firmware"
+        # ── Shared range ───────────────────────────────────────────────
+        imgui.text_colored("Scan Range (deg, output shaft)", 0.9, 0.85, 0.4, 1.0)
+        imgui.push_item_width(80)
+        _, self.scan_start_deg = imgui.input_float(
+            "Start##scan", self.scan_start_deg, 0.0, 0.0, "%.2f")
+        imgui.same_line()
+        _, self.scan_end_deg = imgui.input_float(
+            "End##scan", self.scan_end_deg, 0.0, 0.0, "%.2f")
+        imgui.pop_item_width()
+        span = abs(self.scan_end_deg - self.scan_start_deg)
+        if span >= 180.0:
+            imgui.text_colored("Range must be < 180 deg (shortest-path)", 1.0, 0.4, 0.4)
+
+        imgui.separator()
+
+        # ── Stepped capture scan ───────────────────────────────────────
+        imgui.text_colored("Stepped Capture", 0.4, 0.8, 1.0, 1.0)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Move -> settle -> trim -> $FRAME marker -> dwell -> next.\n"
+                "Encoder-verified position at every frame; ~1-2 frames/s.\n"
+                "Lash is loaded in the scan direction at every frame.")
+
+        imgui.push_item_width(80)
+        _, self.scan_inc_deg = imgui.input_float(
+            "Increment (deg)##scan", self.scan_inc_deg, 0.0, 0.0, "%.3f")
+        imgui.same_line()
+        changed, dwell = imgui.input_int("Dwell (ms)##scan", self.scan_dwell_ms, 0, 0)
+        if changed:
+            self.scan_dwell_ms = max(0, dwell)
+        imgui.pop_item_width()
+
+        if self.scan_inc_deg > 0 and span > 0:
+            n_frames = int(span / self.scan_inc_deg) + 1
+            est_s = n_frames * (self.scan_dwell_ms / 1000.0 + 0.8)
+            imgui.text_colored(
+                f"~{n_frames} frames, ~{est_s:.0f}s "
+                f"(assumes ~0.8s settle+trim per move)", 0.55, 0.55, 0.55)
+
+        if connected:
+            if imgui.button("Start Stepped Scan##scan"):
+                self.motor_serial_send(
+                    f"scan_step {self.scan_start_deg:.4g} {self.scan_end_deg:.4g} "
+                    f"{abs(self.scan_inc_deg):.4g} {self.scan_dwell_ms}")
+
+        imgui.separator()
+
+        # ── Smooth video scan ──────────────────────────────────────────
+        imgui.text_colored("Smooth Video Scan", 0.4, 1.0, 0.6, 1.0)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Pre-positions to Start (taking up lash in the scan\n"
+                "direction), streams $ENC, sweeps at constant rate to End.\n"
+                "Record video concurrently; frame-match against the encoder\n"
+                "log afterwards. Speed guide for a 30fps camera:\n"
+                "  speed = bin_deg x 30 / frames_per_bin\n"
+                "  0.02 deg bins, 1-4 frames -> 0.15-0.6 deg/s")
+
+        imgui.push_item_width(80)
+        _, self.scan_speed_deg_s = imgui.input_float(
+            "Speed (deg/s)##scan", self.scan_speed_deg_s, 0.0, 0.0, "%.3f")
+        imgui.pop_item_width()
+
+        if self.scan_speed_deg_s > 0 and span > 0:
+            dur_s = span / self.scan_speed_deg_s
+            frames_per_002 = 0.02 / self.scan_speed_deg_s * 30.0
+            imgui.text_colored(
+                f"~{dur_s:.0f}s sweep; ~{frames_per_002:.1f} frames per "
+                f"0.02 deg bin at 30fps", 0.55, 0.55, 0.55)
+
+        if connected:
+            if imgui.button("Start Smooth Scan##scan"):
+                self.motor_serial_send(
+                    f"scan_smooth {self.scan_start_deg:.4g} "
+                    f"{self.scan_end_deg:.4g} {abs(self.scan_speed_deg_s):.4g}")
             imgui.same_line()
-            if imgui.button("Reset to Defaults##pid_reset"):
-                self._reset_motor_settings()
-                self.pid_tuner_status = "Reset to config.h defaults"
-            if self.pid_tuner_report_path:
-                imgui.same_line()
-                if imgui.button("Open Report##pid_report"):
-                    import webbrowser
-                    webbrowser.open(self.pid_tuner_report_path)
-
-    def _start_pid_tuner(self):
-        """Launch PID auto-tuner in a background thread."""
-        if self.pid_tuner_running:
-            return
-
-        # Disable tune cycle if active
-        if self.ms_tune_active:
-            self.ms_tune_active = False
-            self.motor_serial_send("tune off")
-
-        # Enable encoder streaming
-        self.motor_serial_send("stream on")
-
-        # Reset state
-        self.pid_tuner_trial_scores.clear()
-        self.pid_tuner_best_params.clear()
-        self.pid_tuner_best_score = None
-        self.pid_tuner_best_metrics.clear()
-        self.pid_tuner_param_importance.clear()
-        self.pid_tuner_show_results = False
-        self.pid_tuner_status = "Starting..."
-
-        # Create tuner with callbacks bridging to our serial + UI
-        self.pid_tuner = MotorTuner(
-            send_fn=self.motor_serial_send,
-            set_param_fn=lambda k, v: self._motor_set(k, v),
-            get_stream_fn=self._drain_enc_lines,
-            on_trial_complete_fn=self._on_tuner_trial_complete,
-            on_trial_start_fn=self._on_tuner_trial_start,
-            n_trials=self.pid_tuner_n_trials,
-            move_timeout_s=self.pid_tuner_move_timeout,
-        )
-        self.pid_tuner_running = True
-        self.pid_tuner_thread = threading.Thread(
-            target=self._pid_tuner_worker, daemon=True)
-        self.pid_tuner_thread.start()
-
-    def _drain_enc_lines(self):
-        """Copy $ENC lines from stream buffer for the tuner, leaving originals
-        in place so the encoder graph can still display them."""
-        with self.motor_serial_lock:
-            enc = [l for l in self.motor_stream_lines if l.startswith("$ENC,")]
-        return enc
-
-    def _on_tuner_trial_start(self, trial_num, params):
-        """Callback from tuner thread — trial is about to begin."""
-        n = self.pid_tuner_n_trials
-        param_str = (
-            f"P={params.get('pid_p_pos', 0):.1f} "
-            f"D={params.get('pid_d_pos', 0):.2f} "
-            f"I={params.get('pid_i_pos', 0):.2f} "
-            f"Pv={params.get('pid_p_vel', 0):.3f} "
-            f"Iv={params.get('pid_i_vel', 0):.1f} "
-            f"LPF={params.get('lpf_vel', 0):.4f}"
-        )
-        self.pid_tuner_status = f"Trial {trial_num}/{n} — testing {param_str}"
-        # Update UI fields to show the params being tested
-        for key, val in params.items():
-            attr = f"ms_{key}"
-            if hasattr(self, attr):
-                setattr(self, attr, val)
-
-    def _on_tuner_trial_complete(self, trial_num, score, params, metrics):
-        """Callback from tuner thread — update UI state."""
-        self.pid_tuner_trial_scores.append((trial_num, score))
-        n = self.pid_tuner_n_trials
-        abort = metrics.get("abort_reason")
-        if abort:
-            self.pid_tuner_status = f"Trial {trial_num}/{n} — aborted ({abort})"
-        else:
-            self.pid_tuner_status = f"Trial {trial_num}/{n} — score: {score:.2f}"
-        if self.pid_tuner_best_score is None or score < self.pid_tuner_best_score:
-            self.pid_tuner_best_score = score
-            self.pid_tuner_best_params = dict(params)
-            self.pid_tuner_best_metrics = dict(metrics)
-
-    def _pid_tuner_worker(self):
-        """Background thread: runs the Optuna optimization loop."""
-        try:
-            self.pid_tuner.run(lambda: self.pid_tuner_running)
-        except Exception as e:
-            self.pid_tuner_status = f"Error: {e}"
-        finally:
-            self.pid_tuner_running = False
-            # Apply best params on completion
-            if self.pid_tuner_best_params:
-                for key, val in self.pid_tuner_best_params.items():
-                    self._motor_set(key, val)
-                    attr = f"ms_{key}"
-                    if hasattr(self, attr):
-                        setattr(self, attr, val)
-            # Compute parameter importance from study
-            if self.pid_tuner is not None:
-                self.pid_tuner_param_importance = self.pid_tuner.get_param_importance()
-            self.pid_tuner_show_results = True
-            # Generate HTML report
-            if self.pid_tuner is not None and self.pid_tuner_trial_scores:
-                try:
-                    self.pid_tuner_report_path = self.pid_tuner.generate_report(
-                        trial_scores=self.pid_tuner_trial_scores,
-                        best_params=self.pid_tuner_best_params,
-                        best_metrics=self.pid_tuner_best_metrics,
-                        param_importance=self.pid_tuner_param_importance,
-                    )
-                    import webbrowser
-                    webbrowser.open(self.pid_tuner_report_path)
-                except Exception as exc:
-                    logger.warning("Failed to generate PID report: %s", exc)
-            if "Error" not in self.pid_tuner_status:
-                n_done = len(self.pid_tuner_trial_scores)
-                self.pid_tuner_status = (
-                    f"Complete — {n_done} trials, best params applied")
+            if imgui.button("Stop Scan##scan"):
+                self.motor_serial_send("scan_stop")
 
     def render_motor_control(self):
         """Render the Motor Control accordion section."""
@@ -1483,6 +1277,10 @@ class SpectralViewerImGui:
                 with self.motor_serial_lock:
                     self.motor_stream_lines.clear()
 
+            imgui.tree_pop()
+
+        if imgui.tree_node("Scan"):
+            self._render_scan_controls()
             imgui.tree_pop()
 
         if imgui.tree_node("Motor Settings"):
