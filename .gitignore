@@ -1,6 +1,18 @@
 venv/
 __pycache__/
-camera_control/__pycache__/
-camera_control/mightex_driver/__pycache__/
-motor_control/__pycache__/
 logs/
+
+# Local Claude Code state (machine-specific permissions, worktrees)
+.claude/
+
+# Large binary fetched by tools/install_arduino_cli.ps1
+tools/arduino-cli.exe
+
+# Generated UI state (window layout)
+imgui.ini
+
+# Generated tool outputs (motor_test.py, sweep_validation.py, SpectrumBoi)
+tools/last_run.txt
+encoder_log_*.csv
+sweep_validation_*.csv
+pid_tuning_report_*.html

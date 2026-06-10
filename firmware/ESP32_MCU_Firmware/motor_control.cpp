@@ -1,6 +1,15 @@
 #include "motor_control.h"
 #include "commands.h"  // Explicit include for state/mode definitions
 #include <Wire.h>      // I2C library for MT6701 encoder
+#include <Preferences.h>  // ESP32 NVS (non-volatile storage) for persistent calibration
+
+// NVS namespace and keys for persistent calibration storage
+static const char* NVS_NS      = "motor_cal";
+static const char* NVS_ZERO    = "zero_angle";   // float: motor.zero_electric_angle (rad)
+static const char* NVS_DIR     = "sensor_dir";   // int: 1=CW, -1=CCW
+static const char* NVS_VALID   = "cal_valid";    // bool: true when a complete calibration is saved
+static const char* NVS_COG_LUT = "cog_lut";     // blob: float[360] cogging LUT (1440 bytes)
+static const char* NVS_COG_OK  = "cog_ok";      // bool: true when LUT blob is valid
 
 //=============================================================================
 // MT6701 Sensor Wrapper Implementation
@@ -325,6 +334,9 @@ MotorController::MotorController()
     : motor(POLE_PAIRS),
       driver(MOTOR_PWM_A, MOTOR_PWM_B, MOTOR_PWM_C, MOTOR_ENABLE),
       encoder(ENCODER_I2C_ADDR),
+#if USE_CALIBRATED_SENSOR
+      calibratedSensor(encoder),  // wraps raw encoder; declared after encoder so reference is valid
+#endif
       motor_enabled(false),
       motor_calibrated(false),
       target_position_deg(0.0f),
@@ -344,7 +356,18 @@ MotorController::MotorController()
       stream_enabled(STREAM_DEFAULT_ENABLED),
       stream_rate_hz(STREAM_RATE_HZ),
       stream_interval_us(1000000UL / STREAM_RATE_HZ),
-      last_stream_time_us(0) {
+      last_stream_time_us(0),
+      cog_ff_amp(COG_FF_AMP),
+      cog_ff_phase(COG_FF_PHASE),
+      cog_lut_loaded(false),
+      saved_i_vel(0.0f),
+      sweep_active(false),
+      sweep_speed_deg_s(0.0f),
+      sweep_prev_enc_deg(0.0f),
+      sweep_vel_t_ms(0),
+      sweep_vel_lpf(0.0f),
+      sweep_vel_integral(0.0f) {
+    memset(cog_lut, 0, sizeof(cog_lut));
 }
 
 void MotorController::begin() {
@@ -362,11 +385,17 @@ void MotorController::begin() {
     if (DEBUG_MOTOR) {
         Serial.println("[MOTOR] Linking encoder to motor...");
     }
-    motor.linkSensor(&encoder);
-
+#if USE_CALIBRATED_SENSOR
+    motor.linkSensor(&calibratedSensor);
     if (DEBUG_MOTOR) {
-        Serial.println("[MOTOR] Encoder linked to motor");
+        Serial.println("[MOTOR] CalibratedSensor linked to motor (LUT correction enabled)");
     }
+#else
+    motor.linkSensor(&encoder);
+    if (DEBUG_MOTOR) {
+        Serial.println("[MOTOR] Raw encoder linked to motor");
+    }
+#endif
 
     // Driver configuration
     driver.voltage_power_supply = VOLTAGE_PSU;
@@ -417,12 +446,18 @@ void MotorController::begin() {
     // Set FOC modulation (space vector PWM is more efficient)
     motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
 
-    // CRITICAL: Use voltage mode for gimbal motors (not torque mode)
-    // Torque mode can cause cogging at low speeds
+    // Voltage-based torque control (no current sensor — voltage is the control output)
     motor.torque_controller = TorqueControlType::voltage;
 
-    // Set motion control type to position control (angle mode)
+    // Control architecture: toggled by USE_TORQUE_MODE in config.h
+#if USE_TORQUE_MODE
+    // Torque mode + manual PD: voltage = Kp*error - Kd*velocity computed in update()
+    // Eliminates cascaded velocity loop — no integral windup across all positions
+    motor.controller = MotionControlType::torque;
+#else
+    // Angle mode: SimpleFOC cascaded PID (Position P → Velocity PI → Voltage)
     motor.controller = MotionControlType::angle;
+#endif
 
     // Configure PID controllers
     // Velocity PID (SIMPLEFOC: uses radians internally)
@@ -442,6 +477,13 @@ void MotorController::begin() {
 
     // CRITICAL FIX: Initialize angle low-pass filter (prevents shaft_angle reset bug)
     motor.LPF_angle.Tf = 0.0f;  // No filtering for absolute encoders
+
+    // Run position loop at 100Hz, inner torque loop at full ~1kHz.
+    // Recommended for noisy I2C encoders: position-delta velocity at 1ms is very noisy;
+    // downsampling gives the LPF_velocity filter time to smooth it before the outer loop acts.
+    // DS=10 (100Hz outer loop) — halved from 20 to reduce drift between corrections.
+    // After this change, PID_velocity.I may need proportional increase if steady-state error grows.
+    motor.motion_downsample = 10;
 
     // Current control PID (for FOC)
     // Current control PID (FOC - uses amperes, no unit conversion needed)
@@ -508,16 +550,184 @@ void MotorController::begin() {
 }
 
 bool MotorController::calibrate() {
-    // Run SimpleFOC calibration
-    bool success = runCalibration();
-
-    if (success) {
-        motor_calibrated = true;
-    } else {
-        motor_calibrated = false;
+    // Try loading a previously saved calibration from NVS first.
+    // On success, initFOC() will print "Skip dir/offset calib." and return immediately (~1s).
+    // On first boot (or after recalibrate), falls through to runThoroughCalibration().
+    if (loadCalibrationFromNVS()) {
+        int foc_result = motor.initFOC();
+        if (foc_result == 1) {
+            // Run stabilization cycles
+            for (int i = 0; i < 20; i++) { motor.loopFOC(); delay(1); }
+            float encoder_deg = radiansToDegrees(encoder.getSensorAngle());
+            float shaft_deg   = radiansToDegrees(motor.shaft_angle);
+            float err = abs(shaft_deg - encoder_deg);
+            if (err > 180.0f) err = 360.0f - err;
+            if (DEBUG_MOTOR) {
+                Serial.printf("Dir:%s Zero:%.1f° Enc:%.1f° FOC:%.1f° Err:%.1f°\n",
+                    motor.sensor_direction == Direction::CW ? "CW" : "CCW",
+                    radiansToDegrees(motor.zero_electric_angle),
+                    encoder_deg, shaft_deg, err);
+            }
+            motor.disable();
+            motor_calibrated = true;
+            loadCogLutFromNVS();  // restore cogging LUT if previously saved
+            return true;
+        }
+        // Saved calibration didn't stick — clear it and fall through to fresh cal
+        Serial.println("[CAL] Saved calibration failed initFOC, clearing NVS...");
+        clearCalibrationNVS();
     }
 
+    // No saved calibration (or it failed): run thorough averaged calibration and save result.
+    bool success = runThoroughCalibration(5);
+    if (success) {
+        saveCalibrationToNVS();
+    }
+    motor_calibrated = success;
     return success;
+}
+
+bool MotorController::recalibrate() {
+    clearCalibrationNVS();
+    return calibrate();
+}
+
+void MotorController::clearCalibrationNVS() {
+    Preferences prefs;
+    prefs.begin(NVS_NS, false);
+    prefs.clear();
+    prefs.end();
+    Serial.println("[CAL] NVS calibration cleared — fresh cal will run on next calibrate()");
+}
+
+bool MotorController::loadCalibrationFromNVS() {
+    Preferences prefs;
+    prefs.begin(NVS_NS, true);  // read-only
+    bool valid = prefs.getBool(NVS_VALID, false);
+    if (valid) {
+        float zero = prefs.getFloat(NVS_ZERO, 0.0f);
+        int   dir  = prefs.getInt(NVS_DIR, 1);
+        motor.zero_electric_angle = zero;
+        motor.sensor_direction    = (dir == 1) ? Direction::CW : Direction::CCW;
+        Serial.printf("[CAL] Loaded from NVS: zero=%.4f rad (%.1f°), dir=%s\n",
+            zero, radiansToDegrees(zero),
+            dir == 1 ? "CW" : "CCW");
+    }
+    prefs.end();
+    return valid;
+}
+
+void MotorController::saveCalibrationToNVS() {
+    Preferences prefs;
+    prefs.begin(NVS_NS, false);  // read-write
+    prefs.putFloat(NVS_ZERO,  motor.zero_electric_angle);
+    prefs.putInt  (NVS_DIR,   motor.sensor_direction == Direction::CW ? 1 : -1);
+    prefs.putBool (NVS_VALID, true);
+    // A new calibration changes zero_electric_angle, which invalidates any previously
+    // measured cogging LUT (LUT is indexed by mechanical angle, but the mapping from
+    // encoder counts to mechanical degrees depends on the calibration origin).
+    prefs.putBool(NVS_COG_OK, false);
+    prefs.remove(NVS_COG_LUT);
+    prefs.end();
+    cog_lut_loaded = false;
+    memset(cog_lut, 0, sizeof(cog_lut));
+    Serial.printf("[CAL] Saved to NVS: zero=%.4f rad (%.1f°), dir=%s\n",
+        motor.zero_electric_angle,
+        radiansToDegrees(motor.zero_electric_angle),
+        motor.sensor_direction == Direction::CW ? "CW" : "CCW");
+    Serial.println("[CAL] Cogging LUT invalidated — re-run cogmap_dense after recalibration");
+}
+
+// Run initFOC() n_runs times from UNKNOWN state and use the averaged zero_electric_angle.
+// This reduces the ~4° run-to-run jitter caused by cogging detents snapping the rotor to
+// slightly different positions during alignment.  Each run takes ~2s; total ~10s for n_runs=5.
+bool MotorController::runThoroughCalibration(int n_runs) {
+    encoder.update();
+    float test_angle = encoder.getSensorAngle();
+    if (isnan(test_angle) || isinf(test_angle)) {
+        Serial.println("[CAL] ERROR: Encoder not readable");
+        return false;
+    }
+
+    if (DEBUG_MOTOR) {
+        Serial.printf("  Running %d-pass averaged calibration...\n", n_runs);
+    }
+
+    float zero_sum   = 0.0f;
+    int   cw_votes   = 0;
+    int   ok_count   = 0;
+
+    for (int i = 0; i < n_runs; i++) {
+        // Force full re-alignment every iteration
+        motor.sensor_direction    = Direction::UNKNOWN;
+        motor.zero_electric_angle = -12345.0f;  // SimpleFOC NOT_SET sentinel
+
+        encoder.resetRotationTracking();
+
+        // Enable driver before initFOC() — motor.disable() pulls the enable pin LOW,
+        // which stops the driver from outputting any voltage. Without this, alignSensor()
+        // applies setPhaseVoltage() but the driver is silent → "Failed to notice movement".
+        motor.enable();
+
+        int result = motor.initFOC();
+        if (result != 1) {
+            Serial.printf("[CAL] Pass %d/%d FAILED\n", i + 1, n_runs);
+            continue;
+        }
+
+        float zero = motor.zero_electric_angle;
+        zero_sum += zero;
+        if (motor.sensor_direction == Direction::CW) cw_votes++;
+        ok_count++;
+
+        if (DEBUG_MOTOR) {
+            Serial.printf("[CAL] Pass %d/%d: zero=%.4f rad (%.1f°), dir=%s\n",
+                i + 1, n_runs, zero, radiansToDegrees(zero),
+                motor.sensor_direction == Direction::CW ? "CW" : "CCW");
+        }
+
+        motor.disable();
+        delay(150);  // brief pause so the rotor can settle between alignment passes
+    }
+
+    if (ok_count == 0) {
+        Serial.println("[CAL] ERROR: All calibration passes failed");
+        return false;
+    }
+
+    // Apply averaged result
+    float averaged_zero = zero_sum / ok_count;
+    Direction averaged_dir = (cw_votes > ok_count / 2) ? Direction::CW : Direction::CCW;
+
+    motor.zero_electric_angle = averaged_zero;
+    motor.sensor_direction    = averaged_dir;
+
+    if (DEBUG_MOTOR) {
+        Serial.printf("[CAL] Averaged (%d/%d passes): zero=%.4f rad (%.1f°), dir=%s\n",
+            ok_count, n_runs, averaged_zero, radiansToDegrees(averaged_zero),
+            averaged_dir == Direction::CW ? "CW" : "CCW");
+    }
+
+    // Final initFOC with the averaged values — alignment will be skipped ("Skip dir/offset calib.")
+    encoder.resetRotationTracking();
+    int foc_result = motor.initFOC();
+
+    if (foc_result == 1) {
+        for (int i = 0; i < 20; i++) { motor.loopFOC(); delay(1); }
+        float encoder_deg = radiansToDegrees(encoder.getSensorAngle());
+        float shaft_deg   = radiansToDegrees(motor.shaft_angle);
+        float err = abs(shaft_deg - encoder_deg);
+        if (err > 180.0f) err = 360.0f - err;
+        if (DEBUG_MOTOR) {
+            Serial.printf("Dir:%s Zero:%.1f° Enc:%.1f° FOC:%.1f° Err:%.1f°\n",
+                motor.sensor_direction == Direction::CW ? "CW" : "CCW",
+                radiansToDegrees(motor.zero_electric_angle),
+                encoder_deg, shaft_deg, err);
+        }
+    }
+
+    motor.disable();
+    return (foc_result == 1);
 }
 
 bool MotorController::runManualCalibration() {
@@ -733,13 +943,95 @@ bool MotorController::runManualCalibration() {
 }
 
 bool MotorController::runCalibration() {
-    // Use manual calibration instead of SimpleFOC's automatic calibration
-    // This is necessary because SimpleFOC's auto-calibration doesn't work
-    // reliably with MT6701 I2C sensors (too slow for movement detection)
-
-    // runManualCalibration() now includes diagnostic test + calibration
+#if USE_CALIBRATED_SENSOR
+    // CalibratedSensor path: open-loop fwd+rev scan builds per-position LUT
+    // that corrects MT6701 INL (±1.0° typical). Adds ~10s to calibration.
+    return runCalibratedSensorCalibration();
+#else
     return runManualCalibration();
+#endif
 }
+
+#if USE_CALIBRATED_SENSOR
+bool MotorController::runCalibratedSensorCalibration() {
+    // Verify encoder is readable before starting the lengthy scan
+    encoder.update();
+    float test_angle = encoder.getSensorAngle();
+    if (isnan(test_angle) || isinf(test_angle)) {
+        Serial.println("[CAL] ERROR: Encoder not readable");
+        return false;
+    }
+    if (DEBUG_MOTOR) {
+        Serial.print("  Pos: ");
+        Serial.print(radiansToDegrees(test_angle), 1);
+        Serial.println("°");
+    }
+
+    // calibrate() calls motor.monitor_port->println() unconditionally — must not be null
+    Print* saved_monitor = motor.monitor_port;
+    motor.monitor_port = &Serial;
+
+    // Enable driver so setPhaseVoltage() can drive the phases during the scan
+    motor.enable();
+
+    // 3.0V: ensures motor steps cleanly through cogging detents (6.3Ω → 0.48A).
+    // 1.5V was on the cogging boundary, giving noisy/inconsistent LUT corrections.
+    calibratedSensor.voltage_calibration = 3.0f;
+
+    // Runs internally:
+    //   1. Links raw encoder, calls initFOC() to find direction + zero_electric_angle
+    //   2. Open-loop fwd scan (35 positions for 7 PP), then reverse scan
+    //   3. FIR-filters error to separate eccentricity from cogging
+    //   4. Builds 200-entry correction LUT, re-links calibrated sensor
+    //   5. Prints LUT to serial (float array for optional hard-coding)
+    // settle_time_ms=50: more time for motor to fully settle at each cogging detent
+    calibratedSensor.calibrate(motor, 50);
+
+    motor.disable();
+    motor.monitor_port = saved_monitor;
+
+    // Sanity check: zero_electric_angle should have been set by the internal initFOC
+    if (motor.zero_electric_angle == -12345.0f) {
+        Serial.println("[CAL] ERROR: Calibration scan failed (zero_electric_angle not set)");
+        return false;
+    }
+
+    // Calibration scan moves motor through 2+ full revolutions — reset rotation tracking
+    encoder.resetRotationTracking();
+
+    // Seed CalibratedSensor's Sensor base class state (full_rotations, angle_prev).
+    // calibrate() only called initFOC() on the raw sensor (temporarily linked), so the
+    // CalibratedSensor's Sensor state was never initialized. update() seeds it.
+    // (init() is protected; Sensor::init() just calls update() twice)
+    calibratedSensor.update();
+    calibratedSensor.update();
+
+    // Call initFOC with no args — direction and zero_electric_angle are already set by calibrate(),
+    // so alignSensor() prints "Skip dir calib." / "Skip offset calib." and skips the rotation.
+    // This call just initializes the CalibratedSensor's internal state via sensor->update().
+    int foc_result = motor.initFOC();
+
+    if (foc_result == 1) {
+        for (int i = 0; i < 20; i++) {
+            motor.loopFOC();
+            delay(1);
+        }
+        float encoder_deg = radiansToDegrees(encoder.getSensorAngle());
+        float shaft_deg   = radiansToDegrees(motor.shaft_angle);
+        float err = abs(shaft_deg - encoder_deg);
+        if (err > 180.0f) err = 360.0f - err;
+        if (DEBUG_MOTOR) {
+            Serial.printf("Dir:%s Zero:%.1f° Enc:%.1f° FOC:%.1f° Err:%.1f°\n",
+                motor.sensor_direction == Direction::CW ? "CW" : "CCW",
+                radiansToDegrees(motor.zero_electric_angle),
+                encoder_deg, shaft_deg, err);
+        }
+    }
+
+    motor.disable();
+    return (foc_result == 1);
+}
+#endif
 
 void MotorController::enable() {
     if (!motor_calibrated) {
@@ -759,6 +1051,12 @@ void MotorController::enable() {
     target_position_deg = getPosition();
     ramp_position_deg = target_position_deg;
     last_ramp_time_us = micros();
+    torque_integral = 0.0f;
+    vel_pos_prev_deg = target_position_deg;  // current position = target at enable time
+    vel_window_start_us = micros();
+    torque_vel_deg_s = 0.0f;
+    lpf_vel_deg_s = 0.0f;
+    at_target_settle_ms = 0;
 
     // Auto-start encoder streaming so test sequences get logged
     if (!stream_enabled) {
@@ -842,8 +1140,58 @@ void MotorController::moveToPosition(float position_deg) {
 
     // Store target position (absolute coordinates 0-360°)
     target_position_deg = position_deg;
+    torque_integral = 0.0f;  // Reset integral on new target to prevent windup from previous move
+    at_target_settle_ms = 0;  // Reset settling timer - new target means not settled
 
     // Debug output removed - test harness already shows move commands
+}
+
+void MotorController::startSweep(float speed_deg_s) {
+    if (!motor_enabled) {
+        Serial.println("[SWEEP] Motor not enabled — enable first");
+        return;
+    }
+    // Moving-target position sweep: advance the position setpoint at speed_deg_s.
+    // The existing position PID tracks the moving target and handles cogging automatically —
+    // using up to 6V transiently to push through detents, so no stalling.
+    // Seed the target at the current encoder position to avoid a jump at sweep start.
+    sweep_speed_deg_s   = speed_deg_s;
+    target_position_deg = encoder.getDegrees();
+    ramp_position_deg   = target_position_deg;
+    sweep_prev_enc_deg  = target_position_deg;               // position at last velocity measurement
+    sweep_vel_t_ms      = millis();                           // timestamp for 50ms velocity sampling
+    sweep_vel_lpf       = radiansToDegrees(motor.shaft_velocity); // seed from last valid reading
+    sweep_vel_integral  = 0.0f;                              // fresh integral
+    sweep_active        = true;
+
+    // Zero the velocity integral during sweep: prevents the limit cycle where I_vel
+    // winds up at cogging detents (motor appears stationary → integral charges →
+    // snap-through → overshoot → oscillation at ±200 deg/s). Without integral,
+    // proportional output alone drives the motor — no windup, no snap. Combined with
+    // cogging LUT feedforward, the motor tracks the setpoint with small position errors.
+    // I_vel is restored in stopSweep() so position holding still has integral action.
+    saved_i_vel = motor.PID_velocity.I;
+    motor.PID_velocity.I = 0.0f;
+    // Note: PIDController::integral_prev is protected; setting I=0 is sufficient —
+    // any accumulated integral no longer charges and decays through output ramp.
+
+    Serial.print("$SWEEP_START,");
+    Serial.println(millis());
+}
+
+void MotorController::stopSweep() {
+    sweep_active = false;
+    // Restore velocity integral so position holding has full PID authority.
+    motor.PID_velocity.I = saved_i_vel;
+
+    // Hold current position — target_position_deg is already near where the motor is
+    // (setpoint was advancing at sweep speed, motor was tracking it).
+    // Stop advancing; PID will settle at current encoder position.
+    float current_deg   = encoder.getDegrees();
+    target_position_deg = current_deg;
+    ramp_position_deg   = current_deg;
+    Serial.print("$SWEEP_END,");
+    Serial.println(millis());
 }
 
 void MotorController::setVelocity(float velocity_deg_s) {
@@ -1039,44 +1387,45 @@ bool MotorController::isAtTarget() {
     // SimpleFOC's loopFOC() already updated the sensor and shaft_angle
 
     float current_position_rad = motor.shaft_angle;
-    float current_velocity_rad_s = motor.shaft_velocity;
 
     // Normalize current position to 0-360° range (handles negative angles from CCW)
     float current_position_deg = radiansToDegrees(current_position_rad);
     while (current_position_deg < 0) current_position_deg += 360.0f;
     while (current_position_deg >= 360.0f) current_position_deg -= 360.0f;
 
-    float velocity_deg_s = abs(radiansToDegrees(current_velocity_rad_s));
-
     // Calculate position error with wraparound handling
-    // Both angles now guaranteed to be in 0-360° range
     float position_error_deg = abs(current_position_deg - target_position_deg);
+    if (position_error_deg > 180.0f) position_error_deg = 360.0f - position_error_deg;
 
-    // Handle wraparound (e.g., target=5°, current=355° → error=10°, not 350°)
-    if (position_error_deg > 180.0f) {
-        position_error_deg = 360.0f - position_error_deg;
+    // Settling timer: motor must stay within pos_tolerance_deg for SETTLING_TIME_MS.
+    // This prevents AT_TARGET firing while the motor passes through the zone at speed.
+    // A motor at 5°/s crosses a 1° zone in 200ms — exactly the settling window — so
+    // any motor still moving at approach speed will NOT satisfy the 200ms requirement.
+    bool in_zone = (position_error_deg < pos_tolerance_deg);
+
+    if (in_zone) {
+        if (at_target_settle_ms == 0) {
+            at_target_settle_ms = millis();
+        }
+        bool settled = (millis() - at_target_settle_ms >= SETTLING_TIME_MS);
+
+        if (settled && !at_target_printed) {
+            at_target_printed = true;
+            Serial.print("[AT_TARGET] Current: ");
+            Serial.print(current_position_deg, 2);
+            Serial.print("°, Target: ");
+            Serial.print(target_position_deg, 2);
+            Serial.print("°, Error: ");
+            Serial.print(position_error_deg, 2);
+            Serial.print("°, Vel: ");
+            Serial.print(lpf_vel_deg_s, 2);
+            Serial.println("°/s");
+        }
+        return settled;
+    } else {
+        at_target_settle_ms = 0;
+        return false;
     }
-
-    // Target reached if position error is small and velocity is low
-    // Use runtime-tunable thresholds (defaults from config.h, overrideable via 'set' command)
-    bool at_target = (position_error_deg < pos_tolerance_deg) &&
-                     (velocity_deg_s < vel_threshold_deg_s);
-
-    // Print AT_TARGET only ONCE per move command (not every second)
-    if (DEBUG_MOTOR && at_target && !at_target_printed) {
-        at_target_printed = true;  // Only print once until next move command
-        Serial.print("[AT_TARGET] Current: ");
-        Serial.print(current_position_deg, 2);
-        Serial.print("°, Target: ");
-        Serial.print(target_position_deg, 2);
-        Serial.print("°, Error: ");
-        Serial.print(position_error_deg, 2);
-        Serial.print("°, Vel: ");
-        Serial.print(velocity_deg_s, 2);
-        Serial.println("°/s");
-    }
-
-    return at_target;
 }
 
 uint8_t MotorController::getState() {
@@ -1130,6 +1479,14 @@ void MotorController::update() {
     last_ramp_time_us = now_us;
     if (dt_s > 0.1f) dt_s = 0.1f;  // Clamp to prevent jumps after pauses
 
+    // Moving-target sweep: advance position setpoint at sweep_speed_deg_s, let PID track it.
+    // Falls through to the ramp + PID code below, which tracks the updated target normally.
+    if (sweep_active) {
+        target_position_deg += sweep_speed_deg_s * dt_s;
+        target_position_deg = fmod(target_position_deg, 360.0f);
+        if (target_position_deg < 0) target_position_deg += 360.0f;
+    }
+
     if (dt_s > 0.0f) {
         float ramp_error = target_position_deg - ramp_position_deg;
         if (ramp_error > 180.0f) ramp_error -= 360.0f;
@@ -1150,6 +1507,22 @@ void MotorController::update() {
         if (ramp_position_deg < 0) ramp_position_deg += 360.0f;
     }
 
+    // During sweep: keep ramp within 15° of actual encoder for diagnostic use.
+    // Note: with velocity control, this clamp does NOT limit the vq directly —
+    // the vq comes from the velocity PI controller, not from ramp position error.
+    // This clamp simply prevents target_position_deg from racing unboundedly ahead.
+    if (sweep_active) {
+        float actual_enc_deg = encoder.getDegrees();
+        const float SWEEP_RAMP_LAG_MAX = 15.0f;
+        float lag = ramp_position_deg - actual_enc_deg;
+        if (lag >  180.0f) lag -= 360.0f;
+        if (lag < -180.0f) lag += 360.0f;
+        if (lag > SWEEP_RAMP_LAG_MAX) {
+            ramp_position_deg = fmod(actual_enc_deg + SWEEP_RAMP_LAG_MAX, 360.0f);
+            if (ramp_position_deg < 0.0f) ramp_position_deg += 360.0f;
+        }
+    }
+
     // Target calculation using ramped setpoint (not the final target directly).
     // The PID only ever sees small errors, staying in its stable/linear region.
     float target_rad = degreesToRadians(ramp_position_deg);
@@ -1166,7 +1539,162 @@ void MotorController::update() {
     // Express target in continuous space so PID doesn't see jumps at boundary
     float normalized_target_rad = motor.shaft_angle + error_rad;
 
-    motor.move(normalized_target_rad);
+#if USE_TORQUE_MODE
+    // Manual PD with ramp: voltage = Kp × ramp_error + integral − Kd × velocity
+    //
+    // Kp tracks the RAMP position (not final target). The ramp advances at SLEW_RATE_DEG_S
+    // with proportional deceleration near target. This limits approach velocity to ~120°/s,
+    // preventing the high-velocity overshoot that caused oscillation when using final target directly.
+    //
+    // Integral uses the FINAL target error to overcome friction once motor is near position.
+    // Integral gate (20°/s) prevents windup during transit.
+    float current_deg = fmod(radiansToDegrees(motor.shaft_angle), 360.0f);
+    if (current_deg < 0) current_deg += 360.0f;
+
+    // Ramp error: for Kp (limits approach velocity via ramp profile)
+    float ramp_error_deg = ramp_position_deg - current_deg;
+    if (ramp_error_deg > 180.0f)  ramp_error_deg -= 360.0f;
+    if (ramp_error_deg < -180.0f) ramp_error_deg += 360.0f;
+    float ramp_error_rad = degreesToRadians(ramp_error_deg);
+
+    // Final target error: for integral only (overcomes friction at final position)
+    float direct_error_deg = target_position_deg - current_deg;
+    if (direct_error_deg > 180.0f)  direct_error_deg -= 360.0f;
+    if (direct_error_deg < -180.0f) direct_error_deg += 360.0f;
+    float direct_error_rad = degreesToRadians(direct_error_deg);
+
+    // Actual velocity from position deltas between update() calls.
+    // motor.shaft_velocity (SimpleFOC LPF output) shows near-zero at any loop rate due to
+    // double-LPF application; this per-call delta is correct at any call frequency.
+    float vel_delta_deg = current_deg - vel_pos_prev_deg;
+    if (vel_delta_deg > 180.0f) vel_delta_deg -= 360.0f;   // wraparound
+    if (vel_delta_deg < -180.0f) vel_delta_deg += 360.0f;
+    float actual_vel_deg_s = (dt_s > 0.0f) ? (vel_delta_deg / dt_s) : 0.0f;
+    vel_pos_prev_deg = current_deg;
+    lpf_vel_deg_s = actual_vel_deg_s;  // cache for status/stream output
+
+    // Integral anti-windup: reset when motor crosses target at high velocity.
+    // Prevents cogging limit cycle: integral builds at cogging detent → snaps through target
+    // → overshoots → integral reverses → snaps back → repeats indefinitely.
+    // Only reset when fast-moving (>20°/s): at low velocity, integral must stay to hold against friction.
+    const float INTEGRAL_VEL_THRESHOLD_DEG_S = 20.0f;
+    if (torque_integral * direct_error_rad < 0 && fabsf(actual_vel_deg_s) > INTEGRAL_VEL_THRESHOLD_DEG_S) {
+        torque_integral = 0.0f;  // Motor crossed target while moving fast: clear windup
+    }
+
+    // Integral: accumulate only when motor is truly slow (gate uses actual velocity).
+    // Uses real dt_s so rate is loop-frequency-independent (works at 100Hz test or 1kHz main).
+    // Reset on new target (setPosition) to avoid windup from previous move.
+    if (fabsf(actual_vel_deg_s) < INTEGRAL_VEL_THRESHOLD_DEG_S) {
+        torque_integral += TORQUE_KI * direct_error_rad * dt_s;
+        torque_integral = constrain(torque_integral, -TORQUE_I_CAP, TORQUE_I_CAP);
+    }
+
+    float actual_vel_rad_s = degreesToRadians(actual_vel_deg_s);
+    float voltage_cmd = TORQUE_KP * ramp_error_rad + torque_integral - TORQUE_KD * actual_vel_rad_s;
+    voltage_cmd = constrain(voltage_cmd, -VOLTAGE_LIMIT_GIMBAL, VOLTAGE_LIMIT_GIMBAL);
+    motor.move(voltage_cmd);
+#else
+    if (sweep_active) {
+        // During sweep: bypass the cascade PID and use direct proportional torque + LUT.
+        //
+        // Root cause of cascade failure: P_angle=20 × error_rad → vel_cmd → PID_vel → Vq.
+        // When error builds up at a cogging detent, the cascade generates a huge vel_cmd
+        // that causes ±200°/s snap-through oscillation. Direct Vq is bounded by KP × lag.
+        //
+        // Velocity PI control for sweep.
+        //
+        // WHY: position ramp tracking causes stall-and-snap — when the motor stalls at a cogging
+        // detent, the ramp races 15° ahead, then breaks free with a violent 200+°/s snap.
+        // Velocity control avoids this: the integral builds up slowly during stall (adaptive
+        // torque until the detent breaks), then drains immediately when velocity >> target
+        // (natural snap damping without needing noisy velocity feedback for braking).
+        //
+        // During stall: vq = LUT + integral (builds at KI × vel_error = ~0.8V/s at 1°/s target)
+        // → breaks through within ~1.5s → passes worst_2s threshold.
+        // During snap-through: vel >> target → vel_error large negative → integral drains in ~ms
+        // → vq drops to 0 + LUT → natural deceleration via back-EMF and cogging.
+        float actual_enc = encoder.getDegrees();
+
+        // Velocity measured every 50ms from encoder delta.
+        // motor.shaft_velocity is only updated inside motor.move(), which we bypass in sweep.
+        // At 10kHz loop rate, per-loop delta/dt is pure noise (one encoder tick = 220 deg/s).
+        // Sampling every 50ms: alpha = dt/tau = 0.05/0.15 = 0.33 → reasonable LPF response.
+        unsigned long now_vel_ms = millis();
+        unsigned long dt_vel_ms  = now_vel_ms - sweep_vel_t_ms;
+        if (dt_vel_ms >= 50) {
+            float enc_delta = actual_enc - sweep_prev_enc_deg;
+            if (enc_delta >  180.0f) enc_delta -= 360.0f;
+            if (enc_delta < -180.0f) enc_delta += 360.0f;
+            float dt_vel_s = dt_vel_ms / 1000.0f;
+            float raw_vel  = enc_delta / dt_vel_s;
+            float alpha    = fminf(dt_vel_s / SWEEP_VEL_TAU, 1.0f);
+            sweep_vel_lpf += alpha * (raw_vel - sweep_vel_lpf);
+            sweep_prev_enc_deg = actual_enc;
+            sweep_vel_t_ms     = now_vel_ms;
+        }
+        float actual_vel_deg_s = sweep_vel_lpf;
+        lpf_vel_deg_s = actual_vel_deg_s;  // publish to stream/status
+
+        // Periodic diagnostic
+        static unsigned long last_sweep_dbg_ms = 0;
+        unsigned long now_ms = millis();
+        if (now_ms - last_sweep_dbg_ms >= 5000) {
+            last_sweep_dbg_ms = now_ms;
+            float shaft_deg = radiansToDegrees(motor.shaft_angle);
+            float cur_lag = ramp_position_deg - actual_enc;
+            if (cur_lag >  180.0f) cur_lag -= 360.0f;
+            if (cur_lag < -180.0f) cur_lag += 360.0f;
+            Serial.printf("[SWEEP_DBG] t=%lums ramp=%.2f enc=%.2f shaft=%.2f lag=%.2f vel=%.1f integ=%.3f\n",
+                now_ms, ramp_position_deg, actual_enc, shaft_deg, cur_lag,
+                actual_vel_deg_s, sweep_vel_integral);
+        }
+
+        // Velocity PI controller.
+        float vel_error = sweep_speed_deg_s - actual_vel_deg_s;
+
+        // Integral: accumulates during stall to build torque; drains rapidly after snap-through.
+        // Forward-only clamp [0, I_CAP]: never drive backward via integral.
+        sweep_vel_integral += SWEEP_VEL_KI * vel_error * dt_s;
+        sweep_vel_integral = constrain(sweep_vel_integral, 0.0f, SWEEP_VEL_I_CAP);
+
+        // Proportional: very gentle (0.01 V per deg/s error).
+        // Main torque comes from integral + LUT feedforward.
+        float prop_vq = SWEEP_VEL_KP * vel_error;
+        if (prop_vq < 0.0f) prop_vq = 0.0f;  // no backward drive from proportional
+
+        // LUT cogging feedforward: counteract backward-pulling cogging at slow speeds.
+        // Disabled when fast (|vel| > 10°/s): at snap-through speed, cogging is irrelevant
+        // and applying it would sustain the high speed even with zero integral.
+        float vq = prop_vq + sweep_vel_integral;
+        if (cog_lut_loaded && fabsf(actual_vel_deg_s) < 10.0f) {
+            float pos_deg = fmod(actual_enc, 360.0f);
+            if (pos_deg < 0.0f) pos_deg += 360.0f;
+            int idx = ((int)pos_deg) % COG_LUT_SIZE;
+            float ff = cog_lut[idx];
+            if (ff > 0.0f) vq += ff;  // only positive: counteracts backward cogging
+        }
+
+        // Final clamp: never drive backward. Integral is already ≥ 0; combined vq ≥ 0.
+        if (vq < 0.0f) vq = 0.0f;
+        motor.voltage.q = constrain(vq, 0.0f, VOLTAGE_LIMIT_GIMBAL);
+        motor.voltage.d = 0.0f;
+    } else {
+        // Normal angle mode: pass ramped target to SimpleFOC cascaded PID
+        lpf_vel_deg_s = radiansToDegrees(motor.LPF_velocity(motor.shaft_velocity));
+        motor.move(normalized_target_rad);
+
+        // Anti-cogging feedforward: inject stored cogging force at current position.
+        if (cog_lut_loaded) {
+            float pos_deg = fmod(encoder.getDegrees(), 360.0f);
+            if (pos_deg < 0.0f) pos_deg += 360.0f;
+            int idx = ((int)pos_deg) % COG_LUT_SIZE;
+            motor.voltage.q += cog_lut[idx];
+        } else if (cog_ff_amp > 0.0f) {
+            motor.voltage.q += cog_ff_amp * sinf(4.0f * motor.electrical_angle + cog_ff_phase);
+        }
+    }
+#endif
 
     // Emit encoder stream data (rate-limited, no-op when streaming is off).
     // Called here so test loops that call update() also get stream data,
@@ -1272,13 +1800,16 @@ void MotorController::emitStreamLine() {
     if (now_us - last_stream_time_us < stream_interval_us) return;
     last_stream_time_us = now_us;
 
-    // Use already-cached values from this loop iteration (no extra I2C read)
-    float pos_deg = getPosition();
+    // Use already-cached values from this loop iteration (no extra I2C read).
+    // During sweep, motor.move() is not called so shaft_angle is stale; use
+    // encoder.getDegrees() directly so sweep_validation sees real motor motion.
+    float pos_deg = sweep_active ? encoder.getDegrees() : getPosition();
     float vel_deg_s = getCurrentVelocityDegPerSec();
     float target_deg = target_position_deg;
 
-    // Tagged CSV: $ENC,timestamp_ms,position_deg,velocity_deg_s,target_deg
-    // Using Serial.print chain for minimal memory allocation on ESP32
+    // Tagged CSV: $ENC,timestamp_ms,position_deg,velocity_deg_s,target_deg,voltage_q,elec_angle_deg,ramp_deg
+    // Fields 5+ support anti-cogging feedforward tuning and sweep diagnostics.
+    // Python/downstream parsers should treat fields beyond index 4 as optional.
     Serial.print("$ENC,");
     Serial.print(millis());
     Serial.print(',');
@@ -1286,7 +1817,13 @@ void MotorController::emitStreamLine() {
     Serial.print(',');
     Serial.print(vel_deg_s, 2);
     Serial.print(',');
-    Serial.println(target_deg, 2);
+    Serial.print(target_deg, 2);
+    Serial.print(',');
+    Serial.print(motor.voltage.q, 3);
+    Serial.print(',');
+    Serial.print(radiansToDegrees(motor.electrical_angle), 1);
+    Serial.print(',');
+    Serial.println(ramp_position_deg, 2);
 }
 
 void MotorController::emitScanStart() {
@@ -1335,4 +1872,67 @@ void MotorController::checkIdleDisable() {
         disable();
         auto_enabled = false;
     }
+}
+
+//=============================================================================
+// DENSE COGGING LUT
+//=============================================================================
+
+void MotorController::setCogLutEntry(int idx, float vq) {
+    if (idx >= 0 && idx < COG_LUT_SIZE) {
+        cog_lut[idx] = vq;
+    }
+}
+
+void MotorController::finalizeCogLut() {
+    cog_lut_loaded = true;
+
+    // Print summary so the operator can verify the LUT looks sane
+    float vq_min = cog_lut[0], vq_max = cog_lut[0], vq_sum = 0.0f;
+    for (int i = 0; i < COG_LUT_SIZE; i++) {
+        if (cog_lut[i] < vq_min) vq_min = cog_lut[i];
+        if (cog_lut[i] > vq_max) vq_max = cog_lut[i];
+        vq_sum += cog_lut[i];
+    }
+    Serial.printf("[COG_LUT] Loaded %d entries (1° steps). Vq: min=%.4fV  max=%.4fV  mean=%.4fV  — feedforward active\n",
+        COG_LUT_SIZE, vq_min, vq_max, vq_sum / COG_LUT_SIZE);
+
+    // Persist to NVS so LUT survives power cycles
+    Preferences prefs;
+    prefs.begin(NVS_NS, false);
+    prefs.putBytes(NVS_COG_LUT, cog_lut, sizeof(cog_lut));
+    prefs.putBool(NVS_COG_OK, true);
+    prefs.end();
+    Serial.println("[COG_LUT] Saved to NVS — will auto-load on next boot");
+}
+
+void MotorController::clearCogLut() {
+    cog_lut_loaded = false;
+    memset(cog_lut, 0, sizeof(cog_lut));
+    // Erase from NVS so it does not reload after reboot
+    Preferences prefs;
+    prefs.begin(NVS_NS, false);
+    prefs.putBool(NVS_COG_OK, false);
+    prefs.remove(NVS_COG_LUT);
+    prefs.end();
+    Serial.println("[COG_LUT] Cleared — feedforward disabled, NVS erased");
+}
+
+void MotorController::loadCogLutFromNVS() {
+    Preferences prefs;
+    prefs.begin(NVS_NS, true);  // read-only
+    bool valid = prefs.getBool(NVS_COG_OK, false);
+    if (valid) {
+        size_t loaded = prefs.getBytes(NVS_COG_LUT, cog_lut, sizeof(cog_lut));
+        if (loaded == sizeof(cog_lut)) {
+            cog_lut_loaded = true;
+            Serial.printf("[COG_LUT] Restored from NVS (%u bytes) — feedforward active\n", (unsigned)loaded);
+        } else {
+            Serial.printf("[COG_LUT] NVS blob size mismatch (%u vs %u) — skipping\n",
+                (unsigned)loaded, (unsigned)sizeof(cog_lut));
+        }
+    } else {
+        Serial.println("[COG_LUT] No saved LUT in NVS — run cogmap_dense to generate one");
+    }
+    prefs.end();
 }

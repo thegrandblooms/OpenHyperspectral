@@ -69,10 +69,14 @@ void printHelp() {
     Serial.println("  i/info         System info (chip, pins, config)");
     Serial.println("  scan           I2C bus scan");
     Serial.println("  debug <0/1>    Status output off/on");
+    Serial.println("Scan:");
+    Serial.println("  sync           Clock sync handshake → $SYNC,<ms>");
+    Serial.println("  sweep <deg/s>  Moving-target position sweep → $SWEEP_START,<ms>");
+    Serial.println("  sweep_stop     Stop sweep, hold position → $SWEEP_END,<ms>");
     Serial.println("Tests:");
     Serial.println("  test/diag      Full diagnostic (HW+cal+sensor+move)");
     Serial.println("  motor_test     Quick +30 move");
-    Serial.println("  sweep          5-position accuracy test");
+    Serial.println("  position_sweep 5-position accuracy test");
     Serial.println("  phase_test     Driver phase verification");
     Serial.println("  align          Motor holding strength test");
     Serial.println("  encoder_test   Interactive encoder reading");
@@ -317,9 +321,10 @@ void runPositionSweepTest(MotorController& mc) {
         unsigned long t0 = millis();
         bool settled = false;
 
-        while (millis() - t0 < 5000) {
+        while (millis() - t0 < 15000) {
             mc.update();
-            delay(10);
+            // No delay — run at full loop rate (~1kHz limited by I2C) so velocity
+            // measurement is accurate and Kd (if enabled) provides meaningful damping.
             if (mc.isAtTarget()) { settled = true; break; }
         }
 
@@ -449,52 +454,25 @@ void runSystemDiagnostic(MotorController& mc) {
     }
 
     //=========================================================================
-    // T4: Open-Loop Test (verify driver/wiring/power)
+    // T4: Movement Test (closed-loop +30°, verifies driver/wiring/power)
     //=========================================================================
-    Serial.println("[T4] Open-Loop Test... ");
+    // Previously used velocity_openloop, which caused I2C lockup: the simultaneous
+    // 3-phase PWM creates electrical noise on shared I2C lines, and Wire.requestFrom()
+    // has no timeout — hangs indefinitely. Closed-loop move proves the same things
+    // (driver outputs, wiring, phase order, power) without touching open-loop mode.
+    Serial.print("[T4] Movement Test... ");
 
     encoder.update();
     float start_enc = encoder.getDegrees();
+    float t4_target = fmod(start_enc + 30.0f, 360.0f);
+    Serial.printf("+30°: %.1f° → %.1f°\n", start_enc, t4_target);
 
-    // Save velocity limit
-    float saved_vel_limit = motor.velocity_limit;
-
-    // Use velocity_openloop (not angle_openloop) so the field rotates continuously
-    // at a steady rate for the full 2s test. angle_openloop stops advancing once the
-    // internal shaft_angle reaches the target (~260ms for 30°), leaving the motor
-    // with only a static field for the remaining 1.7s — not enough time to move.
-    motor.controller = MotionControlType::velocity_openloop;
-    float ol_velocity = 1.0;  // rad/s (~57°/s) - moderate for gimbal motor
-
-    // Log pre-test state
-    Serial.printf("  Setup: Enc=%.1f° shaft=%.1f° OL_vel=%.1frad/s Vdrive=%.1fV\n",
-        start_enc, radiansToDegrees(motor.shaft_angle),
-        ol_velocity, motor.voltage_limit);
-
-    // CRITICAL: Do NOT call loopFOC() during open-loop movement!
-    // loopFOC() overwrites shaft_angle with the sensor reading each iteration,
-    // preventing the open-loop controller from freely advancing the field angle.
+    mc.moveToPosition(t4_target);
     unsigned long t4_start_ms = millis();
-    unsigned long last_sample_ms = t4_start_ms;
-    int t4_loops = 0;
-
-    while (millis() - t4_start_ms < 2000) {  // 2 second test window
-        motor.move(ol_velocity);
-        t4_loops++;
-
-        // Log progress every 500ms
-        unsigned long now = millis();
-        if (now - last_sample_ms >= 500) {
-            encoder.update();
-            float progress = encoder.getDegrees() - start_enc;
-            if (progress < -180) progress += 360;
-            if (progress > 180) progress -= 360;
-            Serial.printf("  @%lums: moved %.1f° (%d loops)\n",
-                now - t4_start_ms, progress, t4_loops);
-            last_sample_ms = now;
-        }
-
+    while (millis() - t4_start_ms < 5000) {
+        mc.update();
         delay(1);
+        if (mc.isAtTarget()) break;
     }
 
     encoder.update();
@@ -502,29 +480,13 @@ void runSystemDiagnostic(MotorController& mc) {
     if (t4_move < -180) t4_move += 360;
     if (t4_move > 180) t4_move -= 360;
 
-    // Restore velocity limit and control mode
-    motor.velocity_limit = saved_vel_limit;
-    motor.controller = MotionControlType::angle;
-
     if (abs(t4_move) > 10) {
         t4_pass = true;
-        Serial.printf("OK (moved %.1f° in %d loops)\n", t4_move, t4_loops);
+        Serial.printf("  OK (moved %.1f°)\n", t4_move);
     } else {
-        Serial.printf("FAIL (moved %.1f° in %d loops)\n", t4_move, t4_loops);
+        Serial.printf("  FAIL (moved %.1f°)\n", t4_move);
         mc.disable();
         return;
-    }
-
-    //=========================================================================
-    // Settle after T4 open-loop
-    //=========================================================================
-    // T4's velocity_openloop leaves the motor spinning with shaft_angle desynced.
-    mc.disable();
-    delay(500);  // Coast to a stop
-    mc.enable();  // Re-syncs shaft_angle from sensor
-    for (int i = 0; i < 100; i++) {
-        mc.update();
-        delay(1);
     }
 
     //=========================================================================
@@ -534,15 +496,30 @@ void runSystemDiagnostic(MotorController& mc) {
     // AND maps encoder/field quality around the full rotation.
     // Magnet offset or tilt shows as oscillation concentrated in one arc.
     Serial.println("[T5] Position Control + Field Uniformity (360° sweep)");
+
+    // Pre-position to 0° before the loop — T4 may leave motor far from 0°, and the
+    // first loop step would be a large move that can't settle in the per-step timeout.
+    Serial.print("  Pre-positioning to 0°...");
+    mc.moveToPosition(0.0f);
+    {
+        unsigned long pre_t = millis();
+        while (millis() - pre_t < 10000) {
+            mc.update();
+            delay(1);
+            if (mc.isAtTarget()) break;
+        }
+    }
+    Serial.println(" done.");
+
     Serial.println("  Pos°    Field  RawNoise  Osc°   Err°   Status");
 
     for (int step = 0; step < 24; step++) {
         float t5_target = fmod(step * 15.0f, 360.0f);
         mc.moveToPosition(t5_target);
 
-        // Wait for arrival (up to 1.5s)
+        // Wait for arrival (up to 8s — some positions need 2-3s to escape cogging detents)
         unsigned long move_t = millis();
-        while (millis() - move_t < 1500) {
+        while (millis() - move_t < 8000) {
             mc.update();
             delay(1);
             if (mc.isAtTarget()) break;

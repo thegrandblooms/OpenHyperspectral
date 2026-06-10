@@ -7,6 +7,10 @@
 #include "config.h"
 #include "commands.h"
 
+#if USE_CALIBRATED_SENSOR
+#include "CalibratedSensor.h"  // local copy from Arduino-FOC-drivers v1.0.9
+#endif
+
 //=============================================================================
 // MOTOR CONTROL MODULE (SimpleFOC Integration with MT6701 Encoder)
 //=============================================================================
@@ -188,13 +192,18 @@ public:
 
     // Setup
     void begin();
-    bool calibrate();  // Runs motor.initFOC()
+    bool calibrate();          // Load saved calibration from NVS, or run thorough cal + save
+    bool recalibrate();        // Clear NVS and run thorough calibration from scratch
+    void clearCalibrationNVS(); // Erase stored calibration (forces fresh cal next boot)
 
     // Control
     void enable();
     void disable();
     void stop();  // Emergency stop
     void moveToPosition(float absolute_deg);  // Move to absolute position (0-360°)
+    void startSweep(float speed_deg_s);  // Moving-target position sweep at given deg/s
+    void stopSweep();                    // Stop sweep, hold current position
+    bool isSweepActive() const { return sweep_active; }
     void update();  // Call in loop - runs motor.loopFOC() + motor.move()
 
     // Home positioning
@@ -256,6 +265,19 @@ public:
     void setAutoEnabled(bool enabled) { auto_enabled = enabled; }
     bool isAutoEnabled() { return auto_enabled; }
 
+    // Anti-cogging feedforward (runtime-tunable)
+    void  setCogFFAmp(float amp)     { cog_ff_amp   = amp;   }
+    void  setCogFFPhase(float phase) { cog_ff_phase = phase; }
+    float getCogFFAmp()   const { return cog_ff_amp;   }
+    float getCogFFPhase() const { return cog_ff_phase; }
+
+    // Dense cogging LUT (populated by 'cogmap_dense' firmware command)
+    void setCogLutEntry(int idx, float vq);   // Store one 1°-step measurement
+    void finalizeCogLut();                    // Mark LUT ready, save to NVS, print summary
+    void clearCogLut();                       // Disable, zero, and erase LUT from NVS
+    bool isCogLutLoaded() const { return cog_lut_loaded; }
+    void loadCogLutFromNVS();                 // Try to restore LUT from NVS on boot
+
     // Direct motor access for tests
     BLDCMotor& getMotor() { return motor; }
     MT6701Sensor& getEncoder() { return encoder; }
@@ -265,6 +287,9 @@ private:
     BLDCMotor motor;
     BLDCDriver3PWM driver;
     MT6701Sensor encoder;
+#if USE_CALIBRATED_SENSOR
+    CalibratedSensor calibratedSensor;  // wraps encoder; must be declared after encoder
+#endif
 
     // State
     bool motor_enabled;
@@ -277,7 +302,7 @@ private:
     bool move_timeout_printed;          // Flag to only print timeout once per move
     bool at_target_printed;             // Flag to only print AT_TARGET once per move
     float last_target_for_timeout;      // Track target to detect new moves
-    static constexpr unsigned long MOVE_TIMEOUT_MS = 3000;   // 3 second hard timeout
+    static constexpr unsigned long MOVE_TIMEOUT_MS = 15000;  // 15 second hard timeout — position 2 cogging-snap + return takes ~10-11s total
     static constexpr unsigned long SETTLING_TIME_MS = 200;   // 200ms settling window
     static constexpr float SETTLING_ERROR_DEG = 1.0f;        // Consider "close" if < 1°
     static constexpr float SETTLING_VEL_DEG_S = 5.0f;        // And velocity < 5°/s
@@ -285,13 +310,36 @@ private:
     // Calibration helpers
     bool runCalibration();
     bool runManualCalibration();
+    bool runThoroughCalibration(int n_runs = 5);  // Run N alignments, average zero_electric_angle
+    bool loadCalibrationFromNVS();   // true if valid saved cal loaded
+    void saveCalibrationToNVS();
+#if USE_CALIBRATED_SENSOR
+    bool runCalibratedSensorCalibration();
+#endif
 
     // Setpoint ramping (motion profiling)
     // Instead of jumping the PID target instantly, we ramp it at a limited rate.
     // This prevents overshoot/oscillation while preserving full PID gains (= torque).
     float ramp_position_deg;               // Current ramped setpoint (advances toward target)
     unsigned long last_ramp_time_us;       // Timestamp for dt computation
-    static constexpr float SLEW_RATE_DEG_S = 120.0f;  // Max setpoint rate (°/s)
+    static constexpr float SLEW_RATE_DEG_S = 60.0f;   // Max setpoint rate (°/s) — halved from 120: lower approach velocity reduces overshoot when Kd=0
+
+    // Torque mode integral accumulator (reset on new target to avoid windup after large moves)
+    float torque_integral;                 // Accumulated integral voltage (V) — capped at ±TORQUE_I_CAP
+
+    // Torque mode velocity estimation: position-difference over fixed 10ms window.
+    // motor.shaft_velocity is instantaneous (noisy at 1kHz); this is smoother.
+    float vel_pos_prev_deg;                // Position sample taken vel_window_us ago
+    unsigned long vel_window_start_us;     // Timestamp when vel_pos_prev_deg was captured
+    float torque_vel_deg_s;               // Current velocity estimate (deg/s), updated every 10ms
+
+    // Actual velocity (deg/s) computed from position deltas between update() calls.
+    // Replaces motor.shaft_velocity (which is near-zero at 100Hz due to LPF double-application).
+    float lpf_vel_deg_s;  // set to actual_vel_deg_s each update() — used for logging/status
+
+    // Settling timer for isAtTarget(): motor must stay within pos_tolerance_deg for
+    // SETTLING_TIME_MS before AT_TARGET fires. Prevents firing while passing through zone.
+    unsigned long at_target_settle_ms;  // 0 = not in zone; nonzero = time when zone was entered
 
     // Auto-idle disable tracking
     unsigned long last_command_time;        // Last time a serial command was received (millis)
@@ -305,6 +353,35 @@ private:
     // Runtime position tracking thresholds (overrideable via 'set' command)
     float pos_tolerance_deg;
     float vel_threshold_deg_s;
+
+    // Anti-cogging feedforward parameters (runtime-tunable via 'set cog_amp/cog_phase')
+    float cog_ff_amp;    // Sinusoidal feedforward amplitude (V); 0 = disabled
+    float cog_ff_phase;  // Phase offset (rad) — tune to align feedforward with cogging detents
+
+    // Dense cogging LUT feedforward (360 entries at 1° steps = full revolution).
+    // Populated by 'cogmap_dense' command. When loaded, replaces sinusoidal feedforward.
+    // Each entry: steady-state Vq measured at that angle = cogging force the PID must fight.
+    // Injecting negates the cogging force, letting the PID track with small errors only.
+    // 1° resolution: 4.3 samples per 4.3° cogging cycle — adequate to reconstruct waveform.
+    // RAM cost: 360 × 4 bytes = 1440 bytes (negligible on ESP32-S3).
+    static const int COG_LUT_SIZE = 360;   // 360° / 1° per step
+    float cog_lut[COG_LUT_SIZE];
+    bool cog_lut_loaded;
+
+    // Saved velocity PID integral gain — set to 0 during sweep to prevent limit cycle,
+    // restored when sweep stops so position holding still has integral action.
+    float saved_i_vel;
+
+    // Scan sweep state: moving-target position control for continuous hyperspectral scan.
+    // Instead of fighting cogging with fixed voltage, we advance the position setpoint at
+    // the desired speed and let the existing position PID track it. The PID generates
+    // up to 6V transiently to push through cogging detents — no stalling, no special tuning.
+    bool sweep_active;           // True when sweep is running
+    float sweep_speed_deg_s;     // Setpoint advance rate (deg/s, signed)
+    float sweep_prev_enc_deg;    // Encoder position at last 50ms velocity measurement
+    unsigned long sweep_vel_t_ms;// Timestamp of last velocity measurement (ms)
+    float sweep_vel_lpf;         // Low-pass filtered 50ms-sampled velocity (deg/s) for PI controller
+    float sweep_vel_integral;    // PI velocity controller integral accumulator (V)
 
     // Encoder streaming state
     bool stream_enabled;
